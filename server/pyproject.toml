@@ -1,0 +1,151 @@
+[tool.poetry]
+name = "forge-server"
+version = "0.1.0"
+description = "Forge — 将自然语言需求经由动态规划、多 Agent 协作、隔离执行、合并验证，产出可落地的结构化成果"
+authors = ["almond <lamp.cyan@gmail.com>"]
+readme = "README.md"
+license = "MIT"
+packages = [
+    { include = "forge", from = "src" },
+]
+include = [
+    { path = "config", format = ["sdist", "wheel"] },
+    { path = "prompts", format = ["sdist", "wheel"] },
+]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+# Web & 配置
+fastapi = "^0.136"
+uvicorn = { version = "^0.44", extras = ["standard"] }
+pydantic = { extras = ["email"], version = "^2.13.4" }
+pydantic-settings = "^2.14"
+PyYAML = "^6.0"
+Jinja2 = "^3.1"
+
+# 本地存储
+sqlalchemy = { version = "^2.0", extras = ["asyncio"] }
+aiosqlite = "^0.20"
+
+# Auth
+PyJWT = "^2.12"
+bcrypt = "^5.0"
+
+# LLM
+openai = "^1.51"
+tiktoken = "^0.8"
+
+# 单机化
+platformdirs = "^4.3"
+aiofiles = "^24.1"
+cachetools = "^5.5"
+filelock = "^3.16"
+
+nanoid = "^2.0.0"
+greenlet = "^3.5.0"
+python-multipart = "^0.0.29"
+
+# Optional
+anthropic = { version = "^0.103", optional = true }
+google-genai = { version = "^2.4", optional = true }
+celery = { version = "^5.4", extras = ["redis"], optional = true }
+redis = { version = "^5.1", extras = ["hiredis"], optional = true }
+aiomysql = { version = "^0.3", optional = true }
+chromadb = { version = "^1.5", optional = true }
+jieba = { version = "^0.42", optional = true }
+docling = { version = "^2.0", optional = true }
+sentence-transformers = { version = "^3.0", optional = true }
+dashscope = { version = "^1.20", optional = true }
+"opentelemetry-api" = { version = "^1.27", optional = true }
+"opentelemetry-sdk" = { version = "^1.27", optional = true }
+"opentelemetry-exporter-otlp-proto-http" = { version = "^1.27", optional = true }
+langfuse = { version = "^2.50", optional = true }
+prometheus-client = { version = "^0.21", optional = true }
+
+[tool.poetry.extras]
+anthropic = ["anthropic"]
+google = ["google-genai"]
+rag = ["chromadb", "jieba", "docling", "sentence-transformers", "dashscope"]
+otel = ["opentelemetry-api", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-http"]
+langfuse = ["langfuse"]
+memory = ["celery", "redis"]
+mysql-migrate = ["aiomysql"]
+metrics = ["prometheus-client"]
+all = [
+    "anthropic", "google-genai",
+    "chromadb", "jieba", "docling", "sentence-transformers", "dashscope",
+    "opentelemetry-api", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-http",
+    "langfuse", "celery", "prometheus-client",
+]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+pytest-asyncio = "^0.24"
+pytest-cov = "^5.0"
+httpx = "^0.28"
+faker = "^33.0"
+ruff = "^0.9"
+mypy = "^1.13"
+types-PyYAML = "^6.0"
+types-aiofiles = "^24.1"
+types-cachetools = "^5.5"
+anthropic = "^0.103"
+google-genai = "^2.4"
+
+[build-system]
+requires = ["poetry-core>=1.8"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["data", "examples", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+ignore = [
+    "E501",
+    "B008",
+    "N806",
+    "N818",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["N802"]
+"__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "src"
+strict = false
+ignore_missing_imports = true
+warn_unused_ignores = true
+disallow_incomplete_defs = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore:Unknown config option. asyncio_mode:pytest.PytestConfigWarning",
+]
+
+[tool.coverage.run]
+source = ["src/forge"]
+branch = true
+omit = [
+    "*/cli/*",
+    "*/migrations/*",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]

@@ -1,0 +1,328 @@
+# ============================================================
+# sys_config.yaml — 全量配置
+# 密钥/连接信息通过 ${VAR} / ${VAR:default} 占位符从环境变量读取.
+# 项目根 .env 文件会被自动加载 (不覆盖已设置的环境变量).
+# ============================================================
+
+# 部署模式: S6.5 M4 仅实现 local; sandbox/cloud 作为后续 SaaS 控制点占位.
+deployment_mode: ${DEPLOYMENT_MODE:local}
+
+app:
+  log_level: ${APP_LOG_LEVEL:INFO} # DEBUG | INFO | WARNING | ERROR
+  port: ${APP_PORT:8553}
+  user_cache_ttl_seconds: ${USER_CACHE_TTL:259200}
+  auth:
+    jwt_secret: ${JWT_SECRET} # 必填, 生产环境必须设置
+    jwt_algorithm: ${JWT_ALGORITHM:HS256}
+    access_token_expire_minutes: ${ACCESS_TOKEN_EXPIRE_MIN:60}
+    refresh_token_expire_days: ${REFRESH_TOKEN_EXPIRE_DAYS:30}
+    cookie_secure: ${COOKIE_SECURE:false}
+    cookie_samesite: ${COOKIE_SAMESITE:strict}
+  
+
+# CORS / 限流 / 中间件配置
+middleware:
+  cors:
+    allow_origins: ${CORS_ALLOW_ORIGINS:http://localhost:3000} # 逗号分隔多个 origin
+    allow_credentials: ${CORS_ALLOW_CREDENTIALS:true}
+  rate_limit:
+    enabled: ${RATE_LIMIT_ENABLED:false}
+    default_per_minute: ${RATE_LIMIT_PER_MIN:60} # 每用户/IP 每分钟请求数
+
+# 数据库
+db:
+  driver: ${DB_DRIVER:sqlite+aiosqlite}
+  path: ${DB_PATH:}
+  host: ${DB_HOST:}
+  port: ${DB_PORT:3306}
+  user: ${DB_USER:}
+  password: ${DB_PASSWORD:}
+  database: ${DB_DATABASE:}
+  echo: ${DB_ECHO:false}
+  charset: ${DB_CHARSET:utf8mb4}
+
+  pool_size: ${DB_POOL_SIZE:5}
+  max_overflow: ${DB_MAX_OVERFLOW:10}
+  pool_recycle: ${DB_POOL_RECYCLE:3600}
+  pool_pre_ping: ${DB_POOL_PRE_PING:true}
+
+redis:
+  host: ${REDIS_HOST:127.0.0.1}
+  port: ${REDIS_PORT:6379}
+  username: ${REDIS_USERNAME:}
+  password: ${REDIS_PASSWORD:}
+  database: ${REDIS_DB:0}
+  pool_size: ${REDIS_POOL_SIZE:10}
+
+# Celery 异步任务: 摘要 / 事实抽取等.
+# broker_url / backend_url 留空 -> 走 redis 上面的配置 (推荐).
+# enabled=false -> 整套降级到 NullTaskQueue (只记日志, 不真派发), 服务照常起.
+celery:
+  enabled: ${CELERY_ENABLED:true}
+  broker_url: ${CELERY_BROKER_URL:}
+  backend_url: ${CELERY_BACKEND_URL:}
+
+# 用户额度: 服务端策略, 按 LLM 用量计量, 类似 OpenAI / Claude Code 的滚动窗口.
+# 只对 llm.providers / models 中 quota_controlled=true 的服务端预置模型生效。
+# 用户自带 provider / API key 应保持 quota_controlled=false, 不扣这里的额度。
+user_quota:
+  enabled: true
+  alert_threshold: 0.8
+  five_hour:
+    window_seconds: 18000
+    limit_usd:
+    limit_tokens:
+    limit_calls:
+  weekly:
+    window_seconds: 604800
+    limit_usd:
+    limit_tokens:
+    limit_calls:
+
+# 记忆系统 (摘要 / 长期事实)
+# - summarizer: 摘要走独立 LLM (建议用便宜的小模型), 留空则复用 llm 默认
+# - trigger.every_n_turns: 每 N 轮触发一次摘要任务
+memory:
+  enabled: ${MEMORY_ENABLED:true}
+  summarizer:
+    provider: ${MEMORY_SUMMARIZER_PROVIDER:}
+    model: ${MEMORY_SUMMARIZER_MODEL:}
+    history_limit: ${MEMORY_SUMMARIZER_HISTORY_LIMIT:100}
+    max_summary_tokens: ${MEMORY_SUMMARIZER_MAX_TOKENS:1500}
+  trigger:
+    every_n_turns: ${MEMORY_TRIGGER_EVERY_N:10}
+
+# LLM: 支持运行时按 provider + model 两级切换
+llm:
+  provider: ${LLM_DEFAULT_PROVIDER:dashscope}
+  default_model: ${LLM_DEFAULT_MODEL:qwen-plus}
+
+  # Fallback 链: 主 provider 失败时按顺序尝试 (provider/model 由 LLM_FALLBACK_CHAIN 控制)
+  fallback_chain: ${LLM_FALLBACK_CHAIN:} # 例: "openai:gpt-4o-mini,deepseek:deepseek-chat"
+  max_retries: ${LLM_MAX_RETRIES:3}
+  retry_backoff_seconds: ${LLM_RETRY_BACKOFF:1.0}
+
+  # ── 预算 (Phase 4a/4b) ────────────────────────────────────────────────
+  # 全 None 时不限制 (向后兼容). 超出抛 LLMBudgetExceeded, retry/fallback 不救场.
+  # 优先级: user_daily_limits_usd[user] > default_user_daily_limit_usd > global_daily_limit_usd.
+  # daily 语义由 Celery beat 每 60s flush DB + hydrate baseline 提供.
+  budget:
+    global_daily_limit_usd: ${LLM_BUDGET_GLOBAL_USD:}      # 例: 100.0
+    default_user_daily_limit_usd: ${LLM_BUDGET_DEFAULT_USER_USD:}  # 例: 5.0
+    alert_threshold: ${LLM_BUDGET_ALERT:0.8}               # 达到比例打 WARNING
+    # user_daily_limits_usd: { "u_xxx": 50.0 }            # 显式 per-user 上限
+
+  providers:
+    dashscope:
+      # 多 key 支持: 用于流量分担 / 限流隔离. 任一非空 key 都会启动期预热.
+      api_keys:
+      - ${DASHSCOPE_API_KEY}
+      - ${DASHSCOPE_API_KEY_2:}
+      key_strategy: round_robin           # round_robin | random | first
+      timeout: 30
+      models:
+      - name: qwen3-max-preview
+        display_name: 通义千问 Max
+        context_window: 32768
+      - name: qwen-plus
+        display_name: 通义千问 Plus
+        context_window: 131072
+      - name: qwen3.5-flash
+        display_name: 通义千问 qwen3.5-flash
+        context_window: 8192
+      default_params:
+        temperature: 0.7
+
+    openai:
+      api_keys:
+      - ${OPENAI_API_KEY:}
+      timeout: 30
+      models:
+      - name: gpt-4o
+        display_name: GPT-4o
+        context_window: 128000
+      - name: gpt-4o-mini
+        display_name: GPT-4o mini
+        context_window: 128000
+      default_params:
+        temperature: 0.7
+
+    deepseek:
+      api_keys:
+      - ${DEEPSEEK_API_KEY:}
+      timeout: 30
+      models:
+      - name: deepseek-v4-pro
+        display_name: DeepSeek V4 PRO
+        context_window: 1000000
+        # reasoning_effort 官方取值: high | max
+        reasoning_effort: high
+      - name: deepseek-v4-flash
+        display_name: DeepSeek V4 flash
+        context_window: 1000000
+        reasoning_effort: high
+      default_params:
+        temperature: 0.7
+        # 思考模式 provider 级默认值. 解析优先级 (高到低):
+        #   1. 前端 model_options.thinking (per-request, extra_options)
+        #   2. ModelConfig.thinking         (per-model 覆盖, yaml 里 models[i].thinking)
+        #   3. default_params.thinking      (provider 级默认, 即此处)
+        #   4. provider 内部默认 (DeepSeek 视 None 为 True)
+        thinking: ${DEEPSEEK_THINKING_DEFAULT:true}
+
+    anthropic:
+      api_keys:
+      - ${ANTHROPIC_API_KEY:}
+      timeout: 30
+      models:
+      - name: claude-sonnet-4-5
+        display_name: Claude Sonnet 4.5
+        context_window: 200000
+      - name: claude-haiku-4-5
+        display_name: Claude Haiku 4.5
+        context_window: 200000
+      default_params:
+        temperature: 1.0
+        max_tokens: 4096
+
+utility_llm:
+  provider: ${UTILITY_LLM_PROVIDER:dashscope}
+  model: ${UTILITY_LLM_MODEL:qwen3.5-flash}
+
+# 入库相关
+ingest:
+  documents_path: data/documents
+  chunking:
+    strategy: hierarchical # hierarchical | sliding_window
+    chunk_size: 500
+    chunk_overlap: 50
+
+# Embedding 模型
+embedding:
+  provider: ${EMBEDDING_PROVIDER:dashscope}
+  # Fallback 链: 主 provider 失败时按顺序尝试. 所有 fallback 必须与主 provider
+  # 同 dimension (向量库不兼容跨维度). 留空 = 不启用 fallback.
+  fallback_chain: []
+  providers:
+    dashscope:
+      api_key: ${DASHSCOPE_API_KEY}
+      model: text-embedding-v3
+      dimension: 1024
+      batch_size: 10
+      max_retries: 3
+      retry_backoff: 1.0
+    bge_local:
+      model_path: BAAI/bge-m3
+      device: cpu
+    mock:
+      dimension: 768
+
+# 向量库
+vector_store:
+  provider: chroma
+  providers:
+    chroma:
+      persist_dir: data/chroma
+      collection_name: child_chunks
+
+# BM25 倒排索引
+bm25_store:
+  provider: sqlite_fts5
+  providers:
+    sqlite_fts5:
+      db_path: data/bm25/bm25.db
+      table_name: bm25_chunks
+  tokenizer:
+    type: jieba
+    user_dict: null
+
+# Reranker
+reranker:
+  provider: ${RERANKER_PROVIDER:dashscope}
+  providers:
+    dashscope:
+      api_key: ${DASHSCOPE_API_KEY}
+      model: gte-rerank
+      timeout: 5.0
+      truncation:
+        strategy: tail
+        max_doc_chars: 4000
+        monitor_threshold: 0.1
+    bge_local:
+      model_path: BAAI/bge-reranker-v2-m3
+      device: cpu
+      truncation:
+        strategy: tail
+        max_doc_chars: 4000
+        monitor_threshold: 0.1
+    mock: {}
+
+# 检索流程
+retrieval:
+  top_n_parent: 5
+  top_m_for_rerank: 20
+
+  recall:
+    vector:
+      enabled: true
+      top_k: 30
+    bm25:
+      enabled: true
+      top_k: 30
+
+  fusion:
+    strategy: rrf
+    rrf_k: 60
+    weighted_vector: 0.7
+    weighted_bm25: 0.3
+
+  aggregation:
+    score_agg: max
+
+  rerank:
+    enabled: true
+
+# 可观测性
+observability:
+  tracing:
+    enabled: ${TRACING_ENABLED:false}
+    exporter: ${TRACING_EXPORTER:none} # none | otel | langfuse
+    service_name: ${OTEL_SERVICE_NAME:agent-platform}
+    otel_endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:}
+    langfuse_public_key: ${LANGFUSE_PUBLIC_KEY:}
+    langfuse_secret_key: ${LANGFUSE_SECRET_KEY:}
+    langfuse_host: ${LANGFUSE_HOST:https://cloud.langfuse.com}
+
+# Forge Adaptive Task Execution
+task_execution:
+  tool_allowlist:
+    - read_file
+    - write_file
+    - edit_file
+    - list_directory
+    - glob_search
+    - grep
+    - shell
+    - git_ops
+    - http_request
+    - run_tests
+    - knowledge_search
+
+  model_profiles:
+    fast:   "${FAST_MODEL:claude-sonnet-4-6}"
+    smart:  "${SMART_MODEL:claude-sonnet-4-6}"
+    strong: "${STRONG_MODEL:claude-opus-4-7}"
+
+  hard_caps:
+    max_agents:           8
+    max_steps_per_task:   50
+    max_replans:          3
+    max_task_retries:     2
+    max_run_duration_sec: 3600
+
+  default_options:
+    allow_write:    true
+    allow_parallel: true
+    max_agents:     4
+    writer_mode:    isolated_worktree
+    verifier_cmd:   null

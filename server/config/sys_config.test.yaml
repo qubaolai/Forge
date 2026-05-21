@@ -1,0 +1,252 @@
+# ============================================================
+# sys_config.test.yaml — 测试环境配置
+# 启动: APP_ENV=test pytest  或  pytest (conftest.py 自动注入)
+#
+# 与 dev/prod 的核心差异:
+#   - embedding / reranker 用 mock provider, 不发真实 HTTP 请求
+#   - celery / memory 关闭, 不依赖 Redis worker
+#   - log_level WARNING, 减少测试输出噪音
+#   - 连接池最小化, 加快 fixture 启动
+# ============================================================
+
+deployment_mode: ${DEPLOYMENT_MODE:local}
+
+app:
+  log_level: WARNING
+  port: 8553
+  user_cache_ttl_seconds: 300
+  auth:
+    jwt_secret: ${JWT_SECRET:test-jwt-secret-do-not-use-in-prod}
+    jwt_algorithm: HS256
+    access_token_expire_minutes: 60
+    refresh_token_expire_days: 30
+    cookie_secure: false
+    cookie_samesite: lax
+
+middleware:
+  cors:
+    allow_origins: http://localhost:3000
+    allow_credentials: true
+  rate_limit:
+    enabled: false
+    default_per_minute: 9999
+
+db:
+  driver: ${DB_DRIVER:mysql+aiomysql}
+  host: ${DB_HOST:localhost}
+  port: ${DB_PORT:3306}
+  user: ${DB_USER:test}
+  password: ${DB_PASSWORD:test}
+  database: ${DB_DATABASE:test}
+  echo: false
+  charset: utf8mb4
+  pool_size: 2
+  max_overflow: 2
+  pool_recycle: 3600
+  pool_pre_ping: true
+
+redis:
+  host: ${REDIS_HOST:localhost}
+  port: ${REDIS_PORT:6379}
+  username: ${REDIS_USERNAME:}
+  password: ${REDIS_PASSWORD:test}
+  database: ${REDIS_DB:1}
+  pool_size: 2
+
+# 测试环境关闭 Celery, 所有异步任务降级为 NullTaskQueue (只记日志)
+celery:
+  enabled: false
+  broker_url: ""
+  backend_url: ""
+
+user_quota:
+  enabled: false
+  alert_threshold: 0.8
+  five_hour:
+    window_seconds: 18000
+    limit_usd:
+    limit_tokens:
+    limit_calls:
+  weekly:
+    window_seconds: 604800
+    limit_usd:
+    limit_tokens:
+    limit_calls:
+
+# 测试环境关闭记忆系统, 避免触发 Celery 任务
+memory:
+  enabled: false
+  summarizer:
+    provider: ""
+    model: ""
+    history_limit: 10
+    max_summary_tokens: 500
+  trigger:
+    every_n_turns: 999
+
+llm:
+  provider: ${LLM_DEFAULT_PROVIDER:dashscope}
+  default_model: ${LLM_DEFAULT_MODEL:qwen-plus}
+  fallback_chain: ""
+  max_retries: 1
+  retry_backoff_seconds: 0.0
+
+  providers:
+    dashscope:
+      api_keys:
+      - ${DASHSCOPE_API_KEY:sk-test-key}
+      timeout: 10
+      models:
+      - name: qwen3-max-preview
+        display_name: 通义千问 Max
+        context_window: 32768
+      - name: qwen-plus
+        display_name: 通义千问 Plus
+        context_window: 131072
+      - name: qwen3.5-flash
+        display_name: 通义千问 qwen3.5-flash
+        context_window: 8192
+      default_params:
+        temperature: 0.7
+
+    openai:
+      api_keys:
+      - ${OPENAI_API_KEY:sk-test-key}
+      timeout: 10
+      models:
+      - name: gpt-4o
+        display_name: GPT-4o
+        context_window: 128000
+      - name: gpt-4o-mini
+        display_name: GPT-4o mini
+        context_window: 128000
+      default_params:
+        temperature: 0.7
+
+    deepseek:
+      api_keys:
+      - ${DEEPSEEK_API_KEY:sk-test-key}
+      timeout: 10
+      models:
+      - name: deepseek-v4-pro
+        display_name: DeepSeek V4 PRO
+        context_window: 1000000
+        reasoning_effort: high
+      - name: deepseek-v4-flash
+        display_name: DeepSeek V4 flash
+        context_window: 1000000
+        reasoning_effort: high
+      default_params:
+        temperature: 0.7
+        thinking: false
+
+    anthropic:
+      api_keys:
+      - ${ANTHROPIC_API_KEY:sk-test-key}
+      timeout: 10
+      models:
+      - name: claude-sonnet-4-5
+        display_name: Claude Sonnet 4.5
+        context_window: 200000
+      - name: claude-haiku-4-5
+        display_name: Claude Haiku 4.5
+        context_window: 200000
+      default_params:
+        temperature: 1.0
+        max_tokens: 4096
+
+utility_llm:
+  provider: dashscope
+  model: qwen3.5-flash
+
+ingest:
+  documents_path: data/documents
+  chunking:
+    strategy: hierarchical
+    chunk_size: 500
+    chunk_overlap: 50
+
+# mock provider 不发 HTTP 请求, 返回固定维度零向量
+embedding:
+  provider: mock
+  providers:
+    dashscope:
+      api_key: ${DASHSCOPE_API_KEY:sk-test-key}
+      model: text-embedding-v3
+      dimension: 1024
+      batch_size: 10
+      max_retries: 1
+      retry_backoff: 0.0
+    bge_local:
+      model_path: BAAI/bge-m3
+      device: cpu
+    mock:
+      dimension: 768
+
+vector_store:
+  provider: chroma
+  providers:
+    chroma:
+      persist_dir: data/test_chroma
+      collection_name: test_chunks
+
+bm25_store:
+  provider: sqlite_fts5
+  providers:
+    sqlite_fts5:
+      db_path: data/test_bm25.db
+      table_name: bm25_chunks
+  tokenizer:
+    type: jieba
+    user_dict: null
+
+# mock reranker 返回原始顺序, 不发 HTTP 请求
+reranker:
+  provider: mock
+  providers:
+    dashscope:
+      api_key: ${DASHSCOPE_API_KEY:sk-test-key}
+      model: gte-rerank
+      timeout: 5.0
+      truncation:
+        strategy: tail
+        max_doc_chars: 4000
+        monitor_threshold: 0.1
+    bge_local:
+      model_path: BAAI/bge-reranker-v2-m3
+      device: cpu
+      truncation:
+        strategy: tail
+        max_doc_chars: 4000
+        monitor_threshold: 0.1
+    mock: {}
+
+retrieval:
+  top_n_parent: 3
+  top_m_for_rerank: 10
+  recall:
+    vector:
+      enabled: true
+      top_k: 10
+    bm25:
+      enabled: true
+      top_k: 10
+  fusion:
+    strategy: rrf
+    rrf_k: 60
+    weighted_vector: 0.7
+    weighted_bm25: 0.3
+  aggregation:
+    score_agg: max
+  rerank:
+    enabled: false
+
+observability:
+  tracing:
+    enabled: false
+    exporter: none
+    service_name: agent-platform-test
+    otel_endpoint: ""
+    langfuse_public_key: ""
+    langfuse_secret_key: ""
+    langfuse_host: https://cloud.langfuse.com

@@ -1,0 +1,13 @@
+# 默认规则集组合
+# 启用: 阿拉伯数字层级编号 + 中文章节编号
+# 法律条款 (legal.yaml) 默认不启用, 需要时手动 include 或在代码里指定
+
+include:
+  - numeric_decimal.yaml
+  - chinese_chapter.yaml
+
+# 全局参数 (覆盖被 include 文件中的同名参数)
+global_max_length: 100
+score_threshold: 0.8
+title_size_ratio: 1.15
+forbidden_endings: ['。', '；', '，', ';', ',', '：', ':']

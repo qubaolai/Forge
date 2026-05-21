@@ -1,0 +1,57 @@
+# 中文章节编号规则集
+# 适用: 中文规章/制度/通知/合同等使用中文数字编号的文档
+
+rules:
+  # 一级: "第一章" "第十二章" 等
+  - name: chinese_chapter_h1
+    pattern: '^第[一二三四五六七八九十百千]+章[\s、.,]*\S'
+    level: 1
+    specificity: 15
+    priority: 5
+    require_bold: prefer
+    max_length: 40
+
+  # 一级: "第一节"
+  - name: chinese_section_h1
+    pattern: '^第[一二三四五六七八九十百千]+节[\s、.,]*\S'
+    level: 1
+    specificity: 14
+    priority: 4
+    require_bold: prefer
+    max_length: 40
+
+  # 一级: "一、" "二、" "十、"
+  - name: chinese_num_dot
+    pattern: '^[一二三四五六七八九十百千]+\s*[、.,]\s*\S'
+    level: 1
+    specificity: 12
+    require_bold: prefer
+    max_length: 50
+
+  # 二级: "(一)" "(二)" "（一）" "（二）"
+  - name: chinese_num_paren
+    pattern: '^[\(\(][一二三四五六七八九十]+[\)\)]\s*\S'
+    level: 2
+    specificity: 22
+    require_bold: prefer
+    max_length: 50
+
+  # 三级: "1)" "2)" "1）"
+  # 注意: 必须要求加粗, 否则会误识别正文里的列表项
+  # (例如 "1) 描述..." "2) 描述..." 这种正文枚举)
+  - name: arabic_paren_close
+    pattern: '^\d+[\)\)]\s*\S'
+    level: 3
+    specificity: 25
+    require_bold: strict
+    max_length: 60
+
+excludes:
+  # 引用: "详见第三章"
+  - name: cross_ref_chapter
+    pattern: '(详见|参见|见|参考)\s*第[一二三四五六七八九十百千\d]+[章节条款]'
+
+forbidden_endings: ['。', '；', '，', ';', ',', '：', ':']
+global_max_length: 80
+score_threshold: 0.8
+title_size_ratio: 1.15
