@@ -1,0 +1,156 @@
+/*
+ * OpenAI 亮色主题风格代码高亮
+ * 用于 rehype-highlight (highlight.js 类名体系)
+ */
+
+/* 代码块外层容器背景 (白底) */
+pre code.hljs {
+  display: block;
+  overflow-x: auto;
+  padding: 0;
+  background: transparent;
+  color: #24292f;
+}
+
+.hljs {
+  color: #24292f;
+  background: transparent;
+}
+
+/* 注释 */
+.hljs-comment,
+.hljs-quote {
+  color: #6e7781;
+  font-style: italic;
+}
+
+/* 关键字: var, let, const, function, return, if, else, for, while, import, export, class 等 */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-selector-class,
+.hljs-selector-id,
+.hljs-selector-attr,
+.hljs-selector-pseudo {
+  color: #cf222e;
+}
+
+/* 字符串 */
+.hljs-string,
+.hljs-doctag {
+  color: #0a3069;
+}
+
+/* 模板字符串内的表达式 */
+.hljs-subst {
+  color: #24292f;
+}
+
+/* 正则表达式字面量 */
+.hljs-regexp {
+  color: #0a3069;
+}
+
+/* 数字 */
+.hljs-number,
+.hljs-literal {
+  color: #0550ae;
+}
+
+/* 布尔值, null, undefined */
+.hljs-built_in,
+.hljs-type {
+  color: #0550ae;
+}
+
+/* 函数名 / 方法名 */
+.hljs-title.function_,
+.hljs-title.function {
+  color: #8250df;
+}
+
+/* 类名 */
+.hljs-title.class_,
+.hljs-title.class {
+  color: #116329;
+}
+
+/* 函数参数 */
+.hljs-params {
+  color: #24292f;
+}
+
+/* 属性名 (对象 key 等) */
+.hljs-attr,
+.hljs-attribute {
+  color: #0550ae;
+}
+
+/* 变量名 */
+.hljs-variable,
+.hljs-variable.language_,
+.hljs-variable.constant_ {
+  color: #953800;
+}
+
+/* 标签名 (HTML/JSX) */
+.hljs-name,
+.hljs-tag {
+  color: #116329;
+}
+
+/* 符号 (括号, 分号, 冒号等) */
+.hljs-punctuation {
+  color: #24292f;
+}
+
+/* 元数据 / 装饰器 */
+.hljs-meta {
+  color: #6e7781;
+}
+
+.hljs-meta .hljs-keyword {
+  color: #cf222e;
+}
+
+.hljs-meta .hljs-string {
+  color: #0a3069;
+}
+
+/* 模板字符串 */
+.hljs-template-variable,
+.hljs-template-tag {
+  color: #953800;
+}
+
+/* 新增行 (diff) */
+.hljs-addition {
+  color: #116329;
+  background: #dafbe1;
+}
+
+/* 删除行 (diff) */
+.hljs-deletion {
+  color: #cf222e;
+  background: #ffebe9;
+}
+
+/* 强调 */
+.hljs-emphasis {
+  font-style: italic;
+}
+
+/* 加粗 */
+.hljs-strong {
+  font-weight: 600;
+}
+
+/* 链接 */
+.hljs-link {
+  color: #0550ae;
+  text-decoration: underline;
+}
+
+/* 代码块内选择文本颜色 */
+pre code ::selection {
+  background: rgba(175, 184, 193, 0.3);
+}

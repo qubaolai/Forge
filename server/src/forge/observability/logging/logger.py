@@ -17,9 +17,14 @@ import json
 import logging
 import os
 import sys
+import warnings
 from datetime import datetime
 
 from forge.api.middleware.tracing import TraceIdLogFilter
+
+# 模块级过滤：早于 setup_logging() 调用，捕获 import 期间的 warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="jieba")
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
 
 # ----------------------------------------------------------------------
 # ANSI 配色
@@ -195,4 +200,31 @@ def setup_logging(
         use_color = _supports_color() if color is None else bool(color)
         handler.setFormatter(ColorFormatter(use_color=use_color))
 
+    # 第三方库会在自己 __init__ 里把 logger 重置为 DEBUG，setLevel 之后又被覆盖；
+    # 用 handler 级过滤器确保这些 logger 的 DEBUG 消息不进入我们的输出。
+    handler.addFilter(_ThirdPartyDebugFilter())
     root.addHandler(handler)
+
+
+# -----------------------------------------------------------------------
+# 第三方噪音压制
+# -----------------------------------------------------------------------
+
+# 模块导入时立即过滤 warnings（jieba _compat.py 在 import 时就会 warn）
+warnings.filterwarnings("ignore", category=UserWarning, module="jieba")
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
+
+# 这些第三方 logger 会自行将自己重置为 DEBUG；用 handler filter 而非 setLevel，
+# 防止被覆盖。
+_THIRD_PARTY_DEBUG_SUPPRESS = frozenset({"jieba", "httpx", "httpcore", "hpack", "multipart"})
+
+
+class _ThirdPartyDebugFilter(logging.Filter):
+    """丢弃已知高噪声第三方 logger 的 DEBUG 条目."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno <= logging.DEBUG:
+            top = record.name.split(".")[0]
+            if top in _THIRD_PARTY_DEBUG_SUPPRESS:
+                return False
+        return True
