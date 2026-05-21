@@ -44,7 +44,7 @@ db:
   pool_size: ${DB_POOL_SIZE:5}
   max_overflow: ${DB_MAX_OVERFLOW:10}
   pool_recycle: ${DB_POOL_RECYCLE:3600}
-  pool_pre_ping: ${DB_POOL_PRE_PING:true}
+  pool_pre_ping: ${DB_POOL_PRE_PING:false}
 
 redis:
   host: ${REDIS_HOST:127.0.0.1}
@@ -287,7 +287,7 @@ observability:
   tracing:
     enabled: ${TRACING_ENABLED:false}
     exporter: ${TRACING_EXPORTER:none} # none | otel | langfuse
-    service_name: ${OTEL_SERVICE_NAME:agent-platform}
+    service_name: ${OTEL_SERVICE_NAME:forge}
     otel_endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:}
     langfuse_public_key: ${LANGFUSE_PUBLIC_KEY:}
     langfuse_secret_key: ${LANGFUSE_SECRET_KEY:}

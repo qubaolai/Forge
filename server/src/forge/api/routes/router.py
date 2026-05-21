@@ -21,7 +21,6 @@ from forge.api.routes.v1 import (
     sessions,
     system,
     users,
-    workflows,
 )
 from forge.core.response import success
 from forge.tools.registry import ToolRegistry
@@ -36,7 +35,6 @@ v1.include_router(agents.router)
 v1.include_router(chat.router, prefix="/chat", tags=["chat"])
 v1.include_router(users.router)
 v1.include_router(knowledge_bases.router)
-v1.include_router(workflows.router)
 
 
 @v1.get("/tools", tags=["tools"])

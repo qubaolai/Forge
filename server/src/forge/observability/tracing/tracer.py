@@ -108,7 +108,7 @@ def setup_tracing(
     *,
     enabled: bool,
     exporter: str,
-    service_name: str = "agent-platform",
+    service_name: str = "forge",
     otel_endpoint: str = "",
     langfuse_public_key: str = "",
     langfuse_secret_key: str = "",

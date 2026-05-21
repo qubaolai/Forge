@@ -43,7 +43,7 @@ db:
   pool_size: 2
   max_overflow: 2
   pool_recycle: 3600
-  pool_pre_ping: true
+  pool_pre_ping: false  # aiomysql 0.3.x ping() incompatibility
 
 redis:
   host: ${REDIS_HOST:localhost}
@@ -245,7 +245,7 @@ observability:
   tracing:
     enabled: false
     exporter: none
-    service_name: agent-platform-test
+    service_name: forge-test
     otel_endpoint: ""
     langfuse_public_key: ""
     langfuse_secret_key: ""

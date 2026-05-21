@@ -28,6 +28,10 @@ Jinja2 = "^3.1"
 sqlalchemy = { version = "^2.0", extras = ["asyncio"] }
 aiosqlite = "^0.20"
 
+# MySQL 异步驱动（dev/prod 默认使用 MySQL）
+aiomysql = "^0.3"
+pymysql = "^1.2"
+
 # Auth
 PyJWT = "^2.12"
 bcrypt = "^5.0"
@@ -51,7 +55,6 @@ anthropic = { version = "^0.103", optional = true }
 google-genai = { version = "^2.4", optional = true }
 celery = { version = "^5.4", extras = ["redis"], optional = true }
 redis = { version = "^5.1", extras = ["hiredis"], optional = true }
-aiomysql = { version = "^0.3", optional = true }
 chromadb = { version = "^1.5", optional = true }
 jieba = { version = "^0.42", optional = true }
 docling = { version = "^2.0", optional = true }
@@ -70,7 +73,6 @@ rag = ["chromadb", "jieba", "docling", "sentence-transformers", "dashscope"]
 otel = ["opentelemetry-api", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-http"]
 langfuse = ["langfuse"]
 memory = ["celery", "redis"]
-mysql-migrate = ["aiomysql"]
 metrics = ["prometheus-client"]
 all = [
     "anthropic", "google-genai",

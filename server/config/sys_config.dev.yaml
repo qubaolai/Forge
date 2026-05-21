@@ -37,7 +37,7 @@ db:
   pool_size: 3
   max_overflow: 5
   pool_recycle: 3600
-  pool_pre_ping: true
+  pool_pre_ping: false  # aiomysql 0.3.x ping() incompatibility with sqlalchemy pool_pre_ping
 
 redis:
   host: ${REDIS_HOST}
@@ -243,7 +243,7 @@ observability:
   tracing:
     enabled: ${TRACING_ENABLED:false}
     exporter: ${TRACING_EXPORTER:none}
-    service_name: agent-platform-dev
+    service_name: forge-dev
     otel_endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:}
     langfuse_public_key: ${LANGFUSE_PUBLIC_KEY:}
     langfuse_secret_key: ${LANGFUSE_SECRET_KEY:}

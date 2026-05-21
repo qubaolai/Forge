@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from forge.adaptive.options import TaskOptionsIn
 
@@ -64,38 +64,14 @@ class ChatAttachment(BaseModel):
 
 
 class ChatWorkflowOption(BaseModel):
-    """对话发起时的 workflow 选项 (S6.5 M1: 统一入口).
+    """已废弃的 workflow 选项字段，保留一个版本用于向后兼容，不再生效。
 
-    语义:
-    - 字段不出现 → 走原 chat 路径 (单 phase ReAct loop).
-    - `template_id` 显式 → 直接跑该 workflow 模板, 跳过 triage.
-    - `mode="auto"` → 服务端 triage 决定. 命中 workflow 模板走 workflow;
-      未命中 (落到对话级模板如 question_only) 时降级回 chat 路径.
-    - `template_id` 与 `mode` 互斥, 只能选一个.
+    新客户端请使用 ChatCompletionIn.mode 和 task_options 字段。
     """
 
     template_id: str | None = None
     mode: Literal["auto"] | None = None
     pause_after_phase: bool = False
-
-    @field_validator("template_id")
-    @classmethod
-    def _validate_template_id(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
-        # 局部 import 避免 schema 加载期触发 TemplateLoader 副作用.
-        from forge.orchestration.workflow.template_loader import TemplateLoader
-
-        known = set(TemplateLoader().load_all(refresh=True).keys())
-        if v not in known:
-            raise ValueError(f"未知 workflow 模板 '{v}', 可选: {sorted(known)}")
-        return v
-
-    @model_validator(mode="after")
-    def _mutually_exclusive(self) -> "ChatWorkflowOption":
-        if self.template_id and self.mode:
-            raise ValueError("workflow.template_id 与 workflow.mode 不能同时设置")
-        return self
 
 
 class ChatCompletionIn(BaseModel):
