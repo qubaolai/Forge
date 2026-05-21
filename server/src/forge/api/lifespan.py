@@ -226,8 +226,11 @@ def _setup_rag_components(app, settings) -> None:
     failures: list[tuple[str, BaseException]] = []
 
     def _fail(name: str, exc: BaseException) -> None:
-        """记录组件初始化失败: 含完整 traceback, 不只是类型名."""
-        logger.exception("RAG 组件初始化失败: %s", name, exc_info=exc)
+        """记录组件初始化失败; STRICT_RAG=true 时才打 ERROR, 否则 DEBUG 避免误报."""
+        if STRICT_RAG:
+            logger.exception("RAG 组件初始化失败: %s", name, exc_info=exc)
+        else:
+            logger.debug("RAG 组件初始化失败: %s — %s", name, exc)
         failures.append((name, exc))
 
     # 4a. Tokenizer
