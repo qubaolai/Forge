@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from forge.adaptive.mode_router import ModeRouter
 from forge.adaptive.options import TaskOptionsIn
 
@@ -18,14 +20,45 @@ def test_explicit_task_mode_routes_adaptive() -> None:
     assert decision.target == "adaptive"
 
 
-def test_auto_with_task_options_routes_adaptive() -> None:
+def test_auto_with_task_options_sync_fallback_routes_chat() -> None:
     router = ModeRouter()
     decision = router.decide(
         mode="auto",
         message="随便",
         task_options=TaskOptionsIn(workspace_path="."),
     )
+    assert decision.target == "chat"
+    assert "LLM 判别" in decision.reason
+
+
+async def _adaptive_classifier(message: str, task_options: TaskOptionsIn) -> str:
+    return "adaptive"
+
+
+async def _chat_classifier(message: str, task_options: TaskOptionsIn) -> str:
+    return "chat"
+
+
+@pytest.mark.asyncio
+async def test_auto_with_workspace_can_route_adaptive_by_classifier() -> None:
+    router = ModeRouter(classifier=_adaptive_classifier)  # type: ignore[arg-type]
+    decision = await router.adecide(
+        mode="auto",
+        message="请修复登录 bug 并运行测试",
+        task_options=TaskOptionsIn(workspace_path="."),
+    )
     assert decision.target == "adaptive"
+
+
+@pytest.mark.asyncio
+async def test_auto_with_workspace_can_stay_chat_by_classifier() -> None:
+    router = ModeRouter(classifier=_chat_classifier)  # type: ignore[arg-type]
+    decision = await router.adecide(
+        mode="auto",
+        message="解释一下这个目录结构",
+        task_options=TaskOptionsIn(workspace_path="."),
+    )
+    assert decision.target == "chat"
 
 
 def test_auto_question_routes_chat() -> None:
@@ -39,4 +72,4 @@ def test_auto_task_intent_without_options_routes_chat() -> None:
     router = ModeRouter()
     decision = router.decide(mode="auto", message="请实现一个新的用户导出脚本")
     assert decision.target == "chat"
-    assert "mode=task" in decision.reason
+    assert "workspace_path" in decision.reason

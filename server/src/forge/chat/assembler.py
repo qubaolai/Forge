@@ -249,12 +249,13 @@ class ContextAssembler:
         可用 KB 列表在此处一次性查出注入 prompt, 避免 LLM 再开一个 tool round-trip
         去问 "我能访问哪些知识库".
         """
-        # 工具元数据从全局 ToolRegistry 取, 让模板可以列出 LLM 可用工具.
-        # 后续支持 per-agent 工具白名单时, 改成按 agent.tool_names 过滤.
-        from forge.tools.registry import ToolRegistry
+        # 纯聊天只展示 chat_tool_allowlist 允许的工具，避免提示词暴露文件/命令类能力。
+        from config.settings import get_settings
+        from forge.chat.tools import resolve_chat_tools
 
         tools_meta = [
-            {"name": t.name, "description": t.description} for t in ToolRegistry.get_all()
+            {"name": t.name, "description": t.description}
+            for t in resolve_chat_tools(get_settings())
         ]
         kb_list = await self._fetch_kb_list(ctx.user_id)
         workspace_ctx = load_workspace_context()

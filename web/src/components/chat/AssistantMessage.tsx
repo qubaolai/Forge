@@ -4,7 +4,7 @@ import {
   Brain, ChevronDown, ChevronRight,
   Loader2, CheckCircle2, XCircle, Wrench,
 } from 'lucide-react';
-import { ChatMessage, Citation, ToolCall } from '@/types';
+import { AdaptiveRunSummary, ChatMessage, Citation, RunStatus, ToolCall } from '@/types';
 import { cn } from '@/lib/utils';
 import { MarkdownContent } from './MarkdownContent';
 
@@ -30,6 +30,7 @@ export function AssistantMessage({ message, onRegenerate, onResume, onCitationCl
   const hasContent = !!message.content;
   const hasTools = !!(message.tool_calls && message.tool_calls.length > 0);
   const hasReasoning = !!message.reasoning_content;
+  const hasAdaptiveRun = !!message.adaptive_run;
 
   return (
     <div className="flex gap-3">
@@ -50,7 +51,9 @@ export function AssistantMessage({ message, onRegenerate, onResume, onCitationCl
         )}
 
         {/* 主体内容 */}
-        {hasContent ? (
+        {hasAdaptiveRun && message.adaptive_run ? (
+          <AdaptiveRunBlock run={message.adaptive_run} streaming={isStreaming} />
+        ) : hasContent ? (
           <div className="text-gray-900">
             <MarkdownContent
               content={message.content}
@@ -111,6 +114,159 @@ export function AssistantMessage({ message, onRegenerate, onResume, onCitationCl
       </div>
     </div>
   );
+}
+
+function AdaptiveRunBlock({ run, streaming }: { run: AdaptiveRunSummary; streaming: boolean }) {
+  const status = run.status || 'created';
+  const events = run.events || [];
+  const lastEvents = events.slice(-8);
+  const taskEvents = events.filter((evt) => evt.type.startsWith('task.'));
+  const artifactEvents = events.filter((evt) => evt.type === 'artifact.created');
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-orange-200 bg-gradient-to-br from-orange-50 to-white">
+      <div className="flex items-start justify-between gap-3 border-b border-orange-100 px-4 py-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-sm font-medium text-gray-900">
+            <Wrench size={15} className="text-orange-600" />
+            <span>Adaptive Run</span>
+            <StatusPill status={status} streaming={streaming} />
+          </div>
+          {run.run_id && (
+            <div className="mt-1 truncate font-mono text-[11px] text-gray-400">
+              {run.run_id}
+            </div>
+          )}
+        </div>
+        <div className="grid grid-cols-3 gap-2 text-center text-[11px]">
+          <Metric label="事件" value={events.length} />
+          <Metric label="任务" value={taskEvents.length} />
+          <Metric label="产物" value={run.artifact_ids.length || artifactEvents.length} />
+        </div>
+      </div>
+
+      <div className="px-4 py-3">
+        {lastEvents.length === 0 ? (
+          <div className="flex items-center gap-2 text-sm text-gray-500">
+            <Loader2 size={14} className="animate-spin" />
+            等待后端事件…
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {lastEvents.map((evt) => (
+              <div key={evt.id} className="flex gap-2 text-[13px]">
+                <EventDot type={evt.type} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="font-medium text-gray-700">{adaptiveEventLabel(evt.type)}</span>
+                    <span className="text-[11px] text-gray-300">{formatClock(evt.ts)}</span>
+                  </div>
+                  <div className="mt-0.5 truncate text-gray-500">
+                    {adaptivePayloadText(evt.payload)}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StatusPill({ status, streaming }: { status: RunStatus; streaming: boolean }) {
+  const isActive = streaming && !['completed', 'failed', 'blocked', 'aborted'].includes(status);
+  const tone =
+    status === 'completed'
+      ? 'bg-emerald-100 text-emerald-700'
+      : status === 'failed' || status === 'blocked' || status === 'aborted'
+        ? 'bg-red-100 text-red-700'
+        : 'bg-blue-100 text-blue-700';
+  return (
+    <span className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]', tone)}>
+      {isActive ? <Loader2 size={11} className="animate-spin" /> : status === 'completed' ? <CheckCircle2 size={11} /> : status === 'failed' ? <XCircle size={11} /> : null}
+      {runStatusLabel(status)}
+    </span>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="min-w-12 rounded-lg bg-white/70 px-2 py-1">
+      <div className="font-medium text-gray-800">{value}</div>
+      <div className="text-gray-400">{label}</div>
+    </div>
+  );
+}
+
+function EventDot({ type }: { type: string }) {
+  const cls = type.includes('failed') || type.includes('blocked') || type.includes('conflict')
+    ? 'bg-red-500'
+    : type.includes('completed') || type.includes('passed')
+      ? 'bg-emerald-500'
+      : 'bg-orange-500';
+  return <span className={cn('mt-1.5 h-2 w-2 shrink-0 rounded-full', cls)} />;
+}
+
+function adaptiveEventLabel(type: string): string {
+  const labels: Record<string, string> = {
+    'run.created': '创建运行',
+    'run.started': '启动运行',
+    'run.status_changed': '状态变更',
+    'run.completed': '运行完成',
+    'run.failed': '运行失败',
+    'run.blocked': '运行阻塞',
+    'task.started': '任务开始',
+    'task.completed': '任务完成',
+    'task.failed': '任务失败',
+    'task.skipped': '任务跳过',
+    'wave.started': 'Wave 开始',
+    'wave.completed': 'Wave 完成',
+    'artifact.created': '产物创建',
+    'plan.created': '计划创建',
+    'plan.validated': '计划通过',
+    'plan.rejected': '计划拒绝',
+    'integration.started': '开始集成',
+    'integration.completed': '集成完成',
+    'integration.conflict': '集成冲突',
+    'verify.started': '开始验证',
+    'verify.passed': '验证通过',
+    'verify.failed': '验证失败',
+  };
+  return labels[type] || type;
+}
+
+function adaptivePayloadText(payload: Record<string, unknown>): string {
+  const parts = [
+    typeof payload.task_id === 'string' ? `任务 ${payload.task_id}` : '',
+    typeof payload.kind === 'string' ? payload.kind : '',
+    typeof payload.to_status === 'string' ? `→ ${runStatusLabel(payload.to_status as RunStatus)}` : '',
+    typeof payload.artifact_id === 'string' ? `产物 ${payload.artifact_id}` : '',
+    typeof payload.reason === 'string' ? `原因 ${payload.reason}` : '',
+  ].filter(Boolean);
+  return parts.join(' · ') || '已收到事件';
+}
+
+function runStatusLabel(status: RunStatus): string {
+  const labels: Record<RunStatus, string> = {
+    created: '已创建',
+    planning: '规划中',
+    validating: '校验中',
+    executing: '执行中',
+    integrating: '集成中',
+    verifying: '验证中',
+    completed: '已完成',
+    failed: '失败',
+    blocked: '阻塞',
+    aborted: '已中止',
+  };
+  return labels[status] || status;
+}
+
+function formatClock(ts: string): string {
+  const date = new Date(ts);
+  if (!Number.isFinite(date.getTime())) return '';
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 function ActionButton({

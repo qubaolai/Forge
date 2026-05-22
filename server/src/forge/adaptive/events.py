@@ -1,6 +1,7 @@
 """事件类型常量 — AdaptiveRun SSE 事件。"""
 
-RUN_CREATED = "run.created"
+RUN_CREATED = "run.created"        # API 建档时发，仅一次
+RUN_STARTED = "run.started"        # supervisor 真正调起 orchestrator 时发（C3/fix-7 拆分）
 RUN_STATUS_CHANGED = "run.status_changed"
 RUN_COMPLETED = "run.completed"
 RUN_FAILED = "run.failed"

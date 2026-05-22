@@ -17,6 +17,7 @@
 
 import asyncio
 import logging
+import threading
 import time
 from collections.abc import (
     AsyncGenerator,
@@ -71,6 +72,34 @@ class StepDecision:
 
 
 BeforeStepHook = Callable[[StepContext], Awaitable[StepDecision]]
+
+
+def _run_awaitable_blocking(factory: Callable[[], Awaitable[Message]]) -> Message:
+    """在同步入口阻塞等待异步工具执行，兼容已有 run() 调用方。
+
+    正常情况下 run() 会被放到 worker thread 里执行，可以直接 asyncio.run。
+    如果误在已有 event loop 的线程内调用 run()，则新开短线程承载事件循环，
+    避免嵌套 asyncio.run() 失败。
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(factory())
+
+    box: dict[str, Message | BaseException] = {}
+
+    def _runner() -> None:
+        try:
+            box["value"] = asyncio.run(factory())
+        except BaseException as exc:  # noqa: BLE001
+            box["error"] = exc
+
+    thread = threading.Thread(target=_runner, name="react-tool-sync-bridge", daemon=True)
+    thread.start()
+    thread.join()
+    if "error" in box:
+        raise box["error"]  # type: ignore[misc]
+    return box["value"]  # type: ignore[return-value]
 
 
 class ToolCallingLLM(Protocol):
@@ -204,7 +233,7 @@ class ReActAgent(BaseAgent):
                     for tc in resp["tool_calls"]:
                         with span("agent.react.tool", tool=tc.name) as ts:
                             try:
-                                tool_msg = self._executor.execute(tc, role=self._role)
+                                tool_msg = self._execute_tool_blocking(tc)
                                 ts.set("ok", True)
                             except Exception as e:  # noqa: BLE001
                                 ts.set_error(e)
@@ -219,6 +248,10 @@ class ReActAgent(BaseAgent):
         outer.set("steps", steps)
         outer.set("final", False)
         raise AgentMaxStepsError(self._max_steps)
+
+    def _execute_tool_blocking(self, tc) -> Message:
+        """同步 run() 入口也统一走 aexecute()，避免异步工具被误调 run()."""
+        return _run_awaitable_blocking(lambda: self._executor.aexecute(tc, role=self._role))
 
     async def stream(
         self,

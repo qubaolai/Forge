@@ -82,6 +82,11 @@ class RunSupervisor:
                 name=f"adaptive-run-{run.run_id}",
             )
             self._handles[run.run_id] = _RunHandle(run_id=run.run_id, task=task, store=store)
+            # C5/fix-13: 任务结束后异步清理 handle，避免依赖下次 start_run 才被回收
+            def _cleanup_handle(_t: asyncio.Task, run_id: str = run.run_id) -> None:
+                self._handles.pop(run_id, None)
+
+            task.add_done_callback(_cleanup_handle)
             return task
 
     async def resume_run(
@@ -170,11 +175,8 @@ class RunSupervisor:
                 event_type=events.RUN_FAILED,
             )
             return run
-        finally:
-            async with self._lock:
-                handle = self._handles.get(run.run_id)
-                if handle is not None and handle.task.done():
-                    self._handles.pop(run.run_id, None)
+        # 注：handle 在 start_run 中通过 task.add_done_callback 异步清理，
+        # 这里 finally 不再操作 _handles 避免 task 尚未 done 时漏 pop。
 
     @staticmethod
     async def _safe_transition(
@@ -239,24 +241,36 @@ def build_orchestrator_factory(
     from forge.adaptive.validator import TaskGraphValidator
     from forge.adaptive.verifier import Verifier
 
-    if enable_real_llm is None:
-        try:
-            from config.settings import get_settings
+    task_cfg = None
+    try:
+        from config.settings import get_settings
 
-            settings = get_settings()
-            task_cfg = getattr(settings, "task_execution", None)
-            enable_real_llm = bool(getattr(task_cfg, "enable_real_llm", False))
-        except Exception:  # noqa: BLE001
-            enable_real_llm = False
+        settings = get_settings()
+        task_cfg = getattr(settings, "task_execution", None)
+    except Exception:  # noqa: BLE001
+        task_cfg = None
+
+    if enable_real_llm is None:
+        enable_real_llm = bool(getattr(task_cfg, "enable_real_llm", False))
 
     if enable_real_llm and planner_callable is None:
         from forge.adaptive.planner_llm import build_real_planner_callable
 
-        planner_callable = build_real_planner_callable()
+        planner_profile = "smart"
+        try:
+            planner_profile = str(getattr(task_cfg, "planner_model_profile", planner_profile))
+        except Exception:  # noqa: BLE001
+            planner_profile = "smart"
+        planner_callable = build_real_planner_callable(model_profile=planner_profile)
     if enable_real_llm and discovery_callable is None:
         from forge.adaptive.discovery import build_real_discovery_callable
 
-        discovery_callable = build_real_discovery_callable()
+        discovery_profile = "fast"
+        try:
+            discovery_profile = str(getattr(task_cfg, "discovery_model_profile", discovery_profile))
+        except Exception:  # noqa: BLE001
+            discovery_profile = "fast"
+        discovery_callable = build_real_discovery_callable(model_profile=discovery_profile)
 
     def _factory(run: AdaptiveRun, options: TaskOptions, store: AdaptiveRunStore) -> AdaptiveRunOrchestrator:
         _ = run, options  # 未来 supervisor 可基于 run/options 选择不同实现

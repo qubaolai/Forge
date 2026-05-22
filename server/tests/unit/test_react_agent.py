@@ -8,6 +8,8 @@ from forge.agents import ReActAgent
 from forge.core.types.errors import AgentMaxStepsError
 from forge.core.types.message import ToolCall
 from forge.llm.providers.base import LLM
+from forge.tools.base import Tool
+from forge.tools.executor import ToolExecutor
 
 
 class _ScriptedLLM(LLM):
@@ -59,6 +61,28 @@ class _ScriptedLLM(LLM):
         }
 
 
+class _AsyncOnlyTool(Tool):
+    name = "async_only"
+    description = "只实现 arun 的测试工具"
+    parameters = {
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+        "required": ["value"],
+    }
+
+    async def arun(self, args):
+        return {"ok": True, "value": args["value"]}
+
+
+def _make_executor(*tools: Tool) -> ToolExecutor:
+    """造一个临时 ToolExecutor + 临时 registry，避免污染全局注册表。"""
+    fake = type("FakeRegistry", (), {})()
+    by_name = {t.name: t for t in tools}
+    fake.get = lambda name: by_name.get(name)
+    fake.get_all = lambda: list(tools)
+    return ToolExecutor(registry=fake)
+
+
 def test_react_agent_finishes_without_tools():
     llm = _ScriptedLLM(
         [
@@ -101,6 +125,40 @@ def test_react_agent_executes_one_tool_then_finishes():
     assert result.usage["completion_tokens"] == 9
     # 验证 messages 中包含 tool 消息
     assert any(m.role == "tool" for m in result.messages)
+
+
+def test_react_agent_run_executes_async_only_tool():
+    """同步 run() 也应走 aexecute，避免 arun-only 工具被误调 run()."""
+    tool = _AsyncOnlyTool()
+    llm = _ScriptedLLM(
+        [
+            {
+                "content": "",
+                "tool_calls": [
+                    ToolCall(id="c1", name="async_only", arguments={"value": "ok"})
+                ],
+                "usage": {},
+            },
+            {
+                "content": "完成",
+                "tool_calls": [],
+                "usage": {},
+            },
+        ]
+    )
+    agent = ReActAgent(
+        llm,
+        tools=[tool],
+        executor=_make_executor(tool),
+        max_steps=3,
+    )
+
+    result = agent.run("调用异步工具")
+
+    tool_msgs = [m for m in result.messages if m.role == "tool"]
+    assert tool_msgs
+    assert '"value": "ok"' in tool_msgs[0].content
+    assert "未实现 run" not in tool_msgs[0].content
 
 
 def test_react_agent_handles_invalid_tool_gracefully():

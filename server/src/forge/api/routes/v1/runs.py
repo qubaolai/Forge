@@ -10,7 +10,7 @@ from config.settings import get_settings
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 
-from forge.adaptive import events
+from forge.adaptive import events, run_index
 from forge.adaptive.models import AdaptiveRun, RunStatus
 from forge.adaptive.options import TaskOptions
 from forge.adaptive.store import AdaptiveRunStore
@@ -33,6 +33,17 @@ def _resolve_workspace_path(raw_workspace_path: str | None) -> str:
     if not text:
         return str(Path.cwd())
     return str(Path(text).expanduser().resolve())
+
+
+async def _resolve_workspace_for_run(run_id: str, raw_workspace_path: str | None) -> str:
+    """C11/D6: 查询型端点解析 workspace_path —— 优先客户端传入，
+    否则用全局 run index 反查；都没有再退化到 cwd。"""
+    if (raw_workspace_path or "").strip():
+        return _resolve_workspace_path(raw_workspace_path)
+    entry = await run_index.lookup(run_id)
+    if entry is not None and entry.workspace_path:
+        return entry.workspace_path
+    return _resolve_workspace_path(None)
 
 
 def _run_to_dict(run: AdaptiveRun) -> dict:
@@ -72,6 +83,12 @@ async def create_run(body: RunCreateIn, user: CurrentUser):
         options_snapshot=options.to_dict(),
     )
     await store.save_run(run)
+    # C11/D6: 写全局 run index，让查询 API 不依赖客户端持续传 workspace_path
+    await run_index.record_run(
+        run_id=run.run_id,
+        owner_user_id=user.id,
+        workspace_path=workspace_path,
+    )
     await store.append_event(
         run.run_id,
         events.RUN_CREATED,
@@ -115,7 +132,9 @@ async def list_runs(
 @router.get("/{run_id}")
 async def get_run(run_id: str, user: CurrentUser, workspace_path: str | None = None):
     """查询单个 run。非 owner 也非 admin 直接 403。"""
-    store = AdaptiveRunStore(workspace_path=_resolve_workspace_path(workspace_path))
+    # C11/D6: 客户端可省略 workspace_path，由全局 index 反查
+    resolved = await _resolve_workspace_for_run(run_id, workspace_path)
+    store = AdaptiveRunStore(workspace_path=resolved)
     run = await store.load_run(run_id)
     if run is None:
         raise NotFound("run 不存在", code=40450)
@@ -134,7 +153,9 @@ async def stream_run_events(
     poll_interval_ms: int = Query(1000, ge=200, le=5000),
 ):
     """读取 run 事件流（SSE）。"""
-    store = AdaptiveRunStore(workspace_path=_resolve_workspace_path(workspace_path))
+    # C11/D6: 缺省 workspace_path 时走全局 index 反查
+    resolved = await _resolve_workspace_for_run(run_id, workspace_path)
+    store = AdaptiveRunStore(workspace_path=resolved)
     run = await store.load_run(run_id)
     if run is None:
         raise NotFound("run 不存在", code=40450)
@@ -203,7 +224,8 @@ async def stream_run_events(
 @router.post("/{run_id}/abort")
 async def abort_run(run_id: str, user: CurrentUser, workspace_path: str | None = None):
     """中止 run（同时取消后台执行任务）。"""
-    store = AdaptiveRunStore(workspace_path=_resolve_workspace_path(workspace_path))
+    resolved = await _resolve_workspace_for_run(run_id, workspace_path)
+    store = AdaptiveRunStore(workspace_path=resolved)
     run = await store.load_run(run_id)
     if run is None:
         raise NotFound("run 不存在", code=40450)
@@ -234,7 +256,8 @@ async def decide_run(run_id: str, body: DecideIn, user: CurrentUser, workspace_p
       orchestrator 从规划开始继续执行（discovery 复用历史结果）。
     - ``abort``    → 取消后台 task 并落 ABORTED。
     """
-    store = AdaptiveRunStore(workspace_path=_resolve_workspace_path(workspace_path))
+    resolved = await _resolve_workspace_for_run(run_id, workspace_path)
+    store = AdaptiveRunStore(workspace_path=resolved)
     run = await store.load_run(run_id)
     if run is None:
         raise NotFound("run 不存在", code=40450)

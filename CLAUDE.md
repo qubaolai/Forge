@@ -23,17 +23,17 @@ forge/
 
 ## server 内部结构
 
-- `server/src/forge/adaptive/` — 核心新增模块：models, planner, validator, scheduler, executor, orchestrator, integrator, verifier, workspace, store, events
-- `server/src/forge/agents/` — Agent 执行层（从 assistant 迁移，不动）
-- `server/src/forge/chat/` — TurnOrchestrator 等对话引擎（保留，被 executor 复用）
+- `server/src/forge/adaptive/` — 核心新增模块：models, planner, validator, scheduler, executor, orchestrator, integrator, verifier, workspace, store, events, supervisor, task_runner, discovery, planner_llm, run_index
+- `server/src/forge/agents/` — Agent 执行层（chat 与 adaptive 共享 ReActAgent，不动）
+- `server/src/forge/chat/` — TurnOrchestrator（仅 chat 路径用；adaptive 不走这条路）
 - `server/src/forge/llm/`, `context/`, `memory/`, `retrieval/`, `tools/`, `guardrails/`, `prompts/`, `observability/`, `infrastructure/`, `utils/` — 从 assistant 直接复制
 - `server/src/forge/api/` — 路由、中间件、schemas
 - `server/src/forge/config/` — 配置，含 sys_config.yaml
 
 ## 核心概念
 
-### ModeRouter
-三路路由：`chat`（TurnOrchestrator，不动）、`simple`（单 Agent 任务）、`adaptive`（完整 adaptive 流程）。入口在 `/api/v1/chat/completions`，由 `mode` 参数控制。
+### ModeRouter（B11/P2-11 后双路）
+两路路由：`chat`（TurnOrchestrator，零退化）、`adaptive`（supervisor + 7 步主流程）。入口在 `/api/v1/chat/completions`，由 `mode` 参数控制。`mode=auto` 仅在用户携带 `task_options.workspace_path` 时切到 adaptive，其余一律 chat（避免误判）。
 
 ### AdaptiveRun（7 步主流程）
 1. **DISCOVER** — READ-only ReActAgent 探索代码库 → DiscoveryReport
@@ -75,11 +75,15 @@ forge/
 ## 设计红线（不可逾越）
 
 1. **Planner 只能声明资源，不能执行**：TaskGraph 的 allowed_tools 必须过 Validator，超出 allowlist 直接 reject
-2. **write_scope 路径必须在 workspace root_path 下**：Validator + executor 双重校验
-3. **READ kind task 不能有写工具**：kind="read" + write_scope 非空 = Validator 拒绝
+2. **write_scope 路径必须在 workspace root_path 下**：Validator + ToolExecutor 双重校验（C9：ToolExecutor 接收 per-task task_write_scope/task_read_scope）
+3. **READ kind task 不能有写工具**：kind="read" + write_scope 非空 = Validator 拒绝；含 shell/run_tests 等副作用工具也拒绝（N14）
 4. **write task 必须走写隔离**：writer_mode=isolated_worktree 时只允许写 worktree
-5. **TurnOrchestrator 接口不变**：executor 通过 RunTurnOverrides 驱动，不修改 TurnOrchestrator 签名
+5. **adaptive 与 chat 共享 ReActAgent，但执行入口分叉**（D2 修订）：chat 走 TurnOrchestrator；adaptive 走 `adaptive/task_runner.run_node_with_react`。共享 ReActAgent / LLM client / ToolRegistry，不再有 RunTurnOverrides
 6. **聊天路径零退化**：mode=chat 或 auto 路由为 chat 时走原路径，adaptive 层完全不参与
+7. **fallback 不可遮蔽真实失败**（C10/D1）：`task_execution.enable_real_llm` 默认 true；LLM/Discovery/Planner 失败 → run FAILED；空 PatchSet → 任务 FAILED；FinalReport 暴露 execution_mode
+8. **状态机硬约束**（C6/D4）：_set_status 必须走 store.transition_status，非法转换 raise 不降级
+9. **HITL 经 supervisor**（B5）：BLOCKED 只能通过 /decide 解除；continue → resume_run，abort → cancel_run
+10. **多租户隔离**（N1）：runs/artifacts 所有 endpoint 经 _ensure_owner 校验；全局 run index 不绕过 owner 检查
 
 ## 实现阶段
 

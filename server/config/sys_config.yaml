@@ -124,6 +124,9 @@ llm:
       - name: qwen3-max-preview
         display_name: 通义千问 Max
         context_window: 32768
+      - name: qwen3.6-plus
+        display_name: 通义千问 qwen3.6-plus
+        context_window: 131072
       - name: qwen-plus
         display_name: 通义千问 Plus
         context_window: 131072
@@ -295,6 +298,10 @@ observability:
 
 # Forge Adaptive Task Execution
 task_execution:
+  # 纯聊天只开放无文件系统/命令副作用的工具；工程文件操作走 adaptive。
+  chat_tool_allowlist:
+    - knowledge_search
+
   tool_allowlist:
     - read_file
     - write_file
@@ -308,10 +315,17 @@ task_execution:
     - run_tests
     - knowledge_search
 
+  # C1/fix-2b: model_profiles 必须是 default_provider 实际拥有的 model name；
+  # 否则 build_chain_from_settings(model=...) 不传 provider 时会落到默认 provider
+  # 并触发 "model 不在 provider 配置中"。
+  # 修改 provider 时同步更新这三个值。
   model_profiles:
-    fast:   "${FAST_MODEL:claude-sonnet-4-6}"
-    smart:  "${SMART_MODEL:claude-sonnet-4-6}"
-    strong: "${STRONG_MODEL:claude-opus-4-7}"
+    fast:   "${FAST_MODEL:qwen-plus}"
+    smart:  "${SMART_MODEL:qwen-plus}"
+    strong: "${STRONG_MODEL:qwen3-max-preview}"
+  mode_router_model_profile: fast
+  planner_model_profile: smart
+  discovery_model_profile: fast
 
   hard_caps:
     max_agents:           8
@@ -327,7 +341,6 @@ task_execution:
     writer_mode:    isolated_worktree
     verifier_cmd:   null
 
-  # B7/B8/P0-2 开关：true 时 supervisor 自动接入真实 Discovery Agent + Planner LLM；
-  # false 时全部走 fallback（适合本地单测、零依赖体验）。
-  # 生产/演示开启前需确保 LLM pool 预热成功（lifespan.py 启动日志中可见）。
-  enable_real_llm: false
+  # C10/D1：默认 true。LLM 不可用时 run FAILED，不退化为 fallback 占位。
+  # 单测和零依赖环境通过 sys_config.test.yaml 显式 false 走 fallback。
+  enable_real_llm: true

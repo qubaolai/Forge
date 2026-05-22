@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from forge.adaptive.options import TaskOptions
+from forge.adaptive.planner import PlannerError
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +144,10 @@ def _build_planner_system_prompt(tool_allowlist: list[str], options: TaskOptions
     )
 
 
-def build_real_planner_callable() -> PlannerCallable:
+def build_real_planner_callable(
+    *,
+    model_profile: str = "smart",
+) -> PlannerCallable:
     """构造一个真实接入 LLM 的 PlannerCallable。
 
     返回的可调用对象签名: ``async (goal, discovery_report, tool_allowlist, options) -> str``。
@@ -162,14 +166,18 @@ def build_real_planner_callable() -> PlannerCallable:
 
         from forge.llm.gateway import build_chain_from_settings
 
+        # C10/D1: 真实路径下 LLM 不可用必须让 run FAILED，不再回退 fallback 假完成
         try:
             settings = get_settings()
-            chain = build_chain_from_settings(settings)
-        except Exception:
-            logger.exception("Planner LLM chain 构造失败，降级 fallback")
-            return ""
+            target_model = _resolve_model_profile(settings, model_profile)
+            chain = build_chain_from_settings(settings, model=target_model)
+        except Exception as exc:
+            logger.exception("Planner LLM chain 构造失败")
+            raise PlannerError(f"Planner LLM chain 构造失败: {exc}") from exc
 
-        from forge.llm.streaming import Message  # 轻量 import 避免顶层依赖
+        # C2/fix-2a: Message 实际定义在 core.types.message，
+        # 之前 `from forge.llm.streaming import Message` 是错误的（streaming 是 placeholder）
+        from forge.core.types.message import Message
 
         messages = [
             Message(
@@ -193,14 +201,13 @@ def build_real_planner_callable() -> PlannerCallable:
                 [SUBMIT_TASK_GRAPH_TOOL],
                 tool_choice="auto",
             )
-        except Exception:
-            logger.exception("Planner LLM 调用失败，降级 fallback")
-            return ""
+        except Exception as exc:
+            logger.exception("Planner LLM 调用失败")
+            raise PlannerError(f"Planner LLM 调用失败: {exc}") from exc
 
         tool_calls = resp.get("tool_calls") or []
         if not tool_calls:
-            logger.warning("Planner LLM 未返回 tool_calls，降级 fallback")
-            return ""
+            raise PlannerError("Planner LLM 未返回 tool_calls（submit_task_graph）")
         # 取第一个 submit_task_graph 调用
         for tc in tool_calls:
             tc_name = getattr(tc, "name", None) or (
@@ -215,7 +222,18 @@ def build_real_planner_callable() -> PlannerCallable:
                 return json.dumps(tc_args, ensure_ascii=False)
             if isinstance(tc_args, str):
                 return tc_args
-        logger.warning("Planner LLM 返回的 tool_calls 没有 submit_task_graph，降级 fallback")
-        return ""
+        raise PlannerError("Planner LLM 返回的 tool_calls 没有 submit_task_graph")
 
     return _plan
+
+
+def _resolve_model_profile(settings, model_profile: str) -> str | None:
+    """把 fast/smart/strong 档位解析成具体模型名。"""
+    profiles = getattr(getattr(settings, "task_execution", None), "model_profiles", None)
+    if profiles is None:
+        return None
+    if isinstance(profiles, dict):
+        value = profiles.get(model_profile)
+    else:
+        value = getattr(profiles, model_profile, None)
+    return str(value) if value else None

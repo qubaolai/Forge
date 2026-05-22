@@ -100,6 +100,9 @@ llm:
       - name: qwen3-max-preview
         display_name: 通义千问 Max
         context_window: 32768
+      - name: qwen3.6-plus
+        display_name: 通义千问 qwen3.6-plus
+        context_window: 131072
       - name: qwen-plus
         display_name: 通义千问 Plus
         context_window: 131072
@@ -253,6 +256,11 @@ observability:
 
 # Forge Adaptive Task Execution
 task_execution:
+  # C10/D1: 测试环境关闭真实 LLM 接入，避免单测 / CI 强依赖外部模型。
+  enable_real_llm: false
+  # 纯聊天只开放无文件系统/命令副作用的工具；工程文件操作走 adaptive。
+  chat_tool_allowlist:
+    - knowledge_search
   tool_allowlist:
     - read_file
     - write_file
@@ -266,10 +274,14 @@ task_execution:
     - run_tests
     - knowledge_search
 
+  # C1/fix-2b: 与 default_provider (dashscope) 真实模型保持一致
   model_profiles:
-    fast: ${FAST_MODEL:claude-sonnet-4-6}
-    smart: ${SMART_MODEL:claude-sonnet-4-6}
-    strong: ${STRONG_MODEL:claude-opus-4-7}
+    fast: ${FAST_MODEL:qwen-plus}
+    smart: ${SMART_MODEL:qwen-plus}
+    strong: ${STRONG_MODEL:qwen3-max-preview}
+  mode_router_model_profile: fast
+  planner_model_profile: smart
+  discovery_model_profile: fast
 
   hard_caps:
     max_agents: 8

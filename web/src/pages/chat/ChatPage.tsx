@@ -7,8 +7,9 @@ import { useChatStream } from '@/hooks/useChatStream';
 import { MessageList } from '@/components/chat/MessageList';
 import { ChatInput, ReasoningEffort } from '@/components/chat/ChatInput';
 import { CitationPanel } from '@/components/chat/CitationPanel';
-import { PanelRight } from 'lucide-react';
+import { PanelRight, Wrench, Folder } from 'lucide-react';
 import type { ModelOptions } from '@/hooks/useChatStream';
+import { toast } from '@/components/common/Toast';
 
 export default function ChatPage() {
   const { sessionId } = useParams();
@@ -44,6 +45,10 @@ export default function ChatPage() {
   const [showPanel, setShowPanel] = useState(true);
   const [selectedCitation, setSelectedCitation] = useState<number | null>(null);
   const [reasoning, setReasoning] = useState<ReasoningEffort>('high');
+  const [taskMode, setTaskMode] = useState(() => localStorage.getItem('forge.taskMode') === '1');
+  const [workspacePath, setWorkspacePath] = useState(
+    () => localStorage.getItem('forge.workspacePath') || '',
+  );
 
   const { send, abort, resume, reset, streaming, current } = useChatStream({
     onComplete: () => {
@@ -144,6 +149,10 @@ export default function ChatPage() {
 
   function handleSend(text: string) {
     if (noSession) return;
+    if (taskMode && !workspacePath.trim()) {
+      toast.error('任务模式需要填写 workspace_path');
+      return;
+    }
 
     const pendingMsg: ChatMessage = {
       id: 'tmp_user_' + Date.now(),
@@ -156,12 +165,23 @@ export default function ChatPage() {
     setPendingUser((prev) => [...prev, pendingMsg]);
 
     const modelOptions = buildModelOptions();
+    const taskOptions = taskMode
+      ? {
+          workspace_path: workspacePath.trim(),
+        }
+      : undefined;
     if (isNew) {
       const agentId = agentIdParam || agents?.items?.[0]?.id;
       // 无 agent 时不阻塞：后端会使用 "default" agent
-      send(null, text, agentId, undefined, modelOptions);
+      send(null, text, agentId, undefined, modelOptions, {
+        mode: taskMode ? 'auto' : 'chat',
+        taskOptions,
+      });
     } else {
-      send(sessionId!, text, undefined, undefined, modelOptions);
+      send(sessionId!, text, undefined, undefined, modelOptions, {
+        mode: taskMode ? 'auto' : 'chat',
+        taskOptions,
+      });
     }
   }
 
@@ -196,18 +216,38 @@ export default function ChatPage() {
     <div className="flex h-full">
       <main className="flex-1 flex flex-col min-w-0">
         <div className="px-6 py-3 border-b flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-2 text-sm">
-            <span className={isNew ? 'font-medium text-gray-400' : 'font-medium'}>
-              {headerTitle}
-            </span>
-            {!isNew && session && (
-              <>
-                <span className="text-gray-300">·</span>
-                <span className="text-xs px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full">
-                  {session.agent_name}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 text-sm">
+              <span className={isNew ? 'font-medium text-gray-400' : 'font-medium'}>
+                {headerTitle}
+              </span>
+              {!isNew && session && (
+                <>
+                  <span className="text-gray-300">·</span>
+                  <span className="text-xs px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full">
+                    {session.agent_name}
+                  </span>
+                </>
+              )}
+              {taskMode && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-2 py-0.5 text-xs text-orange-700">
+                  <Wrench size={12} />
+                  任务模式
                 </span>
-              </>
-            )}
+              )}
+            </div>
+            <TaskModeBar
+              taskMode={taskMode}
+              workspacePath={workspacePath}
+              onTaskModeChange={(value) => {
+                setTaskMode(value);
+                localStorage.setItem('forge.taskMode', value ? '1' : '0');
+              }}
+              onWorkspacePathChange={(value) => {
+                setWorkspacePath(value);
+                localStorage.setItem('forge.workspacePath', value);
+              }}
+            />
           </div>
           {!isNew && !showPanel && currentCitations.length > 0 && (
             <button
@@ -242,6 +282,7 @@ export default function ChatPage() {
           onAbort={abort}
           streaming={streaming}
           disabled={false}
+          placeholder={taskMode ? '描述问题或任务，后端自动判断是否进入任务流程' : undefined}
           reasoning={reasoning}
           onReasoningChange={setReasoning}
         />
@@ -253,6 +294,48 @@ export default function ChatPage() {
           highlightedIndex={selectedCitation}
           onClose={() => setShowPanel(false)}
         />
+      )}
+    </div>
+  );
+}
+
+function TaskModeBar({
+  taskMode,
+  workspacePath,
+  onTaskModeChange,
+  onWorkspacePathChange,
+}: {
+  taskMode: boolean;
+  workspacePath: string;
+  onTaskModeChange: (value: boolean) => void;
+  onWorkspacePathChange: (value: string) => void;
+}) {
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+      <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border bg-white px-2.5 py-1 transition-colors hover:bg-gray-50">
+        <input
+          type="checkbox"
+          checked={taskMode}
+          onChange={(e) => onTaskModeChange(e.target.checked)}
+          className="h-3.5 w-3.5 accent-orange-600"
+        />
+        <Wrench size={13} />
+        <span>任务模式</span>
+      </label>
+
+      {taskMode && (
+        <>
+          <label className="flex min-w-[260px] flex-1 items-center gap-1.5 rounded-full border bg-white px-2.5 py-1">
+            <Folder size={13} className="text-gray-400" />
+            <span className="shrink-0 text-gray-400">workspace</span>
+            <input
+              value={workspacePath}
+              onChange={(e) => onWorkspacePathChange(e.target.value)}
+              placeholder="/Users/.../Forge"
+              className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-gray-300"
+            />
+          </label>
+        </>
       )}
     </div>
   );

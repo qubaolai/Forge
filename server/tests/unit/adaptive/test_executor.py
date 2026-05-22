@@ -13,6 +13,7 @@ from forge.adaptive.models import (
     AdaptiveRun,
     Artifact,
     ArtifactKind,
+    RunStatus,
     TaskGraph,
     TaskKind,
     TaskNode,
@@ -20,6 +21,17 @@ from forge.adaptive.models import (
 )
 from forge.adaptive.options import HardCaps, TaskOptions
 from forge.adaptive.store import AdaptiveRunStore
+
+
+async def _advance_to_validating(store: AdaptiveRunStore, run: AdaptiveRun) -> None:
+    """C6/D4: 状态机硬约束后，单测必须按合法转换链把 run 推到 VALIDATING，
+    才能进入 executor.execute() 的 EXECUTING。"""
+    await store.transition_status(run.run_id, RunStatus.PLANNING)
+    await store.transition_status(run.run_id, RunStatus.VALIDATING)
+    refreshed = await store.load_run(run.run_id)
+    if refreshed is not None:
+        run.status = refreshed.status
+        run.updated_at = refreshed.updated_at
 
 pytestmark = pytest.mark.asyncio
 
@@ -89,6 +101,7 @@ async def test_executor_runs_three_nodes_serially(tmp_path) -> None:
     )
     store = AdaptiveRunStore(workspace_path=tmp_path, base_dir=tmp_path)
     await store.save_run(run)
+    await _advance_to_validating(store, run)
 
     executor = TaskExecutor(store=store)
     summary = await executor.execute(run=run, options=_options(str(tmp_path)))
@@ -134,6 +147,7 @@ async def test_executor_skips_when_dependency_failed(tmp_path) -> None:
     )
     store = AdaptiveRunStore(workspace_path=tmp_path, base_dir=tmp_path)
     await store.save_run(run)
+    await _advance_to_validating(store, run)
     executor = TaskExecutor(store=store)
 
     # monkey patch: 让 t1 执行抛错，验证 t2 被跳过。
@@ -186,6 +200,7 @@ async def test_executor_runs_tasks_in_same_wave_concurrently(tmp_path) -> None:
     )
     store = AdaptiveRunStore(workspace_path=tmp_path, base_dir=tmp_path)
     await store.save_run(run)
+    await _advance_to_validating(store, run)
     executor = TaskExecutor(store=store)
 
     async def _slow_execute_single_node(*, run, node, graph, options):  # type: ignore[no-untyped-def]

@@ -54,3 +54,24 @@ def test_chat_completions_task_mode_emits_run_events(monkeypatch, tmp_path) -> N
     assert "task.completed" in payload
     assert "run.completed" in payload
     assert "run.done" in payload
+
+
+def test_chat_completions_auto_with_task_options_requires_workspace(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("ASSISTANT_HOME", str(tmp_path / "assistant_home"))
+    reset_settings()
+
+    client = TestClient(_app())
+    with client.stream(
+        "POST",
+        "/chat/completions",
+        json={
+            "message": "修复登录 bug",
+            "mode": "auto",
+            "task_options": {},
+        },
+    ) as resp:
+        payload = "".join(resp.iter_text())
+
+    assert resp.status_code == 200
+    assert "missing_workspace_path" in payload

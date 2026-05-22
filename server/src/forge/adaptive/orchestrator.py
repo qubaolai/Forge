@@ -156,6 +156,13 @@ class AdaptiveRunOrchestrator:
         BLOCKED → decide continue），跳过 DISCOVER，直接进入 plan_and_validate
         + execute；replan 计数沿用，避免无限重试。
         """
+        # C10/D1: 在 run.metadata 中固定记录 execution_mode（real / fallback），
+        # 客户端 GET /runs/{id} 即可立即看到本次 run 的执行模式，
+        # 无须等 FINAL_REPORT 才知道
+        run.metadata.setdefault(
+            "execution_mode",
+            "real" if self._discovery_callable is not None else "fallback",
+        )
         is_resume = run.task_graph is not None and run.status == RunStatus.PLANNING
         await self._persist(run)
         if is_resume:
@@ -169,13 +176,14 @@ class AdaptiveRunOrchestrator:
                     "replan_count": run.replan_count,
                 },
             )
-            discovery_report = ""
             # 恢复时复用历史 discovery_report，从 run.metadata 兜底
             discovery_report = str(run.metadata.get("discovery_summary", ""))
         else:
+            # C3/fix-7: API 层已发过 RUN_CREATED，orchestrator 只发 RUN_STARTED 表示
+            # 后台执行真正开始，避免客户端看到两条 run.created 事件
             await self._emit(
                 run.run_id,
-                events.RUN_CREATED,
+                events.RUN_STARTED,
                 {"status": run.status.value, "goal": run.goal, "owner_user_id": run.owner_user_id},
             )
             discovery_artifact = await self._discover(run=run, options=options)
@@ -189,6 +197,9 @@ class AdaptiveRunOrchestrator:
         except TaskGraphValidationError:
             return run
 
+        # C6/D4: 状态机硬约束后，orchestrator 必须显式推 VALIDATING -> EXECUTING；
+        # 真实 TaskExecutor.execute() 内部本来也推一次，幂等检查保证不重复。
+        await self._set_status(run, RunStatus.EXECUTING)
         summary = await self._executor.execute(run=run, options=options)
         if summary.failed > 0:
             await self._set_status(run, RunStatus.FAILED)
@@ -268,24 +279,19 @@ class AdaptiveRunOrchestrator:
         return artifact
 
     async def _discover(self, *, run: AdaptiveRun, options: TaskOptions) -> Artifact:
-        """B7/P0-2 上半：可注入真实 DiscoveryAgent。
+        """B7/C10/D1: 真实 DiscoveryAgent 或占位。
 
-        - 已注入 ``discovery_callable``：调用其产出 summary，失败回退占位文本。
-        - 未注入：返回轻量占位（保留旧行为，单测和默认体验零依赖）。
+        - 已注入 ``discovery_callable``：失败时 raise，由 supervisor 转 FAILED（不回退占位）。
+        - 未注入（enable_real_llm=false 或单测）：返回轻量占位。
         """
         summary = f"已完成快速探索: goal={run.goal[:80]}"
         source = "fallback"
         if self._discovery_callable is not None:
-            try:
-                real_summary = await self._discovery_callable(run.goal, options.workspace_path)
-                if real_summary:
-                    summary = real_summary
-                    source = "react_agent"
-            except Exception:
-                import logging
-                logging.getLogger(__name__).exception(
-                    "DiscoveryAgent 执行失败，回退占位 summary run_id=%s", run.run_id
-                )
+            real_summary = await self._discovery_callable(run.goal, options.workspace_path)
+            if not real_summary:
+                raise RuntimeError("Discovery 返回空 summary")
+            summary = real_summary
+            source = "react_agent"
 
         artifact = Artifact(
             artifact_id=new_id("art"),
@@ -356,6 +362,8 @@ class AdaptiveRunOrchestrator:
         integration: IntegrationResult,
         verify: VerifyResult,
     ) -> None:
+        # C10/D1: 透出 execution_mode 让客户端能区分本次 run 是真实 LLM 还是 fallback 占位
+        execution_mode = "real" if self._discovery_callable is not None else "fallback"
         final_artifact = Artifact(
             artifact_id=new_id("art"),
             run_id=run.run_id,
@@ -364,6 +372,7 @@ class AdaptiveRunOrchestrator:
             payload={
                 "run_id": run.run_id,
                 "status": "completed",
+                "execution_mode": execution_mode,
                 "task_graph": run.task_graph.to_dict() if run.task_graph else None,
                 "artifact_ids": list(run.artifact_ids),
                 "execution_summary": {
@@ -457,6 +466,20 @@ class AdaptiveRunOrchestrator:
                     "timed_out": verify.timed_out,
                 },
             )
+            # C4/fix-9: allow_write=False 时不能追加 WRITE 修复任务，
+            # 直接 BLOCKED 等用户决策（升级权限重试 / 放弃）
+            if not options.allow_write:
+                await self._set_status(run, RunStatus.BLOCKED)
+                await self._emit(
+                    run.run_id,
+                    events.RUN_BLOCKED,
+                    {
+                        "reason": "verify_failed_and_allow_write_false",
+                        "artifact_id": test_art.artifact_id,
+                        "hint": "allow_write=False，无法自动追加修复任务；用户需提升权限重启 run",
+                    },
+                )
+                return None
             if run.replan_count >= max_replans:
                 await self._set_status(run, RunStatus.BLOCKED)
                 await self._emit(
@@ -538,34 +561,20 @@ class AdaptiveRunOrchestrator:
         )
 
     async def _set_status(self, run: AdaptiveRun, status: RunStatus) -> None:
-        """B2/P1-6: 状态机统一入口。
+        """C6/D4: 状态机硬约束。
 
-        - 与目标状态相同：幂等返回。
-        - 优先走 store.transition_status 校验合法转换。
-        - 校验失败：记录警告 + 降级直写，避免主流程因为状态机边界条件锁死；
-          orchestrator 主流程按 7 步顺序推进，理论不会触发降级。
+        - 与目标相同：幂等。
+        - 有 store：必须走 store.transition_status 校验；非法转换 raise，不降级。
+        - 无 store（单测专用脚手架）：直接覆盖；生产路径必有 store。
         """
-        import logging
-
         if run.status == status:
             return
         prev = run.status
         if self._store is not None:
-            try:
-                updated = await self._store.transition_status(run.run_id, status)
-                run.status = updated.status
-                run.updated_at = updated.updated_at
-                return
-            except (ValueError, FileNotFoundError) as exc:
-                # ValueError: 非法状态转换；FileNotFoundError: run 还未 save_run
-                # 两种都降级为直接覆盖，避免主流程因边界条件锁死
-                logging.getLogger(__name__).warning(
-                    "Orchestrator 状态机校验失败 run=%s %s->%s err=%s，降级为直接覆盖",
-                    run.run_id,
-                    prev.value,
-                    status.value,
-                    exc,
-                )
+            updated = await self._store.transition_status(run.run_id, status)
+            run.status = updated.status
+            run.updated_at = updated.updated_at
+            return
         run.status = status
         await self._persist(run)
         await self._emit(

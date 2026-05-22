@@ -46,6 +46,7 @@ class TaskExecutionConfig(BaseModel):
 
     model_config = {"extra": "forbid"}
 
+    chat_tool_allowlist: list[str] = Field(default_factory=lambda: ["knowledge_search"])
     tool_allowlist: list[str] = Field(
         default_factory=lambda: [
             "read_file",
@@ -62,7 +63,12 @@ class TaskExecutionConfig(BaseModel):
         ]
     )
     model_profiles: TaskExecutionModelProfiles = Field(default_factory=TaskExecutionModelProfiles)
+    mode_router_model_profile: Literal["fast", "smart", "strong"] = "fast"
+    planner_model_profile: Literal["fast", "smart", "strong"] = "smart"
+    discovery_model_profile: Literal["fast", "smart", "strong"] = "fast"
     hard_caps: TaskExecutionHardCaps = Field(default_factory=TaskExecutionHardCaps)
     default_options: TaskExecutionDefaultOptions = Field(default_factory=TaskExecutionDefaultOptions)
-    # B7/B8/B18: 是否在 supervisor 自动接入真实 Discovery Agent + Planner LLM + TaskRunner
-    enable_real_llm: bool = False
+    # B7/B8/B18/C10: 是否在 supervisor 自动接入真实 Discovery Agent + Planner LLM + TaskRunner
+    # C10/D1 决策：默认 true。LLM 不可用时 run 直接 FAILED，不退化为 fallback 假完成。
+    # 测试/demo 可显式置 false 走兜底，但 sys_config.test.yaml 也已显式覆盖。
+    enable_real_llm: bool = True

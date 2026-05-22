@@ -277,6 +277,8 @@ export interface ChatMessage {
   reasoning_content?: string;
   // 思考累计墙钟毫秒, 仅 assistant 用 (DeepSeek thinking 等开启时才有)
   reasoning_duration_ms?: number;
+  // Adaptive run 任务模式状态；仅 mode=task 的 assistant 占位消息使用
+  adaptive_run?: AdaptiveRunSummary;
 }
 
 export interface ChatSession {
@@ -298,6 +300,130 @@ export interface ChatCompletionRequest {
   // 临时覆盖 Agent 默认配置(可选)
   override_retrieval?: Partial<RetrievalConfig>;
 }
+
+// ============================================================================
+// Adaptive Run
+// ============================================================================
+
+export type RunStatus =
+  | 'created'
+  | 'planning'
+  | 'validating'
+  | 'executing'
+  | 'integrating'
+  | 'verifying'
+  | 'completed'
+  | 'failed'
+  | 'blocked'
+  | 'aborted';
+
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+
+export type TaskKind = 'read' | 'write' | 'execute' | 'review' | 'integrate';
+
+export type ArtifactKind =
+  | 'discovery_report'
+  | 'task_graph'
+  | 'patch_set'
+  | 'review_report'
+  | 'test_report'
+  | 'integration_report'
+  | 'conflict_report'
+  | 'final_report';
+
+export interface TaskOptionsInput {
+  allow_write?: boolean;
+  allow_parallel?: boolean;
+  max_agents?: number;
+  writer_mode?: 'direct' | 'isolated_worktree';
+  verifier_cmd?: string | null;
+  workspace_path?: string | null;
+}
+
+export interface TaskNode {
+  id: string;
+  title: string;
+  kind: TaskKind;
+  allowed_tools: string[];
+  read_scope: string[];
+  write_scope: string[];
+  deps: string[];
+  model_profile: 'fast' | 'smart' | 'strong';
+  max_steps: number;
+  acceptance_criteria: string;
+  output_contract: string;
+  command?: string | null;
+  status: TaskStatus;
+  artifact_ids: string[];
+  error?: string | null;
+  started_at?: ISODateString | null;
+  completed_at?: ISODateString | null;
+}
+
+export interface TaskGraph {
+  nodes: Record<string, TaskNode>;
+  planner_raw?: string;
+  created_at: ISODateString;
+}
+
+export interface AdaptiveRun {
+  run_id: string;
+  workspace_path: string;
+  goal: string;
+  status: RunStatus;
+  task_graph?: TaskGraph | null;
+  current_wave: number;
+  replan_count: number;
+  artifact_ids: string[];
+  owner_user_id: string;
+  created_at: ISODateString;
+  updated_at: ISODateString;
+  metadata: Record<string, unknown>;
+  options_snapshot?: Record<string, unknown> | null;
+}
+
+export interface AdaptiveArtifact {
+  artifact_id: string;
+  run_id: string;
+  task_id: string | null;
+  kind: ArtifactKind;
+  payload: unknown;
+  created_at: ISODateString;
+}
+
+export interface AdaptiveRunEvent {
+  id: string;
+  run_id: string;
+  type: string;
+  ts: ISODateString;
+  payload: Record<string, unknown>;
+}
+
+export interface AdaptiveRunSummary {
+  run_id?: string;
+  status?: RunStatus;
+  artifact_ids: string[];
+  events: AdaptiveRunEvent[];
+}
+
+export interface AdaptiveRunList {
+  items: AdaptiveRun[];
+  total: number;
+}
+
+export interface AdaptiveArtifactList {
+  items: AdaptiveArtifact[];
+  total: number;
+}
+
+export type RunSSEEvent =
+  | AdaptiveRunEvent
+  | {
+      type: 'stream.closed';
+      run_id: string;
+      status: RunStatus;
+      reason: string;
+    };
 
 // ============================================================================
 // SSE 事件类型(对应后端 chat/completions 流)
@@ -323,6 +449,42 @@ export type SSEEvent =
       reasoning_duration_ms?: number | null;
     }
   | { type: 'error'; message: string; code?: string }
+  | {
+      type:
+        | 'run.created'
+        | 'run.started'
+        | 'run.status_changed'
+        | 'run.completed'
+        | 'run.failed'
+        | 'run.blocked'
+        | 'run.aborted'
+        | 'task.started'
+        | 'task.completed'
+        | 'task.failed'
+        | 'task.skipped'
+        | 'wave.started'
+        | 'wave.completed'
+        | 'artifact.created'
+        | 'plan.created'
+        | 'plan.validated'
+        | 'plan.rejected'
+        | 'integration.started'
+        | 'integration.completed'
+        | 'integration.conflict'
+        | 'verify.started'
+        | 'verify.passed'
+        | 'verify.failed';
+      run_id: string;
+      event_id?: string;
+      ts?: ISODateString;
+      payload: Record<string, unknown>;
+    }
+  | {
+      type: 'run.done';
+      run_id: string;
+      status: RunStatus;
+      artifact_ids: string[];
+    }
   | {
       type: 'task_partial';
       message_id: string;

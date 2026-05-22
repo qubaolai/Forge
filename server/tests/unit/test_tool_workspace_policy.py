@@ -43,12 +43,12 @@ class _ShellTool(Tool):
         return {"timeout_seconds": args.get("timeout_seconds")}
 
 
-def _make_executor(*tools: Tool) -> ToolExecutor:
+def _make_executor(*tools: Tool, task_workspace_root: str | Path | None = None) -> ToolExecutor:
     fake = type("FakeRegistry", (), {})()
     by_name = {t.name: t for t in tools}
     fake.get = lambda name: by_name.get(name)
     fake.get_all = lambda: list(tools)
-    return ToolExecutor(registry=fake)
+    return ToolExecutor(registry=fake, task_workspace_root=task_workspace_root)
 
 
 def test_read_file_rejects_path_outside_allowlist(monkeypatch, tmp_path: Path) -> None:
@@ -58,7 +58,7 @@ def test_read_file_rejects_path_outside_allowlist(monkeypatch, tmp_path: Path) -
     outside.write_text("x", encoding="utf-8")
     monkeypatch.setattr(
         "forge.tools.executor.resolve_tool_runtime_policy",
-        lambda: ToolRuntimePolicy(
+        lambda start=None: ToolRuntimePolicy(
             shell_timeout_seconds=30.0,
             allowed_roots=(root.resolve(),),
         ),
@@ -76,7 +76,7 @@ def test_read_file_allows_path_within_allowlist(monkeypatch, tmp_path: Path) -> 
     inside.write_text("x", encoding="utf-8")
     monkeypatch.setattr(
         "forge.tools.executor.resolve_tool_runtime_policy",
-        lambda: ToolRuntimePolicy(
+        lambda start=None: ToolRuntimePolicy(
             shell_timeout_seconds=30.0,
             allowed_roots=(root.resolve(),),
         ),
@@ -88,10 +88,48 @@ def test_read_file_allows_path_within_allowlist(monkeypatch, tmp_path: Path) -> 
     assert payload["path"] == str(inside)
 
 
+def test_task_executor_rewrites_relative_path_to_task_root(monkeypatch, tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    monkeypatch.setattr(
+        "forge.tools.executor.resolve_tool_runtime_policy",
+        lambda start=None: ToolRuntimePolicy(
+            shell_timeout_seconds=30.0,
+            allowed_roots=(workspace.resolve(),),
+        ),
+    )
+    exec_ = _make_executor(_ReadFileTool(), task_workspace_root=workspace)
+    call = ToolCall(id="c_rel", name="read_file", arguments={"path": "."})
+
+    msg = exec_.execute(call)
+
+    payload = json.loads(msg.content)
+    assert payload["path"] == str(workspace.resolve())
+
+
+def test_task_executor_fills_missing_path_with_task_root(monkeypatch, tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    monkeypatch.setattr(
+        "forge.tools.executor.resolve_tool_runtime_policy",
+        lambda start=None: ToolRuntimePolicy(
+            shell_timeout_seconds=30.0,
+            allowed_roots=(workspace.resolve(),),
+        ),
+    )
+    exec_ = _make_executor(_ReadFileTool(), task_workspace_root=workspace)
+    call = ToolCall(id="c_missing", name="read_file", arguments={})
+
+    msg = exec_.execute(call)
+
+    payload = json.loads(msg.content)
+    assert payload["path"] == str(workspace.resolve())
+
+
 def test_shell_timeout_is_capped_by_workspace_policy(monkeypatch) -> None:
     monkeypatch.setattr(
         "forge.tools.executor.resolve_tool_runtime_policy",
-        lambda: ToolRuntimePolicy(
+        lambda start=None: ToolRuntimePolicy(
             shell_timeout_seconds=12.0,
             allowed_roots=(Path.cwd().resolve(),),
         ),

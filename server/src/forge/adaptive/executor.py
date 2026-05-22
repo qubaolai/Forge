@@ -230,6 +230,10 @@ class TaskExecutor:
         artifact_id = new_id("art")
         if node.kind == TaskKind.WRITE and options.writer_mode == "isolated_worktree":
             payload = await self._execute_write_in_isolation(run=run, node=node)
+        elif node.kind == TaskKind.EXECUTE and node.command:
+            # C8/fix-11: EXECUTE 节点声明了 command 时，直接跑命令并采集真实退出码；
+            # 非零退出 → raise，让 wave 调度把任务标 FAILED（与 retry 逻辑配合）
+            payload = await self._execute_command_node(run=run, node=node, options=options)
         elif self._enable_real_llm and node.kind in (
             TaskKind.READ,
             TaskKind.REVIEW,
@@ -242,6 +246,19 @@ class TaskExecutor:
         # B6/P0-4: 给 payload 打上 attempt 号，方便 Integrator 按批次过滤
         if isinstance(payload, dict):
             payload.setdefault("attempt", run.replan_count)
+            # C10/D1: WRITE 任务空 PatchSet 验收 —— 真实路径下 (enable_real_llm=true)
+            # 既无 changed_files 又无 agent_output 视为未真正执行，向上抛错让任务 FAILED
+            if (
+                self._enable_real_llm
+                and node.kind == TaskKind.WRITE
+                and not payload.get("changed_files")
+                and not payload.get("agent_output")
+                and not payload.get("agent_failed")
+            ):
+                raise RuntimeError(
+                    f"WRITE 任务 {node.id} 产出空 PatchSet：无 changed_files 且无 agent_output，"
+                    "视为未真正执行（C10/D1）"
+                )
         artifact = Artifact(
             artifact_id=artifact_id,
             run_id=run.run_id,
@@ -260,12 +277,13 @@ class TaskExecutor:
 
     async def _execute_write_in_isolation(self, *, run: AdaptiveRun, node: TaskNode) -> dict[str, Any]:
         env = await self._isolate_strategy.prepare(node, run)
-        cleanup_done = False
         try:
             # B9/P0-1: 启用真实 LLM 时让 ReActAgent 在 worktree 内真的改代码
             if self._enable_real_llm:
                 from forge.adaptive.task_runner import TaskRunnerError, run_node_with_react
 
+                # C7/fix-5: TaskRunnerError 不再吞掉。先把 diff 收集为 failure
+                # artifact 便于排查，然后向上 raise 让 Executor 把任务标 FAILED。
                 try:
                     upstream = await self._collect_upstream_context(run=run, node=node)
                     react_result = await run_node_with_react(
@@ -275,17 +293,38 @@ class TaskExecutor:
                         upstream_context=upstream,
                     )
                 except TaskRunnerError as exc:
-                    # 真实执行失败时仍按 collect 收集（可能 worktree 已有部分变更）
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        "WRITE 任务 ReAct 执行失败 task=%s err=%s，仅收集已写入差异", node.id, exc
-                    )
-                    react_result = None
+                    failure_id = new_id("art")
+                    try:
+                        partial = await self._isolate_strategy.collect(env, task_id=node.id)
+                        partial_dict = partial.to_dict()
+                    except Exception:  # noqa: BLE001
+                        partial_dict = {}
+                    if self._store is not None:
+                        failure = Artifact(
+                            artifact_id=failure_id,
+                            run_id=run.run_id,
+                            task_id=node.id,
+                            kind=ArtifactKind.PATCH_SET,
+                            payload={
+                                **partial_dict,
+                                "write_scope": list(node.write_scope),
+                                "note": "C7: ReActAgent 执行失败，保留部分 diff 供排查",
+                                "worktree_retained": False,
+                                "diff_only_safe": True,
+                                "agent_failed": True,
+                                "agent_error": str(exc),
+                                "attempt": run.replan_count,
+                            },
+                        )
+                        await self._store.save_artifact(failure)
+                        run.artifact_ids.append(failure_id)
+                    raise RuntimeError(f"WRITE 任务 {node.id} ReAct 执行失败: {exc}") from exc
+
                 patch = await self._isolate_strategy.collect(env, task_id=node.id)
                 payload = patch.to_dict()
                 payload["write_scope"] = list(node.write_scope)
-                payload["agent_output"] = react_result.output if react_result else None
-                payload["agent_steps"] = react_result.steps if react_result else 0
+                payload["agent_output"] = react_result.output
+                payload["agent_steps"] = react_result.steps
                 payload["note"] = "B9 真实执行：ReActAgent 在隔离 worktree 内运行"
                 # B14/P2-13: 标注 worktree 已 cleanup，下游基于 diff 重放
                 payload["worktree_retained"] = False
@@ -300,8 +339,46 @@ class TaskExecutor:
             payload["diff_only_safe"] = True
             return payload
         finally:
-            if not cleanup_done:
-                await self._isolate_strategy.cleanup(env)
+            await self._isolate_strategy.cleanup(env)
+
+    async def _execute_command_node(
+        self,
+        *,
+        run: AdaptiveRun,
+        node: TaskNode,
+        options: TaskOptions,
+    ) -> dict[str, Any]:
+        """C8/fix-11: 直接跑 node.command 采集结构化结果（exit_code/stdout/stderr）。
+
+        非零退出 → raise RuntimeError，让 wave 调度把任务标 FAILED。
+        - 复用 Verifier 已实现的进程 + 超时模式，避免重复实现。
+        """
+        from forge.adaptive.verifier import Verifier
+
+        verifier = Verifier()
+        result = await verifier.run(
+            node.command,
+            workspace_path=options.workspace_path or run.workspace_path,
+        )
+        payload: dict[str, Any] = {
+            "task_id": node.id,
+            "kind": node.kind.value,
+            "command": result.command,
+            "command_source": "task_node",
+            "exit_code": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "duration_ms": result.duration_ms,
+            "timed_out": result.timed_out,
+            "passed": result.passed,
+            "source": "subprocess",
+        }
+        if not result.passed:
+            raise RuntimeError(
+                f"EXECUTE 任务 {node.id} 命令失败: exit_code={result.returncode} "
+                f"stderr={(result.stderr or '').strip()[:200]}"
+            )
+        return payload
 
     async def _execute_with_react(
         self,
@@ -337,8 +414,13 @@ class TaskExecutor:
         elif node.kind == TaskKind.REVIEW:
             base["conclusion"] = react_result.output
         elif node.kind == TaskKind.EXECUTE:
-            base["command"] = node.command or options.verifier_cmd or "noop"
-            base["passed"] = True  # ReAct 完成即视为通过；具体退出码由命令工具记录
+            # C8/fix-11: 走到这里说明 node.command 为空，无法解析真实退出码。
+            # 仍保留 passed=True 但显式标 `assessment=heuristic`，让下游 verifier
+            # 与 final report 知道这是 ReAct 自评而非命令退出码。
+            base["command"] = options.verifier_cmd or "noop"
+            base["passed"] = True
+            base["assessment"] = "heuristic"
+            base["note"] = "无 node.command，passed 仅代表 ReAct 完成"
         elif node.kind == TaskKind.INTEGRATE:
             base["merged"] = True
         return base
@@ -450,34 +532,20 @@ class TaskExecutor:
         await self._persist(run)
 
     async def _set_run_status(self, run: AdaptiveRun, status: RunStatus) -> None:
-        """状态机统一入口：优先通过 store.transition_status 校验合法转换。
+        """C6/D4: 状态机硬约束。
 
-        - 当前状态与目标相同：幂等返回，不发事件。
-        - store 校验失败：记录警告 + 降级为旧行为（直接覆盖），避免
-          orchestrator 半路绕开校验后 executor 状态机锁死整个 run；
-          真实生产路径应由 orchestrator 顺序推进状态，executor 几乎不会
-          走到降级分支。
-        - 无 store（单测场景）：直接旧行为。
+        - 与目标相同：幂等。
+        - 有 store：必须走 store.transition_status 校验；非法转换 raise。
+        - 无 store（单测脚手架）：直接覆盖。
         """
-        import logging
-
         if run.status == status:
             return
         prev = run.status
         if self._store is not None:
-            try:
-                updated = await self._store.transition_status(run.run_id, status)
-                run.status = updated.status
-                run.updated_at = updated.updated_at
-                return
-            except ValueError as exc:
-                logging.getLogger(__name__).warning(
-                    "Executor 状态机校验失败 run=%s %s->%s err=%s，降级为直接覆盖",
-                    run.run_id,
-                    prev.value,
-                    status.value,
-                    exc,
-                )
+            updated = await self._store.transition_status(run.run_id, status)
+            run.status = updated.status
+            run.updated_at = updated.updated_at
+            return
         run.status = status
         await self._persist(run)
         await self._emit(

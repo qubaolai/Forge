@@ -3,8 +3,8 @@ import { useAuthStore } from '@/store/auth';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
-export interface SSEHandlers {
-  onEvent: (event: SSEEvent) => void;
+export interface SSEHandlers<TEvent = SSEEvent> {
+  onEvent: (event: TEvent) => void;
   onError?: (error: Error) => void;
   onClose?: () => void;
 }
@@ -17,10 +17,10 @@ export interface SSEHandlers {
  *   const ctrl = openSSE('/chat/completions', { body: { ... } }, handlers);
  *   ctrl.abort(); // 中断
  */
-export function openSSE(
+export function openSSE<TEvent = SSEEvent>(
   path: string,
   options: { method?: 'GET' | 'POST'; body?: unknown },
-  handlers: SSEHandlers,
+  handlers: SSEHandlers<TEvent>,
 ): { abort: () => void } {
   const controller = new AbortController();
 
@@ -67,7 +67,7 @@ export function openSSE(
           const payload = dataLine.slice(5).trim();
           if (!payload || payload === '[DONE]') continue;
           try {
-            const event = JSON.parse(payload) as SSEEvent;
+            const event = JSON.parse(payload) as TEvent;
             handlers.onEvent(event);
           } catch (err) {
             console.warn('SSE 解析失败:', payload, err);

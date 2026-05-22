@@ -173,12 +173,23 @@ async def run_node_with_react(
     if not tools:
         raise TaskRunnerError(f"任务 {node.id} 允许工具集合为空，无法执行")
 
+    # C9/fix-4: 给 ReActAgent 注入一个 per-task ToolExecutor，
+    # 把 write_scope / read_scope 在工具执行层做硬约束，不再依赖 prompt 自律。
+    from forge.tools.executor import ToolExecutor as _PerTaskToolExecutor
+
+    per_task_executor = _PerTaskToolExecutor(
+        task_workspace_root=work_path or workspace_path,
+        task_write_scope=tuple(node.write_scope) if node.write_scope else None,
+        task_read_scope=tuple(node.read_scope) if node.read_scope else None,
+    )
+
     agent = ReActAgent(
         llm=chain,
         tools=tools,
         system_prompt=_build_task_system_prompt(node, workspace_path),
         max_steps=node.max_steps,
         role=f"adaptive:{node.kind.value}",
+        executor=per_task_executor,
     )
 
     user_input_parts = [f"任务目标: {node.title}"]

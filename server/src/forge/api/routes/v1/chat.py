@@ -17,7 +17,7 @@
 
 路由决策（ModeRouter，M1 实现）:
     - mode="chat"                → TurnOrchestrator (当前唯一实现)
-    - mode="auto" (默认)         → 同 chat，M1 后由 ModeRouter 智能路由
+    - mode="auto" (默认)         → ModeRouter 智能路由
     - mode="task"                → AdaptiveRunOrchestrator (M3+ 实现)
 """
 
@@ -32,6 +32,7 @@ from config.settings import get_settings
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
+from forge.adaptive import events, run_index
 from forge.adaptive.mode_router import ModeRouter
 from forge.adaptive.models import AdaptiveRun, RunStatus
 from forge.adaptive.options import TaskOptions
@@ -70,6 +71,23 @@ def _resolve_workspace_path(raw_workspace_path: str | None) -> str:
     return str(Path(text).expanduser().resolve())
 
 
+def _missing_workspace_response() -> StreamingResponse:
+    async def _missing_workspace():
+        yield _sse(
+            {
+                "type": "error",
+                "message": "缺少 workspace_path：请在 task_options.workspace_path 中显式指定项目路径",
+                "code": "missing_workspace_path",
+            }
+        )
+
+    return StreamingResponse(
+        _missing_workspace(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.post("/completions")
 async def chat_completions(
     body: ChatCompletionIn,
@@ -79,13 +97,21 @@ async def chat_completions(
     """流式 chat / task 统一入口.
 
     当前行为:
-      - mode="chat" | "auto" → TurnOrchestrator（聊天路径，零退化）
-      - mode="task"           → AdaptiveRunOrchestrator（M5 串行执行）
+      - mode="chat" → TurnOrchestrator（聊天路径，零退化）
+      - mode="auto" → ModeRouter 判别后进入 chat 或 adaptive
+      - mode="task" → AdaptiveRunOrchestrator（显式强制任务）
     """
     trace_id = getattr(request.state, "trace_id", "")
     client_type = getattr(request.state, "client_type", "cli")
 
-    decision = mode_router.decide(mode=body.mode, message=body.message, task_options=body.task_options)
+    if body.task_options is not None and not (body.task_options.workspace_path or "").strip():
+        return _missing_workspace_response()
+
+    decision = await mode_router.adecide(
+        mode=body.mode,
+        message=body.message,
+        task_options=body.task_options,
+    )
     logger.info("ModeRouter 决策 target=%s reason=%s", decision.target, decision.reason)
 
     if decision.target == "adaptive":
@@ -116,20 +142,7 @@ async def chat_completions(
         options = TaskOptions.build(body.task_options, settings=settings)
         # adaptive 入口必须显式指定 workspace_path，避免误用 server 进程 cwd
         if not options.workspace_path:
-            async def _missing_workspace():
-                yield _sse(
-                    {
-                        "type": "error",
-                        "message": "缺少 workspace_path：请在 task_options.workspace_path 中显式指定项目路径",
-                        "code": "missing_workspace_path",
-                    }
-                )
-
-            return StreamingResponse(
-                _missing_workspace(),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
+            return _missing_workspace_response()
         workspace_path = _resolve_workspace_path(options.workspace_path)
         store = AdaptiveRunStore(workspace_path=workspace_path)
         run = AdaptiveRun(
@@ -146,8 +159,23 @@ async def chat_completions(
             options_snapshot=options.to_dict(),
         )
         await store.save_run(run)
-
+        # C11/D6: 写全局 run index，让客户端事后 GET /runs/{id} 不必再带 workspace_path
+        await run_index.record_run(
+            run_id=run.run_id,
+            owner_user_id=user.id,
+            workspace_path=workspace_path,
+        )
         event_queue: asyncio.Queue[dict] = asyncio.Queue()
+        created_event = await store.append_event(
+            run.run_id,
+            events.RUN_CREATED,
+            {
+                "status": run.status.value,
+                "goal": run.goal,
+                "owner_user_id": user.id,
+            },
+        )
+        await event_queue.put(created_event.to_dict())
 
         async def _on_event(evt: dict) -> None:
             await event_queue.put(evt)

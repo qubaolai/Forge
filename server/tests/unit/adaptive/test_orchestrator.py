@@ -87,6 +87,7 @@ async def test_plan_and_validate_replan_until_success(tmp_path) -> None:
     )
 
     run = AdaptiveRun(run_id="run_replan_ok", workspace_path=str(tmp_path), goal="修复")
+    await store.save_run(run)  # C6: 状态机硬约束要求先建档
     outcome = await orchestrator.plan_and_validate(
         run=run,
         options=_options(str(tmp_path), max_replans=2),
@@ -127,6 +128,7 @@ async def test_plan_and_validate_blocked_after_replan_exhausted(tmp_path) -> Non
         tool_allowlist=["read_file"],
     )
     run = AdaptiveRun(run_id="run_replan_fail", workspace_path=str(tmp_path), goal="修复")
+    await store.save_run(run)  # C6: 状态机硬约束要求先建档
 
     with pytest.raises(TaskGraphValidationError):
         await orchestrator.plan_and_validate(

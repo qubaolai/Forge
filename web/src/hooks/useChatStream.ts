@@ -1,7 +1,16 @@
 import { useCallback, useRef, useState } from 'react';
 import { openSSE } from '@/api/sse';
 import { chatApi } from '@/api';
-import { ChatMessage, Citation, MessageStatus, SSEEvent, ToolCall } from '@/types';
+import {
+  AdaptiveRunEvent,
+  ChatMessage,
+  Citation,
+  MessageStatus,
+  RunStatus,
+  SSEEvent,
+  TaskOptionsInput,
+  ToolCall,
+} from '@/types';
 
 interface UseChatStreamOptions {
   onComplete?: (message: ChatMessage) => void;
@@ -17,6 +26,11 @@ interface UseChatStreamOptions {
  */
 export interface ModelOptions {
   reasoning_effort?: 'high' | 'max';
+}
+
+export interface ChatSendOptions {
+  mode?: 'auto' | 'chat' | 'task';
+  taskOptions?: TaskOptionsInput;
 }
 
 /**
@@ -45,17 +59,20 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
       agentId?: string,
       attachments?: { file_id: string; type: string }[],
       modelOptions?: ModelOptions,
+      sendOptions?: ChatSendOptions,
     ) => {
+      const isTaskMode = sendOptions?.mode === 'task';
       // 占位的 assistant 消息(stream 期间逐步填充)
       const draft: ChatMessage = {
         id: 'tmp_' + Date.now(),
         session_id: sessionId || '',
         role: 'assistant',
-        content: '',
+        content: isTaskMode ? '任务已提交，正在等待后端事件…' : '',
         status: 'pending' as MessageStatus,
         citations: [],
         tool_calls: [],
         created_at: new Date().toISOString(),
+        adaptive_run: isTaskMode ? { artifact_ids: [], events: [] } : undefined,
       };
       setCurrent(draft);
       setStreaming(true);
@@ -65,6 +82,12 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
       if (agentId) body.agent_id = agentId;
       if (modelOptions && Object.keys(modelOptions).length > 0) {
         body.model_options = modelOptions;
+      }
+      if (sendOptions?.mode) {
+        body.mode = sendOptions.mode;
+      }
+      if (sendOptions?.taskOptions) {
+        body.task_options = sendOptions.taskOptions;
       }
 
       const ctrl = openSSE(
@@ -110,6 +133,22 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
             setCurrent((prev) => {
               if (!prev) return prev;
               const next = { ...prev };
+              if (isAdaptiveRunEvent(e)) {
+                const runEvent = toAdaptiveRunEvent(e);
+                const previousRun = prev.adaptive_run || { artifact_ids: [], events: [] };
+                next.adaptive_run = {
+                  ...previousRun,
+                  run_id: e.run_id || previousRun.run_id,
+                  status: statusFromAdaptiveEvent(e, previousRun.status),
+                  artifact_ids: previousRun.artifact_ids,
+                  events: runEvent
+                    ? [...previousRun.events, runEvent]
+                    : previousRun.events,
+                };
+                next.content = formatAdaptiveRunContent(next.adaptive_run);
+                next.status = 'streaming';
+                return next;
+              }
               switch (e.type) {
                 case 'message_start':
                   next.id = e.message_id;
@@ -163,6 +202,21 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
                   next.status = 'error';
                   next.error_message = e.message;
                   break;
+                case 'run.done': {
+                  const previousRun = prev.adaptive_run || { artifact_ids: [], events: [] };
+                  next.adaptive_run = {
+                    ...previousRun,
+                    run_id: e.run_id,
+                    status: e.status,
+                    artifact_ids: e.artifact_ids || [],
+                  };
+                  next.content = formatAdaptiveRunContent(next.adaptive_run);
+                  next.status = e.status === 'completed' ? 'done' : 'error';
+                  if (e.status !== 'completed') {
+                    next.error_message = `任务结束状态：${runStatusLabel(e.status)}`;
+                  }
+                  break;
+                }
               }
               return next;
             });
@@ -188,6 +242,14 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
               ctrlRef.current = null;
               activeMessageIdRef.current = null;
               optionsRef.current.onError?.(new Error(e.message));
+            } else if (e.type === 'run.done') {
+              setStreaming(false);
+              ctrlRef.current = null;
+              activeMessageIdRef.current = null;
+              setCurrent((m) => {
+                if (m) optionsRef.current.onComplete?.(m);
+                return m;
+              });
             }
           },
           onError: (err) => {
@@ -350,4 +412,115 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
 function mergeCitations(existing: Citation[], incoming: Citation[]): Citation[] {
   const seen = new Set(existing.map((c) => c.chunk_id));
   return [...existing, ...incoming.filter((c) => !seen.has(c.chunk_id))];
+}
+
+function isAdaptiveRunEvent(e: SSEEvent): e is Extract<SSEEvent, { run_id: string; payload: Record<string, unknown> }> {
+  return 'run_id' in e && 'payload' in e && typeof e.run_id === 'string' && typeof e.payload === 'object';
+}
+
+function toAdaptiveRunEvent(e: Extract<SSEEvent, { run_id: string; payload: Record<string, unknown> }>): AdaptiveRunEvent | null {
+  if (!e.run_id) return null;
+  return {
+    id: e.event_id || `${e.type}_${Date.now()}_${Math.random()}`,
+    run_id: e.run_id,
+    type: e.type,
+    ts: e.ts || new Date().toISOString(),
+    payload: e.payload || {},
+  };
+}
+
+function statusFromAdaptiveEvent(
+  e: Extract<SSEEvent, { run_id: string; payload: Record<string, unknown> }>,
+  fallback?: RunStatus,
+): RunStatus | undefined {
+  if (e.type === 'run.status_changed') {
+    const toStatus = e.payload.to_status;
+    if (typeof toStatus === 'string') return toStatus as RunStatus;
+  }
+  if (e.type === 'run.completed') return 'completed';
+  if (e.type === 'run.failed') return 'failed';
+  if (e.type === 'run.blocked') return 'blocked';
+  if (e.type === 'run.aborted') return 'aborted';
+  if (e.type === 'run.created') return 'created';
+  if (e.type === 'run.started') return 'planning';
+  return fallback;
+}
+
+function formatAdaptiveRunContent(run: ChatMessage['adaptive_run']): string {
+  if (!run) return '任务执行中…';
+  const lines = [
+    `Adaptive Run${run.run_id ? ` \`${run.run_id}\`` : ''}`,
+    '',
+    `状态：${runStatusLabel(run.status || 'created')}`,
+    `事件数：${run.events.length}`,
+  ];
+  if (run.artifact_ids.length > 0) {
+    lines.push(`产物数：${run.artifact_ids.length}`);
+  }
+  const lastEvents = run.events.slice(-6);
+  if (lastEvents.length > 0) {
+    lines.push('', '最近事件：');
+    for (const evt of lastEvents) {
+      lines.push(`- ${eventLabel(evt.type)} ${formatEventPayload(evt.payload)}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+function runStatusLabel(status: RunStatus): string {
+  const labels: Record<RunStatus, string> = {
+    created: '已创建',
+    planning: '规划中',
+    validating: '校验中',
+    executing: '执行中',
+    integrating: '集成中',
+    verifying: '验证中',
+    completed: '已完成',
+    failed: '失败',
+    blocked: '阻塞',
+    aborted: '已中止',
+  };
+  return labels[status] || status;
+}
+
+function eventLabel(type: string): string {
+  const labels: Record<string, string> = {
+    'run.created': '创建运行',
+    'run.started': '启动运行',
+    'run.status_changed': '状态变更',
+    'run.completed': '运行完成',
+    'run.failed': '运行失败',
+    'run.blocked': '运行阻塞',
+    'task.started': '任务开始',
+    'task.completed': '任务完成',
+    'task.failed': '任务失败',
+    'task.skipped': '任务跳过',
+    'wave.started': 'Wave 开始',
+    'wave.completed': 'Wave 完成',
+    'artifact.created': '产物创建',
+    'plan.created': '计划创建',
+    'plan.validated': '计划通过',
+    'plan.rejected': '计划拒绝',
+    'integration.started': '开始集成',
+    'integration.completed': '集成完成',
+    'integration.conflict': '集成冲突',
+    'verify.started': '开始验证',
+    'verify.passed': '验证通过',
+    'verify.failed': '验证失败',
+  };
+  return labels[type] || type;
+}
+
+function formatEventPayload(payload: Record<string, unknown>): string {
+  const taskId = payload.task_id;
+  const artifactId = payload.artifact_id || payload.report_artifact_id;
+  const reason = payload.reason;
+  const status = payload.to_status;
+  const parts = [
+    typeof taskId === 'string' ? `任务 ${taskId}` : '',
+    typeof status === 'string' ? `→ ${runStatusLabel(status as RunStatus)}` : '',
+    typeof artifactId === 'string' ? `产物 ${artifactId}` : '',
+    typeof reason === 'string' ? `原因 ${reason}` : '',
+  ].filter(Boolean);
+  return parts.length ? parts.join('，') : '';
 }

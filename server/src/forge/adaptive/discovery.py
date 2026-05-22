@@ -74,6 +74,8 @@ def build_real_discovery_callable(
     """
 
     async def _discover(goal: str, workspace_path: str) -> str:
+        """C10/D1: 真实路径失败必须 raise，由 orchestrator 转 FAILED；
+        不再返回空字符串让上层走 fallback 假完成。"""
         # 局部 import：避免 settings/LLM 在单测 collection 阶段被强制求值
         import asyncio
 
@@ -83,11 +85,7 @@ def build_real_discovery_callable(
         from forge.llm.gateway import build_chain_from_settings
         from forge.tools.registry import ToolRegistry
 
-        try:
-            settings = get_settings()
-        except Exception:
-            logger.exception("Discovery 获取 settings 失败，降级为空报告")
-            return ""
+        settings = get_settings()  # 失败让上层抓
 
         # 选择模型 profile（fast 即可，探索任务不需要 strong）
         profiles = getattr(getattr(settings, "task_execution", None), "model_profiles", None)
@@ -98,23 +96,15 @@ def build_real_discovery_callable(
                 if isinstance(profiles, dict)
                 else getattr(profiles, model_profile, None)
             )
-        try:
-            chain = build_chain_from_settings(settings, provider=None, model=target_model)
-        except Exception:
-            logger.exception("Discovery LLM chain 构造失败，降级为空报告")
-            return ""
+        chain = build_chain_from_settings(settings, provider=None, model=target_model)
 
-        # 只取只读工具子集
-        try:
-            all_tools = ToolRegistry.get_all()
-            allowed_names = set(DEFAULT_DISCOVERY_TOOLS)
-            tools = [t for t in all_tools if t.name in allowed_names]
-        except Exception:
-            logger.exception("Discovery 工具集准备失败，降级为空报告")
-            return ""
+        all_tools = ToolRegistry.get_all()
+        allowed_names = set(DEFAULT_DISCOVERY_TOOLS)
+        tools = [t for t in all_tools if t.name in allowed_names]
         if not tools:
-            logger.warning("Discovery 工具集为空，降级为占位报告")
-            return ""
+            raise RuntimeError("Discovery 工具集为空：tool_allowlist 未注册任何 READ 工具")
+
+        from forge.tools.executor import ToolExecutor
 
         agent = ReActAgent(
             llm=chain,
@@ -122,19 +112,19 @@ def build_real_discovery_callable(
             system_prompt=_build_discovery_prompt(workspace_path, max_steps),
             max_steps=max_steps,
             role="discovery",
+            executor=ToolExecutor(task_workspace_root=workspace_path),
         )
 
         user_input = (
             f"目标: {goal}\n\n"
             "请按 system 中的 DiscoveryReport 结构产出探索结果。"
         )
-        try:
-            # ReActAgent.run() 是同步的（内部用 to_thread 调 LLM），用 to_thread 转 async
-            result = await asyncio.to_thread(agent.run, user_input)
-        except Exception:
-            logger.exception("Discovery Agent 执行异常，降级为空报告")
-            return ""
+        # ReActAgent.run() 是同步的（内部用 to_thread 调 LLM），用 to_thread 转 async
+        # C10/D1: 不再捕获异常返回空字符串，让上层 FAILED
+        result = await asyncio.to_thread(agent.run, user_input)
         summary = (result.output or "").strip()
+        if not summary:
+            raise RuntimeError("Discovery Agent 返回空 summary")
         logger.info("Discovery 完成 steps=%d summary_len=%d", result.steps, len(summary))
         return summary
 

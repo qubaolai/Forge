@@ -2,386 +2,422 @@
 
 审查日期：2026-05-22
 
-审查范围：根据《项目开发说明.md》和 AGENTS.md，对 `server/` 端 adaptive 主流程、API 入口、状态机、执行器、隔离、集成、校验和测试稳定性进行核对。
+审查范围：按《项目开发说明.md》和 AGENTS.md，复查当前 `server/` 端 adaptive 主流程、API、配置、执行隔离、集成、验证、事件和测试状态。
 
 ## 总体结论
 
-当前 `server/` 端已经有 M1-M9 的目录结构、数据模型、API 骨架和部分状态流转代码，但整体执行主流程尚未达到《项目开发说明.md》中定义的服务端完成标准。
+第二轮复查发现，上一轮记录的一部分问题已经被补丁修复或缓解：
 
-主要偏差是：AdaptiveRun 的关键步骤仍以占位实现为主，真实的 Discovery Agent、Planner LLM、TaskExecutor 调用 TurnOrchestrator、PatchSet 生成、修复循环和运行恢复能力都没有完整闭环。因此 M9 完成后不能认为服务端代码已经实现完毕，目前更接近“流程骨架可跑通”，不是“可落地产物的完整服务端”。
+- `/api/v1/runs` 现在会通过 `RunSupervisor` 启动后台 AdaptiveRun。
+- `/runs/{id}/decide` 的 continue 会重新唤起 supervisor。
+- TaskGraph artifact 已经落盘。
+- `allow_write=False` 已经进入 Validator 和 Executor 的基础校验。
+- SSE 传入不存在的 `after_event_id` 时已经返回 400。
+- Executor 已经支持 `allow_parallel`、`max_agents`、`max_task_retries` 的基础控制。
+- Integrator 已经记录 `integrated_patch_ids`，并用 `git apply --check` 做预检查。
+
+但当前 `server/` 端仍不能判断为 M9 后“服务端已完整实现”。原因是：真实 Adaptive 执行链路默认关闭，打开后仍存在配置、导入、执行隔离和权限边界问题；默认 fallback 路径仍会生成“看似完成”的占位产物，不能保证产出可落地代码。
 
 ## P0 问题
 
-### 1. Executor 没有真实执行 Agent，也没有调用 TurnOrchestrator
+### 1. 真实 adaptive 主链默认关闭，默认运行仍是 fallback/占位产物
 
 涉及文件：
 
-- `server/src/forge/adaptive/executor.py`
-- `server/src/forge/adaptive/orchestrator.py`
-
-预期：
-
-- EXECUTE 阶段应由 Scheduler 按 wave 调度 TaskNode。
-- 每个 TaskNode 应通过 TaskExecutor 调用 `TurnOrchestrator.run_turn(...)`，并通过类似 RunTurnOverrides 的方式限制工具、写入范围、最大步数、模型配置和系统提示。
-- WRITE 任务应在隔离 worktree 中真实执行修改，然后收集 PatchSet。
-
-现状：
-
-- READ、EXECUTE、REVIEW、INTEGRATE 任务只是生成占位 artifact。
-- WRITE 任务在隔离模式下只执行 `prepare -> collect -> cleanup`，没有在 worktree 中运行 Agent，也没有产生真实代码修改。
-- 非隔离 WRITE 任务也只是返回占位 PatchSet。
-
-影响：
-
-- AdaptiveRun 可能显示 COMPLETED，但没有真实执行用户任务。
-- PatchSet 通常为空，最终产物不可落地。
-- M5、M6、M9 的核心目标没有真正达成。
-
-建议：
-
-- TaskExecutor 必须接入 TurnOrchestrator 或等价 Agent 执行层。
-- WRITE 任务必须在隔离目录内执行，collect 前必须有真实执行结果。
-- 对空 PatchSet 增加 acceptance_criteria 校验，避免假完成。
-
-### 2. Discovery 和 Planner 仍是占位实现，没有按文档进行代码库探索和 LLM 结构化规划
-
-涉及文件：
-
+- `server/config/sys_config.yaml`
+- `server/config/domains/task_execution.py`
+- `server/src/forge/adaptive/supervisor.py`
 - `server/src/forge/adaptive/orchestrator.py`
 - `server/src/forge/adaptive/planner.py`
-
-预期：
-
-- DISCOVER 阶段使用 READ-only ReActAgent 探索代码库，生成 DiscoveryReport。
-- PLAN 阶段由 Planner LLM 使用 tool_use 强制输出结构化 TaskGraph JSON。
+- `server/src/forge/adaptive/executor.py`
 
 现状：
 
-- `_discover()` 只生成固定文本报告，没有调用 Agent，也没有真实探索代码库。
-- `Planner` 默认使用 `_fallback_plan()`，没有生产级 LLM 调用路径。
-- 所谓 dynamic planning 实际上仍是硬编码三节点 fallback graph。
+- `task_execution.enable_real_llm` 默认是 `false`。
+- supervisor 只有在 `enable_real_llm=true` 时才装配真实 Discovery、PlannerLLM 和 TaskRunner。
+- 默认路径下 Discovery、Planner、Executor 仍会回退到占位逻辑。
+- fallback Executor 可以返回空 PatchSet、空 stdout/stderr、`passed=True` 等结果。
 
 影响：
 
-- TaskGraph 与真实代码库状态弱相关。
-- Planner 无法根据 DiscoveryReport 做动态拆解。
-- VALIDATE 阶段虽然存在，但校验的是占位计划。
+- 默认 API 路径会显示 run 完成，但并不代表真实执行了代码修改。
+- M9 的 wave 并行只是调度层成立，不代表真实多 Agent 编码执行成立。
 
 建议：
 
-- 实现 Discovery Agent，限制只读工具并输出结构化 DiscoveryReport。
-- Planner 接入 LLM tool_use，并保留 fallback 只作为降级路径。
-- 将 planner 原始输出、失败原因和重试过程保存为 artifact/event。
+- 明确区分 `mock/fallback` 模式和 `production` 模式，API 返回中暴露 `execution_mode`。
+- 生产模式不应允许 fallback 假完成；真实链路不可用时应 FAILED 或 BLOCKED。
+- 对空 PatchSet 增加验收失败逻辑，避免任务“无改动完成”。
 
-### 3. `/api/v1/runs` 只创建 Run，不启动执行；`decide continue` 也不会恢复执行
+### 2. `enable_real_llm=true` 路径目前存在阻断级问题
 
 涉及文件：
 
-- `server/src/forge/api/routes/v1/runs.py`
+- `server/src/forge/adaptive/planner_llm.py`
+- `server/src/forge/adaptive/task_runner.py`
+- `server/src/forge/adaptive/discovery.py`
+- `server/config/sys_config.yaml`
+- `server/config/sys_config.test.yaml`
+- `server/config/sys_config.dev.yaml`
+- `server/src/forge/llm/streaming.py`
 
-预期：
+问题 1：
 
-- `/api/v1/runs` 作为新增 runs API，应能支撑创建、查询、事件订阅、abort、decide 等完整运行生命周期。
-- BLOCKED 后调用 decide continue 应能继续或恢复运行。
+- `planner_llm.py` 中使用 `from forge.llm.streaming import Message`。
+- 但 `server/src/forge/llm/streaming.py` 目前只是 placeholder，没有导出 `Message`。
+- 真实 PlannerLLM 首次调用时会 ImportError。
 
-现状：
+问题 2：
 
-- `POST /api/v1/runs` 只持久化 CREATED 状态的 run，不启动 AdaptiveRunOrchestrator。
-- `/runs/{id}/decide` 的 continue 只把 BLOCKED 改成 PLANNING，没有后台任务接管继续执行。
+- `task_execution.model_profiles` 默认是 `claude-sonnet-4-6` / `claude-opus-4-7`。
+- 当前 LLM provider 配置中没有这些模型名。
+- `build_chain_from_settings(settings, model=target_model)` 没有同步指定 provider，会落到默认 provider，例如 dashscope，然后触发“model 不在 provider 配置中”。
 
 影响：
 
-- 通过 runs API 创建的任务不会真正运行。
-- CLI 或 Web 如果依赖 `/runs` 创建任务，会得到一个静止 run。
-- 人工决策 API 只改变状态，不改变业务执行结果。
+- 即使把 `enable_real_llm` 打开，真实规划和真实任务执行也大概率无法启动。
+- 当前测试没有覆盖 `enable_real_llm=true` 分支，风险没有被 CI 捕获。
 
 建议：
 
-- 明确 `/runs` 是纯 CRUD 还是任务启动入口。
-- 如果是启动入口，创建后应投递后台任务并返回 run_id。
-- decide continue 应携带决策信息并恢复 orchestration，而不是只改状态。
+- `planner_llm.py` 改用 `forge.core.types.message.Message`。
+- 给 `model_profiles` 增加 provider+model 结构，或实现模型别名解析。
+- 增加 `enable_real_llm=true` 的最小集成测试，至少 mock LLM tool_call 到 TaskGraph。
 
-### 4. Verifier 修复循环会重新执行整个 TaskGraph，并重复集成历史 PatchSet
+### 3. Executor 真实路径未复用 TurnOrchestrator：更准确地说是设计变更未同步文档
 
 涉及文件：
 
-- `server/src/forge/adaptive/orchestrator.py`
-- `server/src/forge/adaptive/integrator.py`
+- `server/src/forge/adaptive/task_runner.py`
+- `server/src/forge/adaptive/executor.py`
+- `server/src/forge/chat/orchestrator.py`
+- `项目开发说明.md`
 
 预期：
 
-- VERIFY 失败后应生成修复 task，回到 Step 4 执行修复任务，再集成新增 PatchSet。
-- 修复循环应避免重复执行已完成任务和重复应用旧补丁。
+- 文档红线要求 TurnOrchestrator 接口不变。
+- adaptive executor 应通过 RunTurnOverrides 驱动 TurnOrchestrator，不修改聊天路径。
 
 现状：
 
-- `_verify_and_repair()` 在失败后向原 TaskGraph 追加一个 synthetic fix node。
-- 随后调用 `executor.execute(run, graph)`，会再次调度整个图，而不是只执行修复节点。
-- Integrator 每次读取 run 下所有 PATCH_SET artifact，没有区分本轮新增 patch 和已集成 patch。
+- 当前真实路径是 TaskRunner 直接实例化 `ReActAgent`。
+- 没有看到 RunTurnOverrides 或等价 overrides 层。
+- 因此 adaptive 路径绕开了 TurnOrchestrator 的上下文组装、消息生命周期、部分 guard/runner 逻辑。
+
+补充判断：
+
+- 这个实现选择有合理性：TurnOrchestrator 内置 session/message 持久化、resume、turn 级 guard 等聊天语义；adaptive run 的任务执行语义更接近一次性 artifact 产出，强行复用会污染 chat 路径并引入大量条件分支。
+- 因此它不一定是代码 bug，但它是当前文档红线与实现架构不一致。
 
 影响：
 
-- 已完成任务可能被重复执行。
-- 已应用补丁可能被重复 apply。
-- 修复循环容易制造假冲突、重复变更或状态污染。
+- 如果保留现实现状，需要更新《项目开发说明.md》§6 红线 5，否则后续评审会持续判定为偏离。
+- TaskRunner 必须补齐 TurnOrchestrator 原本承担的一部分运行保障，例如工具作用域、模型选择、最大步数、超时、审计、错误传播和事件输出。
+- chat 路径和 adaptive 路径成为两套执行核心，后续需要明确边界，避免能力漂移。
 
 建议：
 
-- 引入 execution attempt / integration batch 标识。
-- 修复任务应形成新的子图或增量 wave，只执行未完成或新增节点。
-- Integrator 只处理本轮未集成 PatchSet，并记录 integrated artifact id。
+- 接受当前 TaskRunner 架构，并更新《项目开发说明.md》：红线 5 改为“TurnOrchestrator 接口不变；adaptive 不复用聊天 TurnOrchestrator，而通过 TaskRunner 直接驱动 ReActAgent，必须复用同一工具/LLM/guardrail 基础设施”。
+- 明确 TaskRunner 的替代红线：不得写 message 表、必须写 artifact/event、必须强制 read_scope/write_scope、必须支持 supervisor abort、必须保证 max_steps/model_profile/allowed_tools 生效。
+- 如果项目坚持原文档红线，则再投入 RunTurnOverrides 改造；否则不建议为了形式一致性强行套 TurnOrchestrator。
+
+### 4. `write_scope` 没有在工具执行层强制约束
+
+涉及文件：
+
+- `server/src/forge/adaptive/validator.py`
+- `server/src/forge/adaptive/task_runner.py`
+- `server/src/forge/tools/executor.py`
+- `server/src/forge/workspace/runtime.py`
+
+现状：
+
+- Validator 会校验 `write_scope` 在 workspace root 下。
+- 但 TaskRunner 执行时只是 `chdir` 到 workspace/worktree。
+- ToolExecutor 的 workspace policy 默认只限制路径在当前 workspace root 下，没有限制到 TaskNode 的 `write_scope`。
+- 系统提示中要求“严禁越界访问”，但这不是强制安全边界。
+
+影响：
+
+- WRITE 任务声明 `write_scope=("server",)`，实际仍可能通过 `write_file` / `edit_file` 修改 worktree 下任意文件。
+- 违反“write_scope 路径必须双重校验”和“write task 只允许写隔离范围”的设计红线。
+
+建议：
+
+- TaskRunner 为每个节点注入独立 ToolExecutor policy。
+- ToolExecutor 支持 per-run/per-task allowed_roots，将写工具限制到 `write_scope`。
+- READ 任务也应按 `read_scope` 限制读取范围，而不是只靠 prompt。
 
 ## P1 问题
 
-### 5. Integrator 不是原子应用，失败时可能留下半集成工作区
+### 5. WRITE 任务真实执行失败会被吞掉，仍可能标记完成
+
+涉及文件：
+
+- `server/src/forge/adaptive/executor.py`
+
+现状：
+
+- `_execute_write_in_isolation()` 中捕获 `TaskRunnerError` 后只写 warning。
+- 随后仍然 collect worktree diff 并返回 PatchSet payload。
+- 上层会把该任务标记为 COMPLETED。
+
+影响：
+
+- LLM/工具执行失败可能被包装成“成功但无 agent_output/空 diff”。
+- 验证命令为空或弱验证时，run 可能最终 COMPLETED。
+
+建议：
+
+- WRITE TaskRunnerError 默认应使任务 FAILED。
+- 如果需要保留部分 diff，应额外保存 failure artifact，但不能把任务标记为成功。
+
+### 6. 真实 TaskRunner 使用全局 `chdir` 锁，实际并行能力被串行化
+
+涉及文件：
+
+- `server/src/forge/adaptive/task_runner.py`
+
+现状：
+
+- `run_node_with_react()` 对所有任务都进入 `_CHDIR_LOCK`。
+- 在锁内执行完整 `agent.run()`。
+- 进程级 cwd 是全局状态，所以同进程所有真实任务基本被串行化。
+
+影响：
+
+- M9 的 `asyncio.gather` 在真实执行模式下无法发挥并行能力。
+- 多个 run 并发执行时，cwd 全局切换仍是高风险设计。
+- 如果其他代码路径绕过 `_CHDIR_LOCK` 使用 cwd 相关工具，可能产生串扰。
+
+建议：
+
+- 不要依赖进程 cwd 表示 workspace。
+- 工具执行器应显式接收 workspace root / read_scope / write_scope。
+- ReActAgent 内部工具调用使用上下文对象，而不是全局 cwd。
+
+### 7. `/api/v1/runs` 创建路径会产生重复 `run.created` 事件
+
+涉及文件：
+
+- `server/src/forge/api/routes/v1/runs.py`
+- `server/src/forge/adaptive/orchestrator.py`
+
+现状：
+
+- `create_run()` 保存 run 后追加一次 `RUN_CREATED`。
+- supervisor 启动 orchestrator 后，`AdaptiveRunOrchestrator.run()` 非 resume 路径又追加一次 `RUN_CREATED`。
+
+影响：
+
+- SSE 客户端会看到重复创建事件。
+- 前端/CLI 如果按事件构建状态机，可能出现重复初始化或统计错误。
+
+建议：
+
+- 只保留 API 建档事件或 orchestrator 启动事件之一。
+- 如果两个事件都需要，应拆分为 `run.created` 和 `run.started`。
+
+### 8. 状态机仍保留“校验失败后直接覆盖”的降级路径
+
+涉及文件：
+
+- `server/src/forge/adaptive/orchestrator.py`
+- `server/src/forge/adaptive/executor.py`
+
+现状：
+
+- `_set_status()` 优先调用 `store.transition_status()`。
+- 但如果状态转换非法，会记录 warning 后直接覆盖 run.status。
+
+影响：
+
+- 状态机仍不是硬约束。
+- 非法转换会被隐藏成 warning，线上数据可能进入无法解释的状态。
+
+建议：
+
+- 生产路径禁止 direct overwrite。
+- 单测需要便利时可通过 test-only store 或显式参数控制。
+
+### 9. `allow_write=False` 时验证失败仍会追加 WRITE 修复任务
+
+涉及文件：
+
+- `server/src/forge/adaptive/orchestrator.py`
+- `server/src/forge/adaptive/executor.py`
+
+现状：
+
+- `_verify_and_repair()` 在验证失败后无条件 `_append_fix_task()`。
+- `_append_fix_task()` 创建 WRITE 节点，allowed_tools 包含 `edit_file` / `write_file`。
+- 如果 run.options.allow_write=False，Executor 会拒绝该任务，最终 run 进入 FAILED。
+
+影响：
+
+- 只读任务验证失败时，系统不应尝试自动写修复。
+- 当前表现会从 VERIFY_FAILED 变成 repair_task_failed，错误语义不准确。
+
+建议：
+
+- `allow_write=False` 时验证失败应直接 BLOCKED 或 FAILED，并提示需要用户允许写入。
+- 不应追加违反 options 的 synthetic task。
+
+### 10. Integrator 仍缺少真实语义冲突处理，文本冲突判断也偏保守
 
 涉及文件：
 
 - `server/src/forge/adaptive/integrator.py`
 
-预期：
-
-- INTEGRATE 阶段应合并所有 PatchSet，处理文本冲突和语义冲突。
-- 失败时应能生成 ConflictReport，且不污染主工作区。
-
 现状：
 
-- PatchSet 逐个 `git apply` 到 root_path。
-- 如果前一个 patch apply 成功、后一个 patch 失败，当前代码没有回滚已应用 patch。
-- 同文件变更直接判为冲突，无法区分非重叠 hunk。
+- 同一文件被多个 PatchSet 修改时直接判 `text_conflict`。
+- 不区分非重叠 hunk。
 - 没有语义冲突检测。
+- `git apply --check` 后再 apply 已降低半应用风险，但如果 check/apply 之间工作区被外部修改，仍没有 rollback。
 
 影响：
 
-- BLOCKED 后工作区可能已经被部分修改。
-- 非重叠同文件修改会被过度阻塞。
-- 隐藏语义冲突无法识别。
+- 可能过度 BLOCKED。
+- 也可能漏掉接口不兼容、重复定义、行为冲突等语义问题。
 
 建议：
 
-- 在临时集成分支或临时 worktree 中 apply 全部 patch，通过后再合入主工作区。
-- 使用三方合并或 git index 检测真实文本冲突。
-- 语义冲突至少应结合测试失败、重复符号、接口签名变更等信号生成报告。
+- 在临时 integration worktree 中应用全部 patch，通过测试后再合入主工作区。
+- 使用 git 三方合并或 index 检测真实 hunk 冲突。
+- 将验证失败、类型检查失败、重复符号等纳入 semantic conflict report。
 
-### 6. Orchestrator 绕过了 RunStatus 状态机校验
-
-涉及文件：
-
-- `server/src/forge/adaptive/orchestrator.py`
-- `server/src/forge/adaptive/store.py`
-- `server/src/forge/adaptive/models.py`
-
-预期：
-
-- RunStatus 应按 `CREATED -> PLANNING -> VALIDATING -> EXECUTING -> INTEGRATING -> VERIFYING -> COMPLETED` 流转。
-- 非法状态转换应被拒绝。
-
-现状：
-
-- `AdaptiveRunStore.transition_status()` 有状态转换校验。
-- 但 Orchestrator 的 `_set_status()` 直接修改 `run.status` 并保存，绕过 `can_transition_to()`。
-
-影响：
-
-- 核心执行流可能产生非法状态转换但不会被发现。
-- 状态机规则只对 API 层部分操作生效，对主流程不生效。
-
-建议：
-
-- Orchestrator 状态变更统一走 store 的状态转换方法。
-- 需要允许的特殊转换应显式加入模型规则，而不是绕过校验。
-
-### 7. `allow_write=False` 没有被 Validator 和 Executor 强制执行
+### 11. EXECUTE 任务的完成状态不能代表命令真实通过
 
 涉及文件：
 
-- `server/src/forge/adaptive/options.py`
-- `server/src/forge/adaptive/validator.py`
 - `server/src/forge/adaptive/executor.py`
-
-预期：
-
-- TaskOptions 中如果禁止写入，Planner 即使生成 WRITE 节点也应被拒绝。
-- Executor 也应二次防护，避免绕过 Planner/Validator。
+- `server/src/forge/adaptive/task_runner.py`
+- `server/src/forge/tools/builtin/code/shell.py`
 
 现状：
 
-- fallback planner 会根据 `allow_write` 决定是否生成 WRITE 节点。
-- 但 Validator 没有基于 TaskOptions 拒绝 WRITE kind、写工具或非空 write_scope。
-- Executor 也没有读取 `allow_write` 做硬拦截。
+- fallback EXECUTE 直接返回 `passed=True`。
+- real EXECUTE 只要 ReActAgent 完成，就设置 `passed=True`。
+- 没有从 shell 工具结果中解析真实退出码作为 TaskStatus 的依据。
 
 影响：
 
-- 如果未来接入 LLM Planner 或自定义 planner，可能在 `allow_write=False` 时仍执行写任务。
-- 违反“Planner 只能声明资源，资源必须过 Validator”的红线。
+- TaskNode 级 EXECUTE 可能显示完成，但命令实际失败。
+- 最终 verifier 可能兜底发现问题，但任务级 artifact 语义仍不准确。
 
 建议：
 
-- Validator 增加 TaskOptions 上下文校验。
-- Executor 在执行 WRITE 前再次校验 run.options.allow_write。
+- EXECUTE 节点必须有结构化命令结果：exit_code/stdout/stderr/passed。
+- 失败命令应使任务 FAILED，除非 output_contract 明确允许“报告失败”。
 
-### 8. SSE 在传入过期 `after_event_id` 时可能永远收不到事件
+### 12. 测试配置曾被 `server/.env` 污染，现已修复但需要持续约束
 
 涉及文件：
 
-- `server/src/forge/adaptive/store.py`
-- `server/src/forge/api/routes/v1/runs.py`
+- `server/.env`
+- `server/config/_env.py`
+- `server/config/sys_config.test.yaml`
+- `server/config/sys_config.yaml`
+- `server/config/sys_config.dev.yaml`
+- `server/tests/unit/adaptive/test_options.py`
+- `server/tests/unit/api/test_runs_and_artifacts_routes.py`
+- `server/tests/unit/api/test_chat_task_mode_entry.py`
 
-预期：
+原现象：
 
-- `/runs/{id}/events` 应支持 after_event_id 续传。
-- 如果传入的 event id 不存在，应有明确降级策略或错误响应。
+- `server/.env` 中存在 `LLM_DEFAULT_MODEL=qwen3.6-plus`。
+- `APP_ENV=test` 时，`load_env_files()` 仍会读取 `.env` 并填充未设置环境变量。
+- test 配置的 dashscope provider 原本不包含 `qwen3.6-plus`。
+- 因此 `get_settings()` 曾抛出配置校验错误。
 
-现状：
+当前处理：
 
-- `JsonlLog.iter_after()` 如果找不到 after_event_id，会返回空迭代。
-- SSE follow 模式会反复用同一个无效 cursor 查询，导致后续事件也无法推送。
+- 已在 default/dev/test 的 dashscope provider 模型列表中补充 `qwen3.6-plus`。
+- `server/tests/unit/adaptive` 已恢复通过。
+- `server/tests/unit/api/test_runs_and_artifacts_routes.py server/tests/unit/api/test_chat_task_mode_entry.py` 已恢复通过。
 
-影响：
+剩余风险：
 
-- 客户端本地缓存过期或传错 id 后，事件流会表现为“连接正常但永远无消息”。
+- `.env` 仍会影响 `APP_ENV=test` 的配置加载；未来新增默认模型时仍可能复发。
+- 如果生产默认 provider 不是 dashscope，`model_profiles` 仍需要与 provider 配置同步。
 
 建议：
 
-- after_event_id 不存在时返回 400，或降级为从末尾/开头读取。
-- follow 循环应维护文件 offset 或最新事件 id，而不是依赖无效 cursor。。
+- `.env.test` 明确覆盖所有会影响测试的 LLM 环境变量。
+- CI 中显式设置 `LLM_DEFAULT_MODEL=qwen-plus` 或使用隔离配置。
+- 增加配置加载 smoke test，覆盖 `.env` 存在时的 test 环境。
+
+历史失败命令：
+
+- `server/.venv/bin/pytest -q server/tests/unit/adaptive`
+- `server/.venv/bin/pytest -q server/tests/unit/api/test_runs_and_artifacts_routes.py server/tests/unit/api/test_chat_task_mode_entry.py`
 
 ## P2 问题
 
-### 10. TASK_GRAPH artifact 没有落盘
+### 13. RunSupervisor 完成后 handle 可能滞留
 
 涉及文件：
 
-- `server/src/forge/adaptive/orchestrator.py`
-- `server/src/forge/adaptive/models.py`
-
-预期：
-
-- PLAN 阶段应产出 `task_graph` artifact。
+- `server/src/forge/adaptive/supervisor.py`
 
 现状：
 
-- `ArtifactKind.TASK_GRAPH` 已定义，但 plan/validate 后没有保存 TaskGraph artifact。
+- `_run_lifecycle()` 的 `finally` 中只有在 `handle.task.done()` 时才 pop。
+- 该 finally 正在当前 task 内执行，此时 task 通常还未进入 done 状态。
 
 影响：
 
-- Web/CLI 无法基于 artifact 查询原始任务图。
-- 排查 planner 输出和 validator 失败原因不方便。
+- `_handles` 可能保留已完成 task，直到同 run_id 再次 start 时才被清理。
+- 长时间运行进程中会有轻微内存泄漏和调试噪音。
 
 建议：
 
-- plan 成功后保存 TaskGraph artifact。
-- 每次 replan 都应保存 attempt 编号和失败原因。
+- finally 中如果 handle.task is current_task，直接 pop。
+- 或通过 task.add_done_callback 清理。
 
-### 11. `mode=auto` 路由到 simple 时实际仍走 chat 路径
-
-涉及文件：
-
-- `server/src/forge/adaptive/mode_router.py`
-- `server/src/forge/api/routes/v1/chat.py`
-
-预期：
-
-- ModeRouter 应支持 chat、simple、adaptive 三路路由。
-- simple 表示单 Agent 任务。
-
-现状：
-
-- `mode=auto` 可能返回 `simple`。
-- chat API 中 `target == "adaptive"` 才走 adaptive，其余都落回 chat。
-
-影响：
-
-- simple 模式没有实现，自动路由结果与实际执行路径不一致。
-- 用户以为进入 task/simple，实际可能走普通聊天路径。
-
-建议：
-
-- 实现 simple 单 Agent 执行路径。
-- 或暂时让 ModeRouter 不返回 simple，避免误导。
-
-### 12. 部分 TaskOptions 硬约束没有贯穿执行链路
-
-涉及文件：
-
-- `server/src/forge/adaptive/options.py`
-- `server/src/forge/adaptive/executor.py`
-- `server/src/forge/adaptive/orchestrator.py`
-
-问题点：
-
-- `allow_parallel=False` 没有明确阻止同 wave `asyncio.gather`。
-- `max_agents` 没有作为并发上限控制 Scheduler。
-- `max_run_duration_sec` 没有全局超时控制。
-- `max_task_retries` 没有在 TaskExecutor 层实现。
-
-影响：
-
-- 用户传入的 TaskOptions 与实际执行行为不一致。
-- 未来接入真实 Agent 后可能出现并发过高、运行失控或重试策略缺失。
-
-建议：
-
-- Scheduler 根据 `allow_parallel` 和 `max_agents` 控制并发。
-- Orchestrator 增加 run 级 timeout。
-- Executor 增加 task retry 逻辑并记录每次失败 artifact/event。
-
-### 13. PatchSet 中记录的 worktree_path 在 cleanup 后已经失效
-
-涉及文件：
-
-- `server/src/forge/adaptive/workspace.py`
-- `server/src/forge/adaptive/executor.py`
-
-现状：
-
-- WRITE 任务 collect 后会 cleanup worktree。
-- PatchSet payload 中仍记录 `worktree_path`。
-
-影响：
-
-- 后续 API/CLI/Web 如果尝试打开该路径，会发现目录已不存在。
-
-建议：
-
-- 如果 worktree 只是临时目录，artifact 中应标注 `worktree_retained=false`。
-- 如需调试失败任务，应支持失败时保留 worktree。
-
-### 14. abort 非法状态转换可能返回 500
+### 14. 查询类 API 省略 `workspace_path` 时会落到进程 cwd
 
 涉及文件：
 
 - `server/src/forge/api/routes/v1/runs.py`
+- `server/src/forge/api/routes/v1/artifacts.py`
 
 现状：
 
-- `/runs/{id}/abort` 调用 `transition_status()`。
-- 如果当前状态不允许 ABORTED，`ValueError` 没有被转换为 HTTP 4xx。
+- 创建 run 和 chat task 已要求显式 workspace_path。
+- 但 list/get/events/artifacts 查询端点如果省略 workspace_path，会使用 `Path.cwd()`。
 
 影响：
 
-- 对已完成或已失败 run 调用 abort 可能返回 500。
+- CLI/Web 如果没有持续传 workspace_path，可能查不到刚创建的 run。
+- 多 workspace 场景下容易误查进程 cwd 对应的 state。
 
 建议：
 
-- 捕获状态转换异常，返回 409 Conflict 或 400 Bad Request。
+- 对查询端点也要求显式 workspace_path，或引入全局 run index。
+- SSE URL 中应强制包含 workspace_path 或 run lookup 应跨 workspace。
 
 ## 已执行检查
 
-- `server/.venv/bin/ruff check server/src/forge/adaptive/*.py server/src/forge/api/routes/v1/chat.py server/src/forge/api/routes/v1/runs.py server/src/forge/api/routes/v1/artifacts.py`
+- `server/.venv/bin/ruff check server/src/forge/adaptive server/src/forge/api/routes/v1/chat.py server/src/forge/api/routes/v1/runs.py server/src/forge/api/routes/v1/artifacts.py`
+- 结果：通过。
+
+- `server/.venv/bin/python -m py_compile server/src/forge/adaptive/executor.py server/src/forge/api/routes/v1/chat.py server/src/forge/api/routes/v1/runs.py`
 - 结果：通过。
 
 - `server/.venv/bin/pytest -q server/tests/unit/adaptive`
-- 结果：失败，32 passed，3 failed。失败原因是配置默认模型 `qwen3.6-plus` 不在 provider 配置中。
+- 当前结果：通过，38 passed。
 
 - `server/.venv/bin/pytest -q server/tests/unit/api/test_runs_and_artifacts_routes.py server/tests/unit/api/test_chat_task_mode_entry.py`
-- 结果：collection 阶段失败。失败原因同样是配置默认模型 `qwen3.6-plus` 不在 provider 配置中。
+- 当前结果：通过，3 passed。
 
-## 修复优先级建议
+## 当前修复优先级
 
-1. 接入真实 Discovery Agent 和 Planner LLM，保存 TaskGraph artifact。
-2. 改造 TaskExecutor，确保所有任务通过受限 TurnOrchestrator/Agent 真实执行。
-3. 修复 verifier repair loop，只执行新增修复任务并只集成新增 PatchSet。
-4. 将 Integrator 改为临时 worktree 原子集成。
-5. 统一状态机转换入口，禁止 Orchestrator 绕过状态机。
-6. 补齐 runs API 的启动、恢复、abort 错误处理和 SSE cursor 语义。
+1. 修复 `planner_llm.py` 的错误 Message import，并补上 real LLM 最小集成测试。
+2. 修复 `model_profiles` 与 provider 配置不匹配的长期结构问题。
+3. 决定 adaptive 执行层到底复用 TurnOrchestrator 还是正式改文档为 TaskRunner。
+4. 为 ToolExecutor 增加 per-task read_scope/write_scope 强制约束。
+5. WRITE 任务真实执行失败必须让 TaskStatus=FAILED。
+6. 去掉状态机 direct overwrite 降级路径。
+7. 消除 TaskRunner 的全局 cwd 依赖，再验证 M9 并行执行。

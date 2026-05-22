@@ -44,6 +44,7 @@ from forge.chat.llm_selection import build_llm_chain_for_agent
 from forge.chat.preparer import TurnPreparationError, TurnPreparer
 from forge.chat.resumer import ResumeError, TurnResumer
 from forge.chat.runner import get_runner_class, supported_modes
+from forge.chat.tools import resolve_chat_tools
 from forge.chat.types import ResumeState, TurnContext
 from forge.core.types.message import Message, ToolCall
 from forge.infrastructure.database.database import get_session_factory
@@ -261,7 +262,11 @@ class TurnOrchestrator:
                 llm_chain,
                 system_prompt,
                 role=overrides.role if overrides is not None else "local",
-                tools=overrides.tools if overrides is not None else None,
+                tools=(
+                    overrides.tools
+                    if overrides is not None and overrides.tools is not None
+                    else resolve_chat_tools(settings)
+                ),
                 max_steps=overrides.max_steps if overrides is not None else None,
             )
 
@@ -416,6 +421,7 @@ class TurnOrchestrator:
                 runner_cls,
                 llm_chain,
                 system_prompt,
+                tools=resolve_chat_tools(settings),
             )
             async for ev in runner.run(ctx, messages, abort_event):
                 yield ev

@@ -91,9 +91,6 @@ class ChatCompletionIn(BaseModel):
     # Forge: adaptive run 选项（mode=task 或 auto 路由为 task 时生效）
     task_options: TaskOptionsIn | None = None
 
-    # deprecated: 由 mode/task_options 替代，保留一个版本做兼容
-    workflow: ChatWorkflowOption | None = None
-
 
 class ChatStopIn(BaseModel):
     message_id: str

@@ -37,7 +37,17 @@ logger = logging.getLogger(__name__)
 
 
 class ToolExecutor:
-    """执行 tool calls 并构造 tool 消息."""
+    """执行 tool calls 并构造 tool 消息.
+
+    C9/fix-4 / D3 第一阶段：支持 ``task_scope``，按 TaskNode 的
+    read_scope/write_scope 进一步约束工具路径，弥补默认 workspace policy 只
+    限到 workspace root 的粗粒度问题。
+    """
+
+    # write 类工具集合（与 adaptive/validator.WRITE_TOOLS 对齐，但本模块保持自治）
+    _WRITE_TOOLS = {"write_file", "edit_file", "git_ops"}
+    # read 类工具集合（按 read_scope 限制路径前缀）
+    _READ_TOOLS = {"read_file", "list_directory", "glob_search", "grep"}
 
     def __init__(
         self,
@@ -47,12 +57,33 @@ class ToolExecutor:
         permission_checker: PermissionChecker | None = None,
         dangerous_blocker: DangerousOpBlocker | None = None,
         rate_limiter: RateLimiter | None = None,
+        task_workspace_root: str | Path | None = None,
+        task_write_scope: tuple[str, ...] | None = None,
+        task_read_scope: tuple[str, ...] | None = None,
     ) -> None:
         self._registry = registry or ToolRegistry
         self._access_filter = access_filter or ToolAccessFilter()
         self._permission = permission_checker or PermissionChecker()
         self._blocker = dangerous_blocker or DangerousOpBlocker()
         self._rate_limiter = rate_limiter or get_rate_limiter()
+        # C9: per-task workspace 边界（None 时退化到全局 workspace policy）
+        if task_workspace_root is not None:
+            self._task_root: Path | None = Path(task_workspace_root).expanduser().resolve()
+        else:
+            self._task_root = None
+        self._task_write_scope = self._resolve_scope_paths(task_write_scope)
+        self._task_read_scope = self._resolve_scope_paths(task_read_scope)
+
+    def _resolve_scope_paths(self, scope: tuple[str, ...] | None) -> tuple[Path, ...] | None:
+        if scope is None:
+            return None
+        if self._task_root is None:
+            return tuple(Path(s).expanduser().resolve() for s in scope)
+        out: list[Path] = []
+        for s in scope:
+            p = Path(s).expanduser()
+            out.append((p if p.is_absolute() else (self._task_root / p)).resolve())
+        return tuple(out)
 
     def is_parallelism_safe(self, name: str) -> bool:
         tool = self._registry.get(name)
@@ -304,9 +335,8 @@ class ToolExecutor:
         except Exception:  # noqa: BLE001
             return str(result)
 
-    @staticmethod
-    def _apply_workspace_policy(name: str, args: dict[str, Any]) -> None:
-        policy = resolve_tool_runtime_policy()
+    def _apply_workspace_policy(self, name: str, args: dict[str, Any]) -> None:
+        policy = resolve_tool_runtime_policy(start=self._task_root or Path.cwd())
         # 涉及路径的工具列表 — 新增 edit_file/list_directory/glob_search/grep/git_ops
         path_arg_tools = {
             "read_file": "path",
@@ -323,13 +353,41 @@ class ToolExecutor:
             raw_path = args.get(path_key)
             if isinstance(raw_path, str) and raw_path.strip():
                 target = Path(raw_path).expanduser()
-                target = (
-                    (Path.cwd() / target).resolve()
-                    if not target.is_absolute()
-                    else target.resolve()
-                )
+            elif self._task_root is not None:
+                target = self._task_root
+            else:
+                target = None
+
+            if target is not None:
+                base = self._task_root or Path.cwd()
+                target = (base / target).resolve() if not target.is_absolute() else target.resolve()
                 if not _is_path_allowed(target, policy.allowed_roots):
-                    raise ToolValidationError(name, f"{path_key} 超出允许范围: {raw_path}")
+                    raise ToolValidationError(
+                        name,
+                        f"{path_key} 超出允许范围: {raw_path or str(target)}",
+                    )
+                # C9/fix-4: per-task 二次防护
+                if (
+                    name in self._WRITE_TOOLS
+                    and self._task_write_scope is not None
+                    and not _is_path_allowed(target, self._task_write_scope)
+                ):
+                    raise ToolValidationError(
+                        name,
+                        f"{path_key} 超出 TaskNode write_scope: {raw_path or str(target)}",
+                    )
+                # read_scope 为空表示"全工作区可读"，仅当显式声明时才约束
+                if (
+                    name in self._READ_TOOLS
+                    and self._task_read_scope
+                    and not _is_path_allowed(target, self._task_read_scope)
+                ):
+                    raise ToolValidationError(
+                        name,
+                        f"{path_key} 超出 TaskNode read_scope: {raw_path or str(target)}",
+                    )
+                # 将相对路径/缺省路径回写成绝对路径，避免工具内部再按进程 cwd 解析 "."。
+                args[path_key] = str(target)
         if name == "shell":
             limit = float(policy.shell_timeout_seconds)
             raw_timeout = args.get("timeout_seconds")
