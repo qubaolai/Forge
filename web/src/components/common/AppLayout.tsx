@@ -41,9 +41,9 @@ export default function AppLayout() {
         <div className="px-3 pt-3 pb-2">
           <div className="flex items-center gap-2 px-2 py-1.5 mb-2">
             <div className="w-6 h-6 rounded bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center text-white text-xs font-bold">
-              R
+              F
             </div>
-            <span className="text-sm font-medium">RAG Agent</span>
+            <span className="text-sm font-medium">Forge</span>
           </div>
           <button
             onClick={handleNewChat}

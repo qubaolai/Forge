@@ -181,6 +181,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 4. RAG 组件 (软: 失败跳过, 除非 STRICT_RAG=true)
     _setup_rag_components(app, settings)
 
+    # 5. N17: 清理 stale forge worktree (软: 失败仅 WARN)
+    try:
+        _cleanup_stale_worktrees()
+    except Exception:  # noqa: BLE001
+        logger.exception("stale worktree 清理失败, 已忽略")
+
     logger.info("服务启动完成")
 
     try:
@@ -214,6 +220,44 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.warning("关闭数据库失败: %s", e)
 
         logger.info("服务已停止")
+
+
+def _cleanup_stale_worktrees(*, ttl_seconds: int = 24 * 3600) -> None:
+    """启动时清理上一轮 forge worktree 残留。
+
+    GitWorktreeStrategy 在 ``/tmp/forge-{run_id[:8]}-{task_id}-xxxx`` 创建临时
+    worktree。若服务被强杀，``finally`` 没机会跑，会留下：
+    - ``/tmp/forge-*`` 孤儿目录
+    - ``workspace/.git/worktrees/forge-*`` 元数据残留（下次 add 同名会冲突）
+
+    这里只做"超过 TTL 的孤儿目录"清理（默认 24h），避免误删正在进行的 run。
+    ``workspace/.git/worktrees/`` 的孤儿元数据由 ``git worktree prune`` 处理，
+    需要知道 workspace 路径，因此这一步留给 prepare() 在 add 失败时按需触发。
+    """
+    import shutil
+    import tempfile
+    import time
+    from pathlib import Path
+
+    tmp_dir = Path(tempfile.gettempdir())
+    if not tmp_dir.exists():
+        return
+
+    now = time.time()
+    removed = 0
+    for entry in tmp_dir.glob("forge-*"):
+        try:
+            if not entry.is_dir():
+                continue
+            age = now - entry.stat().st_mtime
+            if age < ttl_seconds:
+                continue
+            shutil.rmtree(entry, ignore_errors=True)
+            removed += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("跳过 worktree 残留清理 path=%s err=%s", entry, exc)
+    if removed:
+        logger.info("已清理 stale worktree 数量=%d ttl_h=%.1f", removed, ttl_seconds / 3600)
 
 
 def _setup_rag_components(app, settings) -> None:

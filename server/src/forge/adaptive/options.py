@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, fields
+from pathlib import Path
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -15,6 +16,24 @@ class HardCaps:
     max_replans: int = 3
     max_task_retries: int = 2
     max_run_duration_sec: float = 3600.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {f.name: getattr(self, f.name) for f in fields(self)}
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> HardCaps:
+        if not payload:
+            return cls()
+        defaults = cls()
+        return cls(
+            max_agents=int(payload.get("max_agents", defaults.max_agents)),
+            max_steps_per_task=int(payload.get("max_steps_per_task", defaults.max_steps_per_task)),
+            max_replans=int(payload.get("max_replans", defaults.max_replans)),
+            max_task_retries=int(payload.get("max_task_retries", defaults.max_task_retries)),
+            max_run_duration_sec=float(
+                payload.get("max_run_duration_sec", defaults.max_run_duration_sec)
+            ),
+        )
 
 
 class TaskOptionsIn(BaseModel):
@@ -42,24 +61,86 @@ class TaskOptions:
 
     @classmethod
     def build(cls, user_in: TaskOptionsIn | None, *, settings) -> TaskOptions:
-        caps = HardCaps()
-        if hasattr(settings, "task_execution") and hasattr(settings.task_execution, "hard_caps"):
-            hc = settings.task_execution.hard_caps
-            caps = HardCaps(**{k: getattr(hc, k) for k in vars(HardCaps()) if hasattr(hc, k)})
+        task_cfg = getattr(settings, "task_execution", None)
+        hard_cfg = getattr(task_cfg, "hard_caps", None)
+        default_cfg = getattr(task_cfg, "default_options", None)
 
-        def_opts = None
-        if hasattr(settings, "task_execution"):
-            def_opts = getattr(settings.task_execution, "default_options", None)
-
-        merged_in = user_in or TaskOptionsIn()
-        return cls(
-            allow_write=merged_in.allow_write,
-            allow_parallel=merged_in.allow_parallel,
-            max_agents=min(merged_in.max_agents, caps.max_agents),
-            writer_mode=merged_in.writer_mode,
-            verifier_cmd=merged_in.verifier_cmd or (
-                getattr(def_opts, "verifier_cmd", None) if def_opts else None
+        caps = HardCaps(
+            max_agents=getattr(hard_cfg, "max_agents", HardCaps.max_agents),
+            max_steps_per_task=getattr(hard_cfg, "max_steps_per_task", HardCaps.max_steps_per_task),
+            max_replans=getattr(hard_cfg, "max_replans", HardCaps.max_replans),
+            max_task_retries=getattr(hard_cfg, "max_task_retries", HardCaps.max_task_retries),
+            max_run_duration_sec=getattr(
+                hard_cfg,
+                "max_run_duration_sec",
+                HardCaps.max_run_duration_sec,
             ),
-            workspace_path=merged_in.workspace_path or "",
+        )
+
+        base_values = {
+            "allow_write": getattr(default_cfg, "allow_write", True),
+            "allow_parallel": getattr(default_cfg, "allow_parallel", True),
+            "max_agents": getattr(default_cfg, "max_agents", 4),
+            "writer_mode": getattr(default_cfg, "writer_mode", "isolated_worktree"),
+            "verifier_cmd": getattr(default_cfg, "verifier_cmd", None),
+            "workspace_path": "",
+        }
+
+        user_values: dict[str, object] = {}
+        if user_in is not None:
+            user_values = user_in.model_dump(exclude_unset=True)
+        merged = {**base_values, **user_values}
+
+        max_agents = int(merged["max_agents"])
+        max_agents = max(1, min(max_agents, caps.max_agents))
+        # workspace_path 不在 build 阶段填默认值，避免误用 server cwd；
+        # 入口路由层负责对"必须有 workspace 的操作"做 400 校验。
+        workspace_raw = str(merged["workspace_path"] or "").strip()
+        workspace_path = (
+            str(Path(workspace_raw).expanduser().resolve()) if workspace_raw else ""
+        )
+
+        return cls(
+            allow_write=bool(merged["allow_write"]),
+            allow_parallel=bool(merged["allow_parallel"]),
+            max_agents=max_agents,
+            writer_mode=str(merged["writer_mode"]),
+            verifier_cmd=str(merged["verifier_cmd"]) if merged["verifier_cmd"] else None,
+            workspace_path=workspace_path,
             hard_caps=caps,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """序列化用于持久化到 AdaptiveRun.options_snapshot。"""
+        return {
+            "allow_write": self.allow_write,
+            "allow_parallel": self.allow_parallel,
+            "max_agents": self.max_agents,
+            "writer_mode": self.writer_mode,
+            "verifier_cmd": self.verifier_cmd,
+            "workspace_path": self.workspace_path,
+            "hard_caps": self.hard_caps.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> TaskOptions:
+        """从持久化快照恢复 TaskOptions（用于 run 重启 / decide continue）。"""
+        if not payload:
+            return cls(
+                allow_write=True,
+                allow_parallel=True,
+                max_agents=4,
+                writer_mode="isolated_worktree",
+                verifier_cmd=None,
+                workspace_path="",
+                hard_caps=HardCaps(),
+            )
+        return cls(
+            allow_write=bool(payload.get("allow_write", True)),
+            allow_parallel=bool(payload.get("allow_parallel", True)),
+            max_agents=int(payload.get("max_agents", 4)),
+            writer_mode=str(payload.get("writer_mode", "isolated_worktree")),
+            verifier_cmd=payload.get("verifier_cmd"),
+            workspace_path=str(payload.get("workspace_path") or ""),
+            hard_caps=HardCaps.from_dict(payload.get("hard_caps")),
         )

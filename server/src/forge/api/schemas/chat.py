@@ -23,6 +23,10 @@ class SessionOut(BaseModel):
     last_message_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    # N21: 为"会话内多 run 切换 / run 关联到 session"预留字段。
+    # 当前阶段后端不维护，由前端/CLI 在订阅 SSE 时累积；schema 占位避免
+    # 后续接入 RunsPage 时还需要破坏性变更。
+    run_ids: list[str] = Field(default_factory=list)
 
 
 class SessionCreateIn(BaseModel):

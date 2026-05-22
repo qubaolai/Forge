@@ -2,10 +2,11 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import {
   Copy, RotateCcw, ThumbsUp, ThumbsDown, AlertCircle, Check, Sparkles,
   Brain, ChevronDown, ChevronRight,
+  Loader2, CheckCircle2, XCircle, Wrench,
 } from 'lucide-react';
-import { ChatMessage, Citation } from '@/types';
+import { ChatMessage, Citation, ToolCall } from '@/types';
+import { cn } from '@/lib/utils';
 import { MarkdownContent } from './MarkdownContent';
-import { ToolCallCard } from './ToolCallCard';
 
 interface Props {
   message: ChatMessage;
@@ -38,22 +39,14 @@ export function AssistantMessage({ message, onRegenerate, onResume, onCitationCl
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col gap-2.5">
-        {/* 思考框: 流式且无内容时始终显示; 有思考链内容时继续显示 */}
-        {((isStreaming && !hasContent) || hasReasoning) && (
+        {/* 思考+工具调用框: 流式无内容 / 有推理链 / 有工具调用时显示 */}
+        {((isStreaming && !hasContent) || hasReasoning || hasTools) && (
           <ReasoningBlock
             content={message.reasoning_content || ''}
             streaming={isStreaming && !hasContent}
             durationMs={message.reasoning_duration_ms}
+            toolCalls={message.tool_calls}
           />
-        )}
-
-        {/* 工具调用过程 (若有) */}
-        {hasTools && (
-          <div className="flex flex-col gap-1.5">
-            {message.tool_calls!.map((tc) => (
-              <ToolCallCard key={tc.id} toolCall={tc} />
-            ))}
-          </div>
         )}
 
         {/* 主体内容 */}
@@ -144,13 +137,18 @@ function ReasoningBlock({
   content,
   streaming,
   durationMs,
+  toolCalls,
 }: {
   content: string;
   streaming: boolean;
   durationMs?: number;
+  toolCalls?: ToolCall[];
 }) {
-  // 默认折叠, 用户可手动展开查看思考过程
-  const [open, setOpen] = useState(false);
+  const hasContent = !!content;
+  const hasTools = !!(toolCalls && toolCalls.length > 0);
+  // 有工具调用时默认展开，让用户看到进度
+  const initOpen = hasTools;
+  const [open, setOpen] = useState(initOpen);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // 流式期间随内容增长自动滚到底, 让用户看到最新一行
@@ -158,7 +156,19 @@ function ReasoningBlock({
     if (open && streaming && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [content, open, streaming]);
+  }, [content, toolCalls, open, streaming]);
+
+  // 标题文本
+  let title: string;
+  if (streaming) {
+    title = hasTools ? '处理中…' : '思考中…';
+  } else if (durationMs && durationMs > 0) {
+    title = `思考用时 ${formatDuration(durationMs)}`;
+  } else if (hasTools && !hasContent) {
+    title = `已调用 ${toolCalls!.length} 个工具`;
+  } else {
+    title = '思考过程';
+  }
 
   return (
     <div className="rounded-lg border border-gray-200 bg-gray-50/60 text-[13px]">
@@ -168,13 +178,7 @@ function ReasoningBlock({
       >
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         <Brain size={13} />
-        <span>
-          {streaming
-            ? '思考中…'
-            : durationMs && durationMs > 0
-              ? `思考用时 ${formatDuration(durationMs)}`
-              : '思考过程'}
-        </span>
+        <span>{title}</span>
         {streaming && (
           <span className="ml-1 flex gap-1">
             <span className="h-1 w-1 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.3s]" />
@@ -182,17 +186,138 @@ function ReasoningBlock({
             <span className="h-1 w-1 animate-bounce rounded-full bg-gray-400" />
           </span>
         )}
+        {/* 工具计数 */}
+        {hasTools && !streaming && (
+          <span className="ml-auto text-[11px] text-gray-400">
+            {toolCalls!.filter(tc => tc.status === 'running').length > 0
+              ? `${toolCalls!.filter(tc => tc.status === 'running').length} 个执行中`
+              : `${toolCalls!.length} 个工具`}
+          </span>
+        )}
       </button>
       {open && (
         <div
           ref={scrollRef}
-          className="border-t border-gray-200 px-3 py-2 text-gray-600 whitespace-pre-wrap leading-[1.7] max-h-[220px] overflow-y-auto"
+          className="border-t border-gray-200 px-3 py-2 text-gray-600 max-h-[360px] overflow-y-auto"
         >
-          {content}
+          {/* 推理文本 */}
+          {hasContent && (
+            <div className="whitespace-pre-wrap leading-[1.7] mb-2">{content}</div>
+          )}
+
+          {/* 工具调用列表 */}
+          {hasTools && (
+            <div className={cn('space-y-1', hasContent && 'border-t border-gray-200 pt-2')}>
+              {toolCalls!.map((tc) => (
+                <InlineToolEntry key={tc.id} toolCall={tc} />
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
   );
+}
+
+/** 思考块内部的紧凑工具条目 */
+function InlineToolEntry({ toolCall }: { toolCall: ToolCall }) {
+  const [open, setOpen] = useState(false);
+  const isRunning = toolCall.status === 'running';
+  const isError = toolCall.status === 'error';
+
+  const argsStr =
+    toolCall.arguments && Object.keys(toolCall.arguments).length > 0
+      ? JSON.stringify(toolCall.arguments, null, 2)
+      : '';
+  const resultStr = formatInlineResult(toolCall.result);
+
+  return (
+    <div className="text-[12px]">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          'w-full flex items-center gap-1.5 px-2 py-1 rounded text-left hover:bg-black/[0.04] transition-colors',
+          isError ? 'text-red-600' : isRunning ? 'text-blue-600' : 'text-gray-600',
+        )}
+      >
+        <StatusIcon status={toolCall.status} />
+        <code className="text-[11px] px-1 py-0.5 rounded bg-white border border-gray-200 font-medium text-gray-700">
+          {toolCall.tool_name}
+        </code>
+        <span className="text-gray-400 truncate">
+          {isRunning ? '调用中' : isError ? '失败' : '完成'}
+        </span>
+        {!open && argsStr && (
+          <span className="ml-auto text-[10px] text-gray-300 truncate max-w-[40%]">
+            {argsStr.replace(/\s+/g, ' ').slice(0, 50)}
+          </span>
+        )}
+      </button>
+
+      {/* 展开详情 */}
+      {open && (argsStr || resultStr || (isError && toolCall.error_message)) && (
+        <div className="ml-6 px-2 pb-2 space-y-1.5">
+          {argsStr && (
+            <div>
+              <div className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">参数</div>
+              <pre className="text-[11px] font-mono bg-white border border-gray-200 rounded p-1.5 overflow-x-auto leading-relaxed max-h-[120px] overflow-y-auto">
+                {argsStr}
+              </pre>
+            </div>
+          )}
+          {toolCall.status === 'success' && resultStr && (
+            <div>
+              <div className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">结果</div>
+              <pre className="text-[11px] font-mono bg-white border border-gray-200 rounded p-1.5 overflow-x-auto whitespace-pre-wrap max-h-[160px] overflow-y-auto leading-relaxed">
+                {resultStr}
+              </pre>
+            </div>
+          )}
+          {isError && (toolCall.error_message || resultStr) && (
+            <div>
+              <div className="text-[10px] text-red-400 uppercase tracking-wider mb-0.5">错误</div>
+              <pre className="text-[11px] font-mono bg-white border border-red-200 text-red-600 rounded p-1.5 overflow-x-auto whitespace-pre-wrap max-h-[160px] overflow-y-auto leading-relaxed">
+                {toolCall.error_message || resultStr}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatusIcon({ status }: { status: ToolCall['status'] }) {
+  if (status === 'running') {
+    return <Loader2 size={12} className="text-blue-500 animate-spin shrink-0" />;
+  }
+  if (status === 'error') {
+    return <XCircle size={12} className="text-red-500 shrink-0" />;
+  }
+  if (status === 'success') {
+    return <CheckCircle2 size={12} className="text-emerald-500 shrink-0" />;
+  }
+  return <Wrench size={12} className="text-gray-400 shrink-0" />;
+}
+
+function formatInlineResult(result: unknown): string {
+  if (result == null) return '';
+  if (typeof result === 'string') {
+    const t = result.trim();
+    if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+      try {
+        return JSON.stringify(JSON.parse(t), null, 2);
+      } catch {
+        /* not valid json, fall through */
+      }
+    }
+    return result;
+  }
+  try {
+    return JSON.stringify(result, null, 2);
+  } catch {
+    return String(result);
+  }
 }
 
 function formatDuration(ms: number): string {

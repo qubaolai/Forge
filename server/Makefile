@@ -45,7 +45,7 @@ env-setup:
 
 # ── 启动 ───────────────────────────────────────────────────────────────────────
 run:
-	APP_ENV=prod $(POETRY) run uvicorn forge.api.server:app --host 0.0.0.0 --port 8000
+	APP_ENV=$(APP_ENV) $(POETRY) run uvicorn forge.api.server:app --host 0.0.0.0 --port 8000
 
 dev:
 	APP_ENV=$(APP_ENV) $(POETRY) run uvicorn forge.api.server:app \

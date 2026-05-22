@@ -45,6 +45,7 @@ from config.domains.retrieval import (
     IngestConfig,
     RetrievalConfig,
 )
+from config.domains.task_execution import TaskExecutionConfig
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,7 @@ class Settings:
         self.bm25_store = BM25StoreConfig(**config["bm25_store"])
         self.reranker = ComponentConfig(**config["reranker"])
         self.retrieval = RetrievalConfig(**config.get("retrieval", {}))
+        self.task_execution = TaskExecutionConfig(**config.get("task_execution", {}))
 
     def resolve_utility_llm(
         self,

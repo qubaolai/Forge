@@ -23,12 +23,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from pathlib import Path
 
+from config.settings import get_settings
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
+from forge.adaptive.mode_router import ModeRouter
+from forge.adaptive.models import AdaptiveRun, RunStatus
+from forge.adaptive.options import TaskOptions
+from forge.adaptive.store import AdaptiveRunStore
+from forge.adaptive.supervisor import build_orchestrator_factory, get_run_supervisor
 from forge.api.dependencies import CurrentUser
 from forge.api.middleware.client_type import set_client_type
 from forge.api.schemas.chat import (
@@ -42,16 +50,24 @@ from forge.core.exceptions import NotFound
 from forge.core.response import success
 from forge.infrastructure.database.database import get_session_factory
 from forge.infrastructure.storage import make_message_store, make_session_store
-from forge.quota import get_usage_quota_manager
+from forge.quota import UserQuotaExceeded, get_usage_quota_manager
 from forge.utils.id_generator import new_id
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+mode_router = ModeRouter()
 
 
 def _sse(event: dict) -> bytes:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
+
+
+def _resolve_workspace_path(raw_workspace_path: str | None) -> str:
+    text = (raw_workspace_path or "").strip()
+    if not text:
+        return str(Path.cwd())
+    return str(Path(text).expanduser().resolve())
 
 
 @router.post("/completions")
@@ -64,23 +80,172 @@ async def chat_completions(
 
     当前行为:
       - mode="chat" | "auto" → TurnOrchestrator（聊天路径，零退化）
-      - mode="task"           → 预留，M3 接入 AdaptiveRunOrchestrator 后生效
+      - mode="task"           → AdaptiveRunOrchestrator（M5 串行执行）
     """
     trace_id = getattr(request.state, "trace_id", "")
     client_type = getattr(request.state, "client_type", "cli")
 
-    if body.mode == "task":
-        # M3+ 实现 AdaptiveRunOrchestrator 后在此接入
-        async def _task_stub():
-            yield _sse({"type": "error", "message": "task mode not yet implemented", "code": "not_implemented"})
+    decision = mode_router.decide(mode=body.mode, message=body.message, task_options=body.task_options)
+    logger.info("ModeRouter 决策 target=%s reason=%s", decision.target, decision.reason)
 
-        return StreamingResponse(
-            _task_stub(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    if decision.target == "adaptive":
+        # adaptive 路径也要走用量配额，避免任何用户绕过 quota 无限消耗 LLM
+        try:
+            get_usage_quota_manager().check_sync(user.id)
+        except UserQuotaExceeded as exc:
+            # 在闭包外提前取出 status，避免 generator 内引用 except 已清理的局部变量
+            quota_status = exc.status.to_dict() if hasattr(exc, "status") else None
+
+            async def _quota_denied():
+                yield _sse(
+                    {
+                        "type": "error",
+                        "message": "已超出 LLM 用量额度，请稍后再试",
+                        "code": "quota_exceeded",
+                        "status": quota_status,
+                    }
+                )
+
+            return StreamingResponse(
+                _quota_denied(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+        settings = get_settings()
+        options = TaskOptions.build(body.task_options, settings=settings)
+        # adaptive 入口必须显式指定 workspace_path，避免误用 server 进程 cwd
+        if not options.workspace_path:
+            async def _missing_workspace():
+                yield _sse(
+                    {
+                        "type": "error",
+                        "message": "缺少 workspace_path：请在 task_options.workspace_path 中显式指定项目路径",
+                        "code": "missing_workspace_path",
+                    }
+                )
+
+            return StreamingResponse(
+                _missing_workspace(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        workspace_path = _resolve_workspace_path(options.workspace_path)
+        store = AdaptiveRunStore(workspace_path=workspace_path)
+        run = AdaptiveRun(
+            run_id=new_id("run"),
+            workspace_path=workspace_path,
+            goal=body.message,
+            status=RunStatus.CREATED,
+            owner_user_id=user.id,
+            metadata={
+                "source": "api:/chat/completions",
+                "requested_mode": body.mode,
+                "route_target": decision.target,
+            },
+            options_snapshot=options.to_dict(),
+        )
+        await store.save_run(run)
+
+        event_queue: asyncio.Queue[dict] = asyncio.Queue()
+
+        async def _on_event(evt: dict) -> None:
+            await event_queue.put(evt)
+
+        task_execution_cfg = getattr(settings, "task_execution", None)
+        allowlist = list(getattr(task_execution_cfg, "tool_allowlist", []))
+        factory = build_orchestrator_factory(
+            tool_allowlist=allowlist,
+            event_handler=_on_event,
+        )
+        # B5: 走 supervisor 投递后台任务，保证 abort/decide 能取消同一 task
+        run_task = await get_run_supervisor().start_run(
+            run=run,
+            options=options,
+            store=store,
+            orchestrator_factory=factory,
         )
 
-    # mode="chat" 或 "auto" → 走 TurnOrchestrator (聊天路径)
+        async def _task_stream():
+            """统一异常保护：任何阶段出错都用 error 事件结束流，并确保 run.done 至少推一次。"""
+            set_client_type(client_type)
+            done = False
+            run_exception: BaseException | None = None
+            try:
+                while True:
+                    if done and event_queue.empty():
+                        break
+                    try:
+                        evt = await asyncio.wait_for(event_queue.get(), timeout=0.2)
+                        yield _sse(
+                            {
+                                "type": evt.get("type", ""),
+                                "run_id": evt.get("run_id", run.run_id),
+                                "event_id": evt.get("id", ""),
+                                "ts": evt.get("ts", ""),
+                                "payload": evt.get("payload", {}),
+                            }
+                        )
+                        continue
+                    except TimeoutError:
+                        pass
+
+                    if run_task.done():
+                        done = True
+                        if run_task.exception() is not None:
+                            # 记录异常但不立即 break，先把 queue 里剩余事件吐完
+                            run_exception = run_task.exception()
+            finally:
+                if not run_task.done():
+                    run_task.cancel()
+                    try:
+                        await run_task
+                    except (asyncio.CancelledError, Exception) as exc:  # noqa: BLE001
+                        if run_exception is None:
+                            run_exception = exc
+
+            if run_exception is not None:
+                logger.exception("adaptive run 异常 run_id=%s", run.run_id, exc_info=run_exception)
+                yield _sse(
+                    {
+                        "type": "error",
+                        "run_id": run.run_id,
+                        "message": str(run_exception),
+                        "code": "adaptive_failed",
+                    }
+                )
+                yield _sse(
+                    {
+                        "type": "run.done",
+                        "run_id": run.run_id,
+                        "status": RunStatus.FAILED.value,
+                        "artifact_ids": list(run.artifact_ids),
+                    }
+                )
+                return
+
+            # 正常完成路径：从 task 结果取最新 run 状态
+            result_run = run_task.result()
+            yield _sse(
+                {
+                    "type": "run.done",
+                    "run_id": result_run.run_id,
+                    "status": result_run.status.value,
+                    "artifact_ids": list(result_run.artifact_ids),
+                }
+            )
+
+        return StreamingResponse(
+            _task_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+
+    # B11/P2-11: chat 路径走 TurnOrchestrator；simple 路径已删除（mode_router 不再产出）
     orchestrator = build_turn_orchestrator()
 
     async def event_stream():

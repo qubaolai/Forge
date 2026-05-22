@@ -326,3 +326,8 @@ task_execution:
     max_agents:     4
     writer_mode:    isolated_worktree
     verifier_cmd:   null
+
+  # B7/B8/P0-2 开关：true 时 supervisor 自动接入真实 Discovery Agent + Planner LLM；
+  # false 时全部走 fallback（适合本地单测、零依赖体验）。
+  # 生产/演示开启前需确保 LLM pool 预热成功（lifespan.py 启动日志中可见）。
+  enable_real_llm: false

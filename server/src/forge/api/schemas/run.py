@@ -48,6 +48,9 @@ class RunOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     metadata: dict[str, Any] = {}
+    # B17: 暴露持久化的 TaskOptions 快照（含 workspace / allow_write / verifier_cmd / hard_caps），
+    # 让 CLI / Web 可以读取 run 的运行参数无需再查 settings
+    options_snapshot: dict[str, Any] | None = None
 
 
 class RunListOut(BaseModel):

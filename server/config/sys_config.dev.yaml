@@ -37,7 +37,7 @@ db:
   pool_size: 3
   max_overflow: 5
   pool_recycle: 3600
-  pool_pre_ping: false  # aiomysql 0.3.x ping() incompatibility with sqlalchemy pool_pre_ping
+  pool_pre_ping: false # aiomysql 0.3.x ping() incompatibility with sqlalchemy pool_pre_ping
 
 redis:
   host: ${REDIS_HOST}
@@ -65,6 +65,7 @@ user_quota:
     limit_usd:
     limit_tokens:
     limit_calls:
+
 
 memory:
   enabled: ${MEMORY_ENABLED:true}
@@ -103,9 +104,9 @@ llm:
       - name: qwen-plus
         display_name: 通义千问 Plus
         context_window: 131072
-      - name: qwen3.5-flash
-        display_name: 通义千问 qwen3.5-flash
-        context_window: 8192
+      - name: qwen3.6-plus
+        display_name: qwen3.6-plus
+        context_window: 1000000
       default_params:
         temperature: 0.7
 
@@ -248,3 +249,37 @@ observability:
     langfuse_public_key: ${LANGFUSE_PUBLIC_KEY:}
     langfuse_secret_key: ${LANGFUSE_SECRET_KEY:}
     langfuse_host: ${LANGFUSE_HOST:https://cloud.langfuse.com}
+
+# Forge Adaptive Task Execution
+task_execution:
+  tool_allowlist:
+  - read_file
+  - write_file
+  - edit_file
+  - list_directory
+  - glob_search
+  - grep
+  - shell
+  - git_ops
+  - http_request
+  - run_tests
+  - knowledge_search
+
+  model_profiles:
+    fast: ${FAST_MODEL:claude-sonnet-4-6}
+    smart: ${SMART_MODEL:claude-sonnet-4-6}
+    strong: ${STRONG_MODEL:claude-opus-4-7}
+
+  hard_caps:
+    max_agents: 8
+    max_steps_per_task: 50
+    max_replans: 3
+    max_task_retries: 2
+    max_run_duration_sec: 3600
+
+  default_options:
+    allow_write: true
+    allow_parallel: true
+    max_agents: 4
+    writer_mode: isolated_worktree
+    verifier_cmd: null

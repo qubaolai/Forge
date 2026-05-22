@@ -250,3 +250,37 @@ observability:
     langfuse_public_key: ""
     langfuse_secret_key: ""
     langfuse_host: https://cloud.langfuse.com
+
+# Forge Adaptive Task Execution
+task_execution:
+  tool_allowlist:
+    - read_file
+    - write_file
+    - edit_file
+    - list_directory
+    - glob_search
+    - grep
+    - shell
+    - git_ops
+    - http_request
+    - run_tests
+    - knowledge_search
+
+  model_profiles:
+    fast: ${FAST_MODEL:claude-sonnet-4-6}
+    smart: ${SMART_MODEL:claude-sonnet-4-6}
+    strong: ${STRONG_MODEL:claude-opus-4-7}
+
+  hard_caps:
+    max_agents: 8
+    max_steps_per_task: 50
+    max_replans: 3
+    max_task_retries: 2
+    max_run_duration_sec: 3600
+
+  default_options:
+    allow_write: true
+    allow_parallel: true
+    max_agents: 4
+    writer_mode: isolated_worktree
+    verifier_cmd: null
