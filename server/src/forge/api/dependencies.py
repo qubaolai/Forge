@@ -1,14 +1,17 @@
 """依赖注入.
 
-认证模式 (兼容两套):
+认证模式 (三套兼容):
     - ``AuthenticatedUser`` (JWT, 用于 Web / 多端登录场景)
         客户端从 ``/auth/login`` 拿 access_token, 后续 ``Authorization: Bearer ...``
         进程内 ``UserCache`` (TTL) 减轻 DB 压力.
     - ``CurrentUser`` (本地 token, 单机 CLI 场景)
         若 ``~/.assistant/local_token`` 存在, 强校验 ``X-Local-Token`` header;
         否则放行, 返回固定 ``LocalUser``.
+    - ``ApiKeyUser`` (API Key, 用于 CLI / 第三方工具分机部署)
+        客户端在 Web UI 或 CLI 创建 API Key 后, 请求带 ``X-API-Key`` header.
+        Key 的 SHA256 哈希存库, 明文仅在创建时返回一次.
 
-两者并存: 路由按场景选其中一个. ``AdminUser`` 走 ``CurrentUser`` 链 + 角色校验.
+三者并存: 路由按场景选其中一个. ``AdminUser`` 走 ``CurrentUser`` 链 + 角色校验.
 """
 
 from __future__ import annotations
@@ -110,6 +113,55 @@ async def _require_admin(user: CurrentUser) -> LocalUser:
 
 
 AdminUser = Annotated[LocalUser, Depends(_require_admin)]
+
+
+# ---------- API Key 认证 (CLI / 第三方工具分机部署) ----------
+async def _get_api_key_user(
+    db: DbSession,
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
+) -> UserOrm:
+    """从 X-API-Key header 解析并验证 API Key，返回关联用户。
+
+    Key 在库中存 SHA256 哈希，明文仅在创建时返回一次。
+    """
+    from datetime import UTC, datetime
+
+    from forge.core.exceptions import Unauthorized
+    from forge.core.security import hash_api_key
+    from forge.infrastructure.database.repositories.api_key_repo import (
+        ApiKeyRepository,
+    )
+
+    if not x_api_key:
+        raise Unauthorized("缺少 X-API-Key 头", code=40130)
+
+    key_hash = hash_api_key(x_api_key)
+    repo = ApiKeyRepository(db)
+    api_key = await repo.get_by_hash(key_hash)
+
+    if not api_key:
+        raise Unauthorized("API Key 无效", code=40131)
+    if api_key.is_revoked:
+        raise Unauthorized("API Key 已被吊销", code=40132)
+    if api_key.expires_at and api_key.expires_at < datetime.now(UTC):
+        raise Unauthorized("API Key 已过期", code=40133)
+
+    user = api_key.user
+    if not user:
+        raise Unauthorized("API Key 关联的用户不存在", code=40134)
+    if user.status != "active":
+        raise Unauthorized("用户已被禁用", code=40108)
+
+    # 更新最后使用时间（失败不影响主流程）
+    try:
+        await repo.touch_last_used(api_key)
+    except Exception:
+        pass
+
+    return user
+
+
+ApiKeyUser = Annotated[UserOrm, Depends(_get_api_key_user)]
 
 
 # ---------- 来自 app.state 的单例 ----------

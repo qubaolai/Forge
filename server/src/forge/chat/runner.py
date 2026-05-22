@@ -3,11 +3,9 @@
 AgentRunner = 一次 turn 内, 真正跑 agent 循环并产事件的角色.
 
 为什么单独一层 (而不是直接用 ReActAgent.stream):
-    1. agent.mode 分发: TurnOrchestrator 按 mode 选不同 Runner.
-       同一接口下 ReActRunner / PlanExecuteRunner 互换不影响上层.
-    2. LoopGuard 接入点: Runner 桥接 LoopGuard 到 ReActAgent 的 before_step 钩子,
+    1. LoopGuard 接入点: Runner 桥接 LoopGuard 到 ReActAgent 的 before_step 钩子,
        agents 层不感知 LoopGuard.
-    3. 累计结果统一打包成 RunResult: Finalizer 不关心是哪个 mode 跑的.
+    2. 累计结果统一打包成 RunResult: Finalizer 不关心 Runner 内部细节.
 """
 
 from __future__ import annotations
@@ -49,7 +47,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_STEPS = 50
 
 # 默认 guard 工厂列表. 每个 turn 新建一组实例 (避免跨 turn 状态污染).
-# R4 会往这里加 StuckDetector / TokenBudgetGuard / WallClockGuard.
 GuardFactory = Callable[[int], LoopGuard]
 
 

@@ -9,6 +9,7 @@
 """
 
 from forge.infrastructure.database.orm.agent_orm import AgentOrm
+from forge.infrastructure.database.orm.api_key_orm import UserApiKey
 from forge.infrastructure.database.orm.auth import RefreshTokenBlacklist
 from forge.infrastructure.database.orm.base import Base
 from forge.infrastructure.database.orm.kb_document_chunk_orm import (
@@ -23,6 +24,7 @@ from forge.infrastructure.database.orm.user_orm import UserOrm
 
 __all__ = [
     "Base",
+    "UserApiKey",
     "UserOrm",
     "RefreshTokenBlacklist",
     "AgentOrm",

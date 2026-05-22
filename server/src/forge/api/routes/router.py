@@ -22,6 +22,7 @@ from fastapi import APIRouter
 from forge.api.dependencies import CurrentUser
 from forge.api.routes.v1 import (
     agents,
+    api_keys,
     artifacts,
     auth,
     chat,
@@ -45,6 +46,7 @@ v1.include_router(chat.router, prefix="/chat", tags=["chat"])
 v1.include_router(runs.router)
 v1.include_router(artifacts.router)
 v1.include_router(users.router)
+v1.include_router(api_keys.router)
 v1.include_router(knowledge_bases.router)
 
 

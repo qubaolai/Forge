@@ -1,10 +1,6 @@
-"""应用层配置: App / Auth / CORS / 限流 / 中间件."""
-from __future__ import annotations
-
-from typing import Literal
+"""应用层配置: App / Auth / CORS."""
 
 from pydantic import BaseModel, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class AuthConfig(BaseModel):
@@ -15,15 +11,14 @@ class AuthConfig(BaseModel):
     access_token_expire_minutes: int
     refresh_token_expire_days: int
     cookie_secure: bool = False
-    cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    cookie_samesite: str = "lax"
 
 
-class AppConfig(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore")
+class AppConfig(BaseModel):
+    model_config = {"extra": "forbid"}
 
     log_level: str = "INFO"
     port: int = 8080
-    user_cache_ttl_seconds: int
     auth: AuthConfig
 
     @field_validator("log_level")
@@ -47,15 +42,7 @@ class CORSConfig(BaseModel):
         return [o.strip() for o in self.allow_origins.split(",") if o.strip()]
 
 
-class RateLimitConfig(BaseModel):
-    model_config = {"extra": "forbid"}
-
-    enabled: bool = False
-    default_per_minute: int = 60
-
-
 class MiddlewareConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
     cors: CORSConfig = CORSConfig()
-    rate_limit: RateLimitConfig = RateLimitConfig()

@@ -267,7 +267,8 @@ class ContextAssembler:
         return get_registry().render(
             self.SYSTEM_TEMPLATE,
             user_system_prompt=user_prompt,
-            # agent_name=agent.name,
+
+
             user_name=ctx.user_name,
             datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             tools=tools_meta,

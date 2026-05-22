@@ -1,7 +1,7 @@
 """聊天路径工具白名单。
 
-纯聊天当前不应拥有文件系统、命令、Git、HTTP、数据库或 Agent 协作权限。
-这些能力只允许 adaptive 任务流程在显式 workspace 下使用。
+纯聊天仅开放查询类工具，不开放文件系统、命令、Git 等写操作权限。
+任务执行请走 POST /api/v1/runs。
 """
 
 from __future__ import annotations

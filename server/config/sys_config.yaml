@@ -10,7 +10,6 @@ deployment_mode: ${DEPLOYMENT_MODE:local}
 app:
   log_level: ${APP_LOG_LEVEL:INFO} # DEBUG | INFO | WARNING | ERROR
   port: ${APP_PORT:8553}
-  user_cache_ttl_seconds: ${USER_CACHE_TTL:259200}
   auth:
     jwt_secret: ${JWT_SECRET} # 必填, 生产环境必须设置
     jwt_algorithm: ${JWT_ALGORITHM:HS256}
@@ -25,9 +24,6 @@ middleware:
   cors:
     allow_origins: ${CORS_ALLOW_ORIGINS:http://localhost:3000} # 逗号分隔多个 origin
     allow_credentials: ${CORS_ALLOW_CREDENTIALS:true}
-  rate_limit:
-    enabled: ${RATE_LIMIT_ENABLED:false}
-    default_per_minute: ${RATE_LIMIT_PER_MIN:60} # 每用户/IP 每分钟请求数
 
 # 数据库
 db:
@@ -323,7 +319,6 @@ task_execution:
     fast:   "${FAST_MODEL:qwen-plus}"
     smart:  "${SMART_MODEL:qwen-plus}"
     strong: "${STRONG_MODEL:qwen3-max-preview}"
-  mode_router_model_profile: fast
   planner_model_profile: smart
   discovery_model_profile: fast
 

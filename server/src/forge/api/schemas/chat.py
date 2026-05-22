@@ -1,11 +1,9 @@
 """会话与对话相关的 schema。"""
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-
-from forge.adaptive.options import TaskOptionsIn
 
 
 # ---- 会话 ----
@@ -67,29 +65,18 @@ class ChatAttachment(BaseModel):
     name: str | None = None
 
 
-class ChatWorkflowOption(BaseModel):
-    """已废弃的 workflow 选项字段，保留一个版本用于向后兼容，不再生效。
+class ChatCompletionIn(BaseModel):
+    """聊天对话请求 — 纯对话模式，不包含任务执行。
 
-    新客户端请使用 ChatCompletionIn.mode 和 task_options 字段。
+    任务执行请走 POST /api/v1/runs。
     """
 
-    template_id: str | None = None
-    mode: Literal["auto"] | None = None
-    pause_after_phase: bool = False
-
-
-class ChatCompletionIn(BaseModel):
     session_id: str | None = None
     agent_id: str | None = None  # 无 session_id 时用于建会话
     message: str = Field(min_length=1)
     attachments: list[ChatAttachment] = Field(default_factory=list)
     override_retrieval: dict | None = None
     model_options: dict | None = None
-
-    # Forge: 路由模式
-    mode: Literal["auto", "chat", "task"] = "auto"
-    # Forge: adaptive run 选项（mode=task 或 auto 路由为 task 时生效）
-    task_options: TaskOptionsIn | None = None
 
 
 class ChatStopIn(BaseModel):

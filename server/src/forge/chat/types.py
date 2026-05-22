@@ -21,7 +21,7 @@ class TurnContext:
     user_msg_id: str
     current_user_message: str
     agent_id: str | None  # 选中的 agent id, None = default
-    agent_mode: str  # "react" | "plan_execute" | ...
+    agent_mode: str  # "react"
     is_new_session: bool
     new_title: str | None  # 本轮是否自动重命名了 (None = 没改)
     trace_id: str

@@ -63,7 +63,6 @@ class TaskExecutionConfig(BaseModel):
         ]
     )
     model_profiles: TaskExecutionModelProfiles = Field(default_factory=TaskExecutionModelProfiles)
-    mode_router_model_profile: Literal["fast", "smart", "strong"] = "fast"
     planner_model_profile: Literal["fast", "smart", "strong"] = "smart"
     discovery_model_profile: Literal["fast", "smart", "strong"] = "fast"
     hard_caps: TaskExecutionHardCaps = Field(default_factory=TaskExecutionHardCaps)

@@ -1,9 +1,11 @@
-"""安全相关: 密码哈希 (bcrypt 直调) + JWT 编解码.
+"""安全相关: 密码哈希 (bcrypt 直调) + JWT 编解码 + API Key 生成与哈希.
 
 passlib 1.7 (2020 后停更) 依赖 stdlib `crypt`, Python 3.13 已移除, 因此
 密码哈希走 bcrypt SDK 直调, 不再通过 CryptContext.
 """
 
+import hashlib
+import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -78,3 +80,34 @@ def get_token_payload(token: str, expected_type: str | None = None) -> dict:
     if expected_type and payload.get("type") != expected_type:
         raise Unauthorized("token 类型不匹配", code=40103)
     return payload
+
+
+# ---------- API Key ----------
+_API_KEY_PREFIX = "fk_"
+_API_KEY_RANDOM_BYTES = 24  # 生成 48 字符 hex
+
+
+def generate_api_key() -> tuple[str, str]:
+    """生成 API Key，纯随机不可逆。
+
+    返回 (原始 key 明文, key 的 SHA256 哈希)。
+    原始 key 仅在创建时返回一次，之后只存哈希。
+    格式: fk_ + 48 字符 hex，如 fk_a1b2c3d4e5f6...
+    """
+    raw = secrets.token_hex(_API_KEY_RANDOM_BYTES)
+    key = _API_KEY_PREFIX + raw
+    key_hash = hash_api_key(key)
+    return key, key_hash
+
+
+def hash_api_key(key: str) -> str:
+    """对 API Key 明文做 SHA256 哈希，用于存储和查找。"""
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+def extract_api_key_prefix(key: str) -> str:
+    """提取 API Key 的前缀部分，用于 UI 回显辨识。"""
+    return key[:_API_KEY_PREFIX_LEN] if key.startswith(_API_KEY_PREFIX) else key[:12]
+
+
+_API_KEY_PREFIX_LEN = len(_API_KEY_PREFIX) + 8  # fk_ + 前 8 字符

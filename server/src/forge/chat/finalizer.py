@@ -3,12 +3,8 @@
 职责:
     1. 根据 finish_reason 决定 assistant message 的最终状态
     2. 写 DB (content / status / tool_calls / usage / context_meta / reasoning_*)
-    3. 产出终态 SSE 事件 (done / error / 未来的 task_partial)
+    3. 产出终态 SSE 事件 (done / error / task_partial)
     4. 正常完成时 publish "turn.completed" 事件
-
-R1 阶段:
-    - done / error / aborted 都跟原 _stream_chat 行为一致
-    - partial_* 留 hook 但不发 task_partial (R5 再启)
 """
 
 from __future__ import annotations

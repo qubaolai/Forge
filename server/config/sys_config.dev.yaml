@@ -8,7 +8,6 @@ deployment_mode: ${DEPLOYMENT_MODE:local}
 app:
   log_level: ${APP_LOG_LEVEL}
   port: ${APP_PORT:8553}
-  user_cache_ttl_seconds: ${USER_CACHE_TTL:259200}
   auth:
     jwt_secret: ${JWT_SECRET}
     jwt_algorithm: ${JWT_ALGORITHM:HS256}
@@ -21,9 +20,6 @@ middleware:
   cors:
     allow_origins: ${CORS_ALLOW_ORIGINS:http://localhost:3000,http://localhost:5173}
     allow_credentials: true
-  rate_limit:
-    enabled: false
-    default_per_minute: 600
 
 db:
   driver: ${DB_DRIVER:mysql+aiomysql}
@@ -33,10 +29,8 @@ db:
   password: ${DB_PASSWORD}
   database: ${DB_DATABASE}
   echo: ${DB_ECHO}
-  charset: utf8mb4
   pool_size: 3
   max_overflow: 5
-  pool_recycle: 3600
   pool_pre_ping: false # aiomysql 0.3.x ping() incompatibility with sqlalchemy pool_pre_ping
 
 redis:
@@ -282,7 +276,6 @@ task_execution:
     fast: ${FAST_MODEL}
     smart: ${SMART_MODEL}
     strong: ${STRONG_MODEL}
-  mode_router_model_profile: fast
   planner_model_profile: smart
   discovery_model_profile: fast
 

@@ -277,8 +277,6 @@ export interface ChatMessage {
   reasoning_content?: string;
   // 思考累计墙钟毫秒, 仅 assistant 用 (DeepSeek thinking 等开启时才有)
   reasoning_duration_ms?: number;
-  // Adaptive run 任务模式状态；仅 mode=task 的 assistant 占位消息使用
-  adaptive_run?: AdaptiveRunSummary;
 }
 
 export interface ChatSession {
@@ -330,15 +328,6 @@ export type ArtifactKind =
   | 'integration_report'
   | 'conflict_report'
   | 'final_report';
-
-export interface TaskOptionsInput {
-  allow_write?: boolean;
-  allow_parallel?: boolean;
-  max_agents?: number;
-  writer_mode?: 'direct' | 'isolated_worktree';
-  verifier_cmd?: string | null;
-  workspace_path?: string | null;
-}
 
 export interface TaskNode {
   id: string;

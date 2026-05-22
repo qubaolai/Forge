@@ -14,7 +14,6 @@ deployment_mode: ${DEPLOYMENT_MODE:local}
 app:
   log_level: WARNING
   port: 8553
-  user_cache_ttl_seconds: 300
   auth:
     jwt_secret: ${JWT_SECRET:test-jwt-secret-do-not-use-in-prod}
     jwt_algorithm: HS256
@@ -27,9 +26,6 @@ middleware:
   cors:
     allow_origins: http://localhost:3000
     allow_credentials: true
-  rate_limit:
-    enabled: false
-    default_per_minute: 9999
 
 db:
   driver: ${DB_DRIVER:mysql+aiomysql}
@@ -279,7 +275,6 @@ task_execution:
     fast: ${FAST_MODEL:qwen-plus}
     smart: ${SMART_MODEL:qwen-plus}
     strong: ${STRONG_MODEL:qwen3-max-preview}
-  mode_router_model_profile: fast
   planner_model_profile: smart
   discovery_model_profile: fast
 
