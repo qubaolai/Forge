@@ -1,26 +1,17 @@
-"""模型目录 — 启动时从各供应商 API 获取模型列表 + 能力元数据合并 + 缓存。
-
-启动流程:
-    1. 从 providers 表加载已启用供应商
-    2. 对每个供应商调用其 /models API
-    3. 各供应商 adapter 归一化响应
-    4. 合并内置能力元数据（context_window、supports_tools、thinking 等）
-    5. 写内存缓存
-
-任一供应商获取失败 → 服务启动失败。
-"""
+"""模型目录与供应商模型抓取注册中心。"""
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Literal
+import os
+from dataclasses import dataclass
+from typing import Literal, Protocol
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# 归一化模型元数据
-# ---------------------------------------------------------------------------
+
 @dataclass
 class ThinkingMeta:
     type: Literal["reasoning_effort", "enabled"]
@@ -34,43 +25,85 @@ class ModelInfo:
     provider: str
     display_name: str = ""
     context_window: int = 128000
+    max_output_tokens: int = 4096
     supports_tools: bool = True
     supports_images: bool = False
     thinking: ThinkingMeta | None = None
+    model_type: str = "text"
+    extra_params: dict | None = None
 
 
-# ---------------------------------------------------------------------------
-# 内置能力元数据（API 不返回的关键能力）
-# ---------------------------------------------------------------------------
-_CAPABILITIES: dict[str, dict] = {
-    # Anthropic
-    "claude-sonnet-4-6":    {"context_window": 200000, "supports_tools": True,  "supports_images": True, "thinking": {"type": "enabled"}},
-    "claude-sonnet-4-5":    {"context_window": 200000, "supports_tools": True,  "supports_images": True, "thinking": {"type": "enabled"}},
-    "claude-haiku-4-5":     {"context_window": 200000, "supports_tools": True,  "supports_images": True, "thinking": {"type": "enabled"}},
-    "claude-opus-4-7":      {"context_window": 200000, "supports_tools": True,  "supports_images": True, "thinking": {"type": "enabled"}},
-    # OpenAI
-    "gpt-4o":               {"context_window": 128000, "supports_tools": True,  "supports_images": True,  "thinking": None},
-    "gpt-4o-mini":          {"context_window": 128000, "supports_tools": True,  "supports_images": True,  "thinking": None},
-    # DeepSeek
-    "deepseek-v4-pro":      {"context_window": 1000000, "supports_tools": True, "supports_images": False, "thinking": {"type": "reasoning_effort", "options": ["high", "max"], "default": "high"}},
-    "deepseek-v4-flash":    {"context_window": 1000000, "supports_tools": True, "supports_images": False, "thinking": {"type": "reasoning_effort", "options": ["high", "max"], "default": "high"}},
-    # DashScope (Qwen)
-    "qwen3-max-preview":    {"context_window": 32768,  "supports_tools": True,  "supports_images": False, "thinking": None},
-    "qwen-plus":            {"context_window": 131072, "supports_tools": True,  "supports_images": False, "thinking": None},
-    "qwen3.6-plus":         {"context_window": 131072, "supports_tools": True,  "supports_images": False, "thinking": None},
-    "qwen3.5-flash":        {"context_window": 8192,   "supports_tools": True,  "supports_images": False, "thinking": None},
-    "qwen3.7-max":          {"context_window": 131072, "supports_tools": True,  "supports_images": False, "thinking": None},
-}
+@dataclass(frozen=True)
+class ProviderFetchContext:
+    provider_name: str
+    api_key: str
+    base_url: str | None
+    impl: str | None
 
 
-# ---------------------------------------------------------------------------
-# Model Catalog
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class ModelCapability:
+    context_window: int = 128000
+    max_output_tokens: int = 4096
+    supports_tools: bool = True
+    supports_images: bool = False
+    thinking: ThinkingMeta | None = None
+    model_type: str = "text"
+    display_name: str = ""
+    extra_params: dict | None = None
+
+
+class ProviderModelFetcher(Protocol):
+    async def fetch(self, ctx: ProviderFetchContext) -> list[str]:
+        """返回供应商可用模型 ID 列表。"""
+
+
+_FETCHERS: dict[str, ProviderModelFetcher] = {}
+_CAPABILITIES: dict[str, ModelCapability] = {}
+
+
+def register_model_fetcher(provider_name: str, fetcher: ProviderModelFetcher) -> None:
+    normalized = provider_name.strip().lower()
+    if not normalized:
+        raise ValueError("provider_name 不能为空")
+    _FETCHERS[normalized] = fetcher
+
+
+def register_model_capability(model_name: str, capability: ModelCapability) -> None:
+    _CAPABILITIES[model_name] = capability
+
+
+class _FixedListFetcher:
+    def __init__(self, model_ids: list[str]) -> None:
+        self._model_ids = list(model_ids)
+
+    async def fetch(self, ctx: ProviderFetchContext) -> list[str]:  # noqa: ARG002
+        return list(self._model_ids)
+
+
+class _OpenAICompatibleFetcher:
+    def __init__(self, default_base_url: str) -> None:
+        self._default_base_url = default_base_url.rstrip("/")
+
+    async def fetch(self, ctx: ProviderFetchContext) -> list[str]:
+        if not ctx.api_key:
+            raise ValueError(f"{ctx.provider_name}: 缺少 API Key")
+
+        base_url = (ctx.base_url or self._default_base_url).rstrip("/")
+        url = f"{base_url}/v1/models"
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, headers={"Authorization": f"Bearer {ctx.api_key}"})
+            resp.raise_for_status()
+            data = resp.json()
+        items = data.get("data", [])
+        return [item["id"] for item in items if "id" in item]
+
+
 class ModelCatalog:
-    """全局单例，启动时从各供应商 API 拉取模型列表。"""
+    """进程内模型目录。"""
 
     def __init__(self) -> None:
-        self._models: dict[str, list[ModelInfo]] = {}  # provider → models
+        self._models: dict[str, list[ModelInfo]] = {}
 
     @property
     def models(self) -> dict[str, list[ModelInfo]]:
@@ -83,103 +116,168 @@ class ModelCatalog:
         return sorted(self._models.keys())
 
     async def refresh(self, providers: list[dict]) -> None:
-        """启动时调用：遍历供应商，从 API 获取模型列表。
-
-        Args:
-            providers: [{"name": "deepseek", "impl": "deepseek", "api_key": "sk-xxx", "base_url": None}, ...]
-        """
         new_models: dict[str, list[ModelInfo]] = {}
-        for p in providers:
-            name = p["name"]
+        for provider in providers:
+            provider_name = provider["name"]
             try:
-                models = await _fetch_models(p)
-                new_models[name] = models
-                logger.info("模型目录 %s: %d 个模型", name, len(models))
+                models = await _fetch_models(provider)
+                new_models[provider_name] = models
+                logger.info("模型目录刷新完成 provider=%s count=%d", provider_name, len(models))
             except Exception:
-                logger.exception("模型目录获取失败 provider=%s, 服务无法启动", name)
+                logger.exception("模型目录刷新失败 provider=%s", provider_name)
                 raise
         self._models = new_models
 
 
-# ---------------------------------------------------------------------------
-# Per-provider fetching
-# ---------------------------------------------------------------------------
+def _build_fetch_context(provider: dict) -> ProviderFetchContext:
+    provider_name = provider["name"]
+    api_key = provider.get("api_key") or os.environ.get(f"{provider_name.upper()}_API_KEY", "")
+    return ProviderFetchContext(
+        provider_name=provider_name,
+        api_key=api_key,
+        base_url=provider.get("base_url"),
+        impl=provider.get("impl"),
+    )
+
+
+def _capability_to_model_info(provider_name: str, model_id: str) -> ModelInfo:
+    cap = _CAPABILITIES.get(model_id, ModelCapability())
+    return ModelInfo(
+        name=model_id,
+        provider=provider_name,
+        display_name=cap.display_name or model_id,
+        context_window=cap.context_window,
+        max_output_tokens=cap.max_output_tokens,
+        supports_tools=cap.supports_tools,
+        supports_images=cap.supports_images,
+        thinking=cap.thinking,
+        model_type=cap.model_type,
+        extra_params=cap.extra_params,
+    )
+
+
 async def _fetch_models(provider: dict) -> list[ModelInfo]:
-    """调用供应商 API 获取模型列表，合并能力元数据。"""
-    import os
+    """兼容旧调用入口：按 provider 名调对应 fetcher，再附加能力元数据。"""
+    provider_name = provider["name"].strip().lower()
+    fetcher = _FETCHERS.get(provider_name)
+    if fetcher is None:
+        raise ValueError(f"不支持的供应商: {provider_name}")
 
-    name = provider["name"]
-    api_key = provider.get("api_key") or os.environ.get(f"{name.upper()}_API_KEY", "")
-    base_url = provider.get("base_url")
-
-    # 各供应商有不同 API 端点
-    if name == "anthropic":
-        raw_ids = _ANTHROPIC_MODELS
-    elif name in ("deepseek", "openai", "dashscope"):
-        raw_ids = await _fetch_openai_compatible_models(api_key, base_url, name)
-    else:
-        raise ValueError(f"不支持的供应商: {name}")
-
-    models: list[ModelInfo] = []
-    for model_id in raw_ids:
-        cap = _CAPABILITIES.get(model_id, {})
-        thinking_raw = cap.get("thinking")
-        thinking = None
-        if thinking_raw:
-            thinking = ThinkingMeta(
-                type=thinking_raw["type"],
-                options=thinking_raw.get("options"),
-                default=thinking_raw.get("default"),
-            )
-        models.append(ModelInfo(
-            name=model_id,
-            provider=name,
-            display_name=cap.get("display_name", model_id),
-            context_window=cap.get("context_window", 128000),
-            supports_tools=cap.get("supports_tools", True),
-            supports_images=cap.get("supports_images", False),
-            thinking=thinking,
-        ))
-    return models
+    ctx = _build_fetch_context(provider)
+    model_ids = await fetcher.fetch(ctx)
+    return [_capability_to_model_info(provider_name, model_id) for model_id in model_ids]
 
 
-# Anthropic 无 /models API，使用内置列表
-_ANTHROPIC_MODELS = [
-    "claude-sonnet-4-6", "claude-sonnet-4-5",
-    "claude-haiku-4-5", "claude-opus-4-7",
-]
+def _register_builtin_fetchers() -> None:
+    register_model_fetcher(
+        "anthropic",
+        _FixedListFetcher(
+            [
+                "claude-sonnet-4-6",
+                "claude-sonnet-4-5",
+                "claude-haiku-4-5",
+                "claude-opus-4-7",
+            ]
+        ),
+    )
+    register_model_fetcher("openai", _OpenAICompatibleFetcher("https://api.openai.com"))
+    register_model_fetcher("deepseek", _OpenAICompatibleFetcher("https://api.deepseek.com"))
+    register_model_fetcher(
+        "dashscope",
+        _OpenAICompatibleFetcher("https://dashscope.aliyuncs.com/compatible-mode"),
+    )
 
 
-async def _fetch_openai_compatible_models(api_key: str, base_url: str | None, provider: str) -> list[str]:
-    """调用 OpenAI-compatible /v1/models 端点获取模型 ID 列表。"""
-    import httpx
+def _register_builtin_capabilities() -> None:
+    register_model_capability(
+        "claude-sonnet-4-6",
+        ModelCapability(
+            context_window=200000,
+            supports_tools=True,
+            supports_images=True,
+            thinking=ThinkingMeta(type="enabled"),
+        ),
+    )
+    register_model_capability(
+        "claude-sonnet-4-5",
+        ModelCapability(
+            context_window=200000,
+            supports_tools=True,
+            supports_images=True,
+            thinking=ThinkingMeta(type="enabled"),
+        ),
+    )
+    register_model_capability(
+        "claude-haiku-4-5",
+        ModelCapability(
+            context_window=200000,
+            supports_tools=True,
+            supports_images=True,
+            thinking=ThinkingMeta(type="enabled"),
+        ),
+    )
+    register_model_capability(
+        "claude-opus-4-7",
+        ModelCapability(
+            context_window=200000,
+            supports_tools=True,
+            supports_images=True,
+            thinking=ThinkingMeta(type="enabled"),
+        ),
+    )
 
-    if not api_key:
-        raise ValueError(f"{provider}: 缺少 API Key")
+    register_model_capability(
+        "gpt-4o",
+        ModelCapability(context_window=128000, supports_tools=True, supports_images=True),
+    )
+    register_model_capability(
+        "gpt-4o-mini",
+        ModelCapability(context_window=128000, supports_tools=True, supports_images=True),
+    )
 
-    url = f"{(base_url or '').rstrip('/')}/v1/models"
-    if not url.startswith("http"):
-        # 使用默认 base_url
-        defaults = {
-            "openai": "https://api.openai.com",
-            "deepseek": "https://api.deepseek.com",
-            "dashscope": "https://dashscope.aliyuncs.com/compatible-mode",
-        }
-        url = f"{defaults.get(provider, '')}/v1/models"
+    register_model_capability(
+        "deepseek-v4-pro",
+        ModelCapability(
+            context_window=1000000,
+            max_output_tokens=32768,
+            supports_tools=True,
+            supports_images=False,
+            thinking=ThinkingMeta(type="reasoning_effort", options=["high", "max"], default="high"),
+        ),
+    )
+    register_model_capability(
+        "deepseek-v4-flash",
+        ModelCapability(
+            context_window=1000000,
+            max_output_tokens=32768,
+            supports_tools=True,
+            supports_images=False,
+            thinking=ThinkingMeta(type="reasoning_effort", options=["high", "max"], default="high"),
+        ),
+    )
 
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(url, headers={"Authorization": f"Bearer {api_key}"})
-        resp.raise_for_status()
-        data = resp.json()
+    register_model_capability(
+        "qwen3-max-preview",
+        ModelCapability(context_window=32768, supports_tools=True, supports_images=False),
+    )
+    register_model_capability(
+        "qwen-plus",
+        ModelCapability(context_window=131072, supports_tools=True, supports_images=False),
+    )
+    register_model_capability(
+        "qwen3.6-plus",
+        ModelCapability(context_window=131072, supports_tools=True, supports_images=False),
+    )
+    register_model_capability(
+        "qwen3.5-flash",
+        ModelCapability(context_window=8192, supports_tools=True, supports_images=False),
+    )
+    register_model_capability(
+        "qwen3.7-max",
+        ModelCapability(context_window=131072, supports_tools=True, supports_images=False),
+    )
 
-    # OpenAI 格式: {"data": [{"id": "gpt-4o", ...}, ...]}
-    items = data.get("data", [])
-    return [item["id"] for item in items if "id" in item]
 
-
-# ---------------------------------------------------------------------------
-# 全局单例
-# ---------------------------------------------------------------------------
 _catalog: ModelCatalog | None = None
 
 
@@ -193,3 +291,8 @@ def init_model_catalog() -> ModelCatalog:
     global _catalog
     _catalog = ModelCatalog()
     return _catalog
+
+
+_register_builtin_fetchers()
+_register_builtin_capabilities()
+

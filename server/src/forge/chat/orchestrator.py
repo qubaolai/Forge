@@ -148,7 +148,7 @@ class TurnOrchestrator:
                 })
 
             # 4. 执行
-            runner = self._setup_runner(ctx.agent_mode, system_prompt, body.model_options.model_dump())
+            runner = await self._setup_runner(ctx.agent_mode, system_prompt, body.model_options.model_dump())
             if runner is None:
                 yield AgentEvent("error", {
                     "message": f"暂不支持 agent.mode={ctx.agent_mode!r}, 当前已注册 {supported_modes()}",
@@ -249,7 +249,7 @@ class TurnOrchestrator:
             build_result, system_prompt = await self._assembler.assemble(ctx)
             messages = _inject_partial_into_messages(build_result.messages, prev_state)
 
-            runner = self._setup_runner(ctx.agent_mode, system_prompt, None)
+            runner = await self._setup_runner(ctx.agent_mode, system_prompt, None)
             if runner is None:
                 yield AgentEvent("error", {
                     "message": f"暂不支持 agent.mode={ctx.agent_mode!r}",
@@ -288,11 +288,11 @@ class TurnOrchestrator:
     # ------------------------------------------------------------------
     # _setup_runner: LLM chain + Runner 实例化
     # ------------------------------------------------------------------
-    def _setup_runner(self, agent_mode: str, system_prompt: str, model_options):
+    async def _setup_runner(self, agent_mode: str, system_prompt: str, model_options):
         settings = get_settings()
         provider = model_options.get("provider") if model_options else None
         model = model_options.get("model") if model_options else None
-        llm_chain = build_chain_from_settings(settings, provider=provider, model=model)
+        llm_chain = await build_chain_from_settings(settings, provider=provider, model=model)
 
         runner_cls = get_runner_class(agent_mode)
         if runner_cls is None:

@@ -91,11 +91,11 @@ class _Ctx:
         # 3. LLM chain: build_chain_from_settings 返回的 chain 在 service.py 里被
         #    透传给 Summarizer.__init__; 我们 patch 它返回一个带 primary_spec 的 mock
         if self.llm_init_raises:
-            chain_factory = MagicMock(side_effect=self.llm_init_raises)
+            chain_factory = AsyncMock(side_effect=self.llm_init_raises)
         else:
             mock_chain = MagicMock()
             mock_chain.primary_spec = MagicMock(model="gpt-4o-mini")
-            chain_factory = MagicMock(return_value=mock_chain)
+            chain_factory = AsyncMock(return_value=mock_chain)
         self.patches.append(
             patch(
                 "forge.llm.gateway.build_chain_from_settings",

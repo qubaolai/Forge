@@ -140,4 +140,26 @@ def _app_state(name: str):
     return _dep
 
 
+def get_redis_client(request: Request):
+    """从 app.state 取 RedisClient，缺失时回退全局单例并回填 state。"""
+    from forge.infrastructure.cache.redis_client import RedisClient
+
+    client = getattr(request.app.state, "redis_client", None)
+    if client is None:
+        client = RedisClient.from_settings()
+        request.app.state.redis_client = client
+    return client
+
+
+def get_model_cache(request: Request):
+    """从 app.state 取 ModelConfigCache，缺失时回退全局单例并回填 state。"""
+    from forge.llm.model_config_cache import ModelConfigCache
+
+    cache = getattr(request.app.state, "model_cache", None)
+    if cache is None:
+        cache = ModelConfigCache.get_global(get_redis_client(request))
+        request.app.state.model_cache = cache
+    return cache
+
+
 # _app_state 辅助函数保留，KB 路由通过 request.app.state 手动提取服务实例

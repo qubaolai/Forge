@@ -62,23 +62,45 @@ def build_llm_client(impl: str, api_key: str, client_options: dict | None = None
     return cls(api_key, **(client_options or {}))
 
 
-def build_chain_from_settings(
+async def build_chain_from_settings(
     settings,
     *,
     provider: str | None = None,
     model: str | None = None,
     routing_request: RoutingRequest | None = None,
+    model_cache=None,
 ) -> LLMFallbackChain:
-    """根据 settings 构建 LLM 调用链。
+    """根据 settings + DB 构建 LLM 调用链。
 
     当 settings.llm.providers 有配置时走 YAML 解析，
-    为空时直接从 provider 名 + 环境变量构造（无 YAML 模式）。
+    为空时直接从缓存或环境变量构造（DB 驱动模式）。
+    model_cache 不为 None 时，校验 provider:model 是否已启用。
     """
     from .client_pool import get_llm_pool
     from .fallback import LLMFallbackChain
+    from .model_config_cache import ModelConfigCache
 
     pool = get_llm_pool()
     fallbacks: list = []
+    if model_cache is None:
+        model_cache = ModelConfigCache.get_global()
+    cache_ready = False
+    try:
+        cache_ready = await model_cache.is_ready()
+    except Exception:
+        cache_ready = False
+
+    # 校验模型启用状态
+    if provider and model and model_cache is not None and cache_ready:
+        try:
+            enabled = await model_cache.is_model_enabled(provider, model)
+            if not enabled:
+                raise ValueError(
+                    f"模型 {provider}:{model} 未启用或不存在，请联系管理员在模型管理中启用"
+                )
+        except (TypeError, AttributeError):
+            # model_cache 不是 async 或方法不存在时降级
+            pass
 
     if settings.llm.providers:
         # ── YAML 模式 ──
@@ -87,7 +109,18 @@ def build_chain_from_settings(
             if decision is not None:
                 provider, model = decision.provider, decision.model
 
-        primary_spec = settings.llm.resolve(provider, model)
+        try:
+            primary_spec = _resolve_from_db_or_yaml(
+                settings,
+                provider,
+                model,
+                model_cache if cache_ready else None,
+            )
+        except Exception:
+            if not provider or not model:
+                raise
+            primary_spec = _resolve_from_env(provider, model, settings)
+
         primary_client = pool.get(
             primary_spec.impl, primary_spec.api_key, primary_spec.client_options,
         )
@@ -99,10 +132,16 @@ def build_chain_from_settings(
             except Exception:
                 logger.warning("fallback 装配失败, 跳过: %s:%s", prov, mdl)
     else:
-        # ── 无 YAML 模式: 从 provider 名 + 环境变量直接构造 ──
+        # ── 无 YAML / DB 模式: 从缓存或环境变量构造 ──
         if not provider or not model:
             raise ValueError("未配置 LLM provider 且未传入 provider/model 参数")
-        primary_spec = _resolve_from_env(provider, model, settings)
+        primary_spec = await _resolve_from_cache_or_env(
+            provider,
+            model,
+            settings,
+            model_cache if cache_ready else None,
+            pool,
+        )
         primary_client = pool.get(
             primary_spec.impl, primary_spec.api_key, primary_spec.client_options,
         )
@@ -167,6 +206,103 @@ def _route_primary(settings, request: RoutingRequest):
     if not available:
         return None
     return get_default_router().route(request, available)
+
+
+async def _resolve_from_db_or_yaml(
+    settings, provider: str | None, model: str | None, model_cache=None
+) -> "LLMCallSpec":
+    """优先从 YAML settings.llm.resolve() 或 DB 缓存解析 LLMCallSpec。
+
+    YAML 中能找到 provider:model 就直接用（向后兼容）；
+    找不到时从 model_cache 查 DB 配置构建 LLMCallSpec。
+    """
+    from config.domains.llm import LLMCallSpec
+
+    # 先尝试 YAML
+    try:
+        spec = settings.llm.resolve(provider, model)
+        if spec.model:
+            # 校验模型在数据库中已启用
+            if model_cache is not None and provider and model:
+                try:
+                    if not await model_cache.is_model_enabled(provider, model):
+                        raise ValueError(f"模型 {provider}:{model} 已被禁用")
+                except (TypeError, AttributeError):
+                    pass  # cache 不可用则跳过校验
+            return spec
+    except Exception:
+        pass
+
+    # YAML 找不到，从 DB 缓存解析
+    if model_cache is not None and provider and model:
+        model_detail = await model_cache.get_model_detail(provider, model)
+        if model_detail:
+            provider_info = await model_cache.get_provider(provider) or {}
+            keys = await model_cache.get_keys(provider)
+            api_key = keys[0]["api_key"] if keys else ""
+            extra = model_detail.get("extra_params") or {}
+            return LLMCallSpec(
+                impl=provider_info.get("impl", provider),
+                api_key=api_key,
+                model=model,
+                temperature=extra.get("temperature", 0.7),
+                max_tokens=extra.get("max_tokens", model_detail.get("max_output_tokens", 4096)),
+                top_p=extra.get("top_p"),
+                thinking=extra.get("thinking"),
+                reasoning_effort=model_detail.get("thinking_default") or extra.get("reasoning_effort"),
+                thinking_budget=extra.get("thinking_budget"),
+                top_k=extra.get("top_k"),
+                base_url=provider_info.get("base_url"),
+                timeout=extra.get("timeout", 30),
+            )
+
+    raise ValueError(f"找不到模型配置: provider={provider} model={model}")
+
+
+async def _resolve_from_cache_or_env(
+    provider: str, model: str, settings, model_cache=None, pool=None
+) -> "LLMCallSpec":
+    """DB 缓存或环境变量模式：从缓存或环境变量构造 LLMCallSpec。"""
+    from config.domains.llm import LLMCallSpec
+
+    # 优先从缓存解析
+    if model_cache is not None:
+        try:
+            model_detail = await model_cache.get_model_detail(provider, model)
+            if model_detail:
+                provider_info = await model_cache.get_provider(provider) or {}
+                keys = await model_cache.get_keys(provider)
+                api_key = keys[0]["api_key"] if keys else ""
+                extra = model_detail.get("extra_params") or {}
+                return LLMCallSpec(
+                    impl=provider_info.get("impl", provider),
+                    api_key=api_key,
+                    model=model,
+                    temperature=extra.get("temperature", 0.7),
+                    max_tokens=extra.get("max_tokens", model_detail.get("max_output_tokens", 4096)),
+                )
+        except (TypeError, AttributeError):
+            pass
+
+    # 兜底：环境变量
+    import os
+
+    env_key = f"{provider.upper()}_API_KEY"
+    api_key = os.environ.get(env_key, "")
+    if not api_key and pool is not None:
+        client = pool.get_by_impl(provider)
+        if client is not None:
+            api_key = ""
+        else:
+            raise ValueError(f"环境变量 {env_key} 未设置，且池中无可用 key: provider={provider}")
+
+    return LLMCallSpec(
+        impl=provider,
+        api_key=api_key,
+        model=model,
+        temperature=0.7,
+        max_tokens=4096,
+    )
 
 
 def _autoload() -> None:

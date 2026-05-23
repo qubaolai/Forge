@@ -85,13 +85,10 @@ memory:
   trigger:
     every_n_turns: ${MEMORY_TRIGGER_EVERY_N:10}
 
-# LLM: 支持运行时按 provider + model 两级切换
+# LLM: 供应商 + 模型由数据库管理 (providers / provider_keys / models 表)。
+# 对话时的供应商和模型以前端传递为准，gateway 会校验 DB 中 is_enabled=true。
+# 配置文件中仅保留重试策略和预算配额，不再维护供应商模型列表。
 llm:
-  provider: ${LLM_DEFAULT_PROVIDER:dashscope}
-  default_model: ${LLM_DEFAULT_MODEL:qwen-plus}
-
-  # Fallback 链: 主 provider 失败时按顺序尝试 (provider/model 由 LLM_FALLBACK_CHAIN 控制)
-  fallback_chain: ${LLM_FALLBACK_CHAIN:} # 例: "openai:gpt-4o-mini,deepseek:deepseek-chat"
   max_retries: ${LLM_MAX_RETRIES:3}
   retry_backoff_seconds: ${LLM_RETRY_BACKOFF:1.0}
 
@@ -105,76 +102,8 @@ llm:
     alert_threshold: ${LLM_BUDGET_ALERT:0.8}               # 达到比例打 WARNING
     # user_daily_limits_usd: { "u_xxx": 50.0 }            # 显式 per-user 上限
 
-  providers:
-    dashscope:
-      # 多 key 支持: 用于流量分担 / 限流隔离. 任一非空 key 都会启动期预热.
-      api_keys:
-      - ${DASHSCOPE_API_KEY}
-      - ${DASHSCOPE_API_KEY_2:}
-      key_strategy: round_robin           # round_robin | random | first
-      timeout: 30
-      models:
-      - name: qwen3-max-preview
-        display_name: 通义千问 Max
-        context_window: 32768
-      - name: qwen3.6-plus
-        display_name: 通义千问 qwen3.6-plus
-        context_window: 131072
-      - name: qwen-plus
-        display_name: 通义千问 Plus
-        context_window: 131072
-      - name: qwen3.5-flash
-        display_name: 通义千问 qwen3.5-flash
-        context_window: 8192
-      default_params:
-        temperature: 0.7
-
-    openai:
-      api_keys:
-      - ${OPENAI_API_KEY:}
-      timeout: 30
-      models:
-      - name: gpt-4o
-        display_name: GPT-4o
-        context_window: 128000
-      - name: gpt-4o-mini
-        display_name: GPT-4o mini
-        context_window: 128000
-      default_params:
-        temperature: 0.7
-
-    deepseek:
-      api_keys:
-      - ${DEEPSEEK_API_KEY:}
-      timeout: 30
-      models:
-      - name: deepseek-v4-pro
-        display_name: DeepSeek V4 PRO
-        context_window: 1000000
-      - name: deepseek-v4-flash
-        display_name: DeepSeek V4 flash
-        context_window: 1000000
-      default_params:
-        temperature: 0.7
-
-    anthropic:
-      api_keys:
-      - ${ANTHROPIC_API_KEY:}
-      timeout: 30
-      models:
-      - name: claude-sonnet-4-5
-        display_name: Claude Sonnet 4.5
-        context_window: 200000
-      - name: claude-haiku-4-5
-        display_name: Claude Haiku 4.5
-        context_window: 200000
-      default_params:
-        temperature: 1.0
-        max_tokens: 4096
-
-utility_llm:
-  provider: ${UTILITY_LLM_PROVIDER:dashscope}
-  model: ${UTILITY_LLM_MODEL:qwen3.5-flash}
+  # 兼容性占位: providers 留空，实际供应商/模型全部从 DB 加载
+  providers: {}
 
 # 入库相关
 ingest:
@@ -184,23 +113,12 @@ ingest:
     chunk_size: 500
     chunk_overlap: 50
 
-# Embedding 模型
+# Embedding 模型 — 模型配置从 DB models 表 (model_type=embedding) 加载。
+# 以下为 DB 不可用时的 fallback，正常启动后由 ModelConfigCache 接管。
 embedding:
-  provider: ${EMBEDDING_PROVIDER:dashscope}
-  # Fallback 链: 主 provider 失败时按顺序尝试. 所有 fallback 必须与主 provider
-  # 同 dimension (向量库不兼容跨维度). 留空 = 不启用 fallback.
+  provider: mock
   fallback_chain: []
   providers:
-    dashscope:
-      api_key: ${DASHSCOPE_API_KEY}
-      model: text-embedding-v3
-      dimension: 1024
-      batch_size: 10
-      max_retries: 3
-      retry_backoff: 1.0
-    bge_local:
-      model_path: BAAI/bge-m3
-      device: cpu
     mock:
       dimension: 768
 
@@ -223,25 +141,11 @@ bm25_store:
     type: jieba
     user_dict: null
 
-# Reranker
+# Reranker — 模型配置从 DB models 表 (model_type=reranker) 加载。
+# 以下为 DB 不可用时的 fallback。
 reranker:
-  provider: ${RERANKER_PROVIDER:dashscope}
+  provider: mock
   providers:
-    dashscope:
-      api_key: ${DASHSCOPE_API_KEY}
-      model: gte-rerank
-      timeout: 5.0
-      truncation:
-        strategy: tail
-        max_doc_chars: 4000
-        monitor_threshold: 0.1
-    bge_local:
-      model_path: BAAI/bge-reranker-v2-m3
-      device: cpu
-      truncation:
-        strategy: tail
-        max_doc_chars: 4000
-        monitor_threshold: 0.1
     mock: {}
 
 # 检索流程

@@ -38,7 +38,7 @@ class BigIntPKMixin:
     id: Mapped[int] = mapped_column(
         BigInteger,
         primary_key=True,
-        autoincrement=False,
+        autoincrement=True,
         default=new_snowflake_id,
         comment="Snowflake 主键",
     )

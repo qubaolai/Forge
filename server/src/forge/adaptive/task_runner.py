@@ -159,7 +159,7 @@ async def run_node_with_react(
             else getattr(profiles, node.model_profile, None)
         )
     try:
-        chain = build_chain_from_settings(settings, model=target_model)
+        chain = await build_chain_from_settings(settings, model=target_model)
     except Exception as exc:  # noqa: BLE001
         raise TaskRunnerError(f"LLM chain 构造失败: {exc}") from exc
 

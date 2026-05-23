@@ -39,16 +39,16 @@ class RetrieverFactory:
         child_store: ChildVectorStore,
         bm25_store: BM25Store,
         embedder: Embedder,
+        reranker=None,
     ) -> ParentChildRetriever:
         """
         Args:
             settings:    已加载的 Settings 对象. 期望含
                          retrieval / reranker 字段.
-            db:          MySQL Database 句柄, retriever 内部按需开 UoW
-                         读父块原文.
             child_store: Chroma 向量库, 由 bootstrap 创建.
             bm25_store:  SQLite FTS5 BM25 索引, 由 bootstrap 创建.
             embedder:    embedding 模型, 由 bootstrap 创建.
+            reranker:    可选，预构建的 Reranker 实例。传入后跳过 settings 构建。
         """
         rcfg = settings.retrieval
 
@@ -81,13 +81,15 @@ class RetrieverFactory:
         # ----- 3. Aggregator -----
         aggregator = AggregatorFactory.create(rcfg.aggregation.score_agg)
 
-        # ----- 4. Reranker (按需, 走模型网关池化) -----
-        reranker = None
-        rerank_enabled = bool(rcfg.rerank.enabled)
-        if rerank_enabled:
-            reranker = build_reranker_from_settings(settings)
+        # ----- 4. Reranker (优先用传入实例，否则走 settings 构建) -----
+        if reranker is None:
+            rerank_enabled = bool(rcfg.rerank.enabled)
+            if rerank_enabled:
+                reranker = build_reranker_from_settings(settings)
+            else:
+                logger.info("rerank 流程已禁用 (retrieval.rerank.enabled=false)")
         else:
-            logger.info("rerank 流程已禁用 (retrieval.rerank.enabled=false)")
+            rerank_enabled = True
 
         # ----- 5. RetrievalConfig -----
         config = RetrievalConfig(

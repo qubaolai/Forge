@@ -55,22 +55,13 @@ memory:
     every_n_turns: ${MEMORY_TRIGGER_EVERY_N:5}
 
 llm:
-  provider: ${LLM_DEFAULT_PROVIDER:dashscope}
-  default_model: ${LLM_DEFAULT_MODEL:qwen-plus}
-  fallback_chain: ${LLM_FALLBACK_CHAIN:}
-  max_retries: 2
+  max_retries: 3
   retry_backoff_seconds: 0.5
-
   budget:
     global_daily_limit_usd: ${LLM_BUDGET_GLOBAL_USD:}
     default_user_daily_limit_usd: ${LLM_BUDGET_DEFAULT_USER_USD:}
     alert_threshold: ${LLM_BUDGET_ALERT:0.8}
-
-  # providers 在 sys_config.yaml 中定义，dev 环境继承
-
-utility_llm:
-  provider: ${UTILITY_LLM_PROVIDER:dashscope}
-  model: ${UTILITY_LLM_MODEL:qwen3.5-flash}
+  providers: {}
 
 ingest:
   documents_path: data/documents
@@ -80,18 +71,8 @@ ingest:
     chunk_overlap: 50
 
 embedding:
-  provider: ${EMBEDDING_PROVIDER:dashscope}
+  provider: mock
   providers:
-    dashscope:
-      api_key: ${DASHSCOPE_API_KEY}
-      model: tongyi-embedding-vision-plus-2026-03-06
-      dimension: 1024
-      batch_size: 10
-      max_retries: 3
-      retry_backoff: 1.0
-    bge_local:
-      model_path: BAAI/bge-m3
-      device: cpu
     mock:
       dimension: 768
 
@@ -113,23 +94,8 @@ bm25_store:
     user_dict: null
 
 reranker:
-  provider: ${RERANKER_PROVIDER:dashscope}
+  provider: mock
   providers:
-    dashscope:
-      api_key: ${DASHSCOPE_API_KEY}
-      model: gte-rerank
-      timeout: 5.0
-      truncation:
-        strategy: tail
-        max_doc_chars: 4000
-        monitor_threshold: 0.1
-    bge_local:
-      model_path: BAAI/bge-reranker-v2-m3
-      device: cpu
-      truncation:
-        strategy: tail
-        max_doc_chars: 4000
-        monitor_threshold: 0.1
     mock: {}
 
 retrieval:

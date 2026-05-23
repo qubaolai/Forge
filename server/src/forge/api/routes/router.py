@@ -9,11 +9,14 @@ from fastapi import APIRouter
 
 from forge.api.dependencies import AuthenticatedUser
 from forge.api.routes.v1 import (
+    admin,
     api_keys,
     artifacts,
     auth,
     chat,
     knowledge_bases,
+    models,
+    providers,
     runs,
     sessions,
     system,
@@ -34,6 +37,9 @@ v1.include_router(artifacts.router)
 v1.include_router(users.router)
 v1.include_router(api_keys.router)
 v1.include_router(knowledge_bases.router)
+v1.include_router(models.router, tags=["models"])
+v1.include_router(providers.router, tags=["providers"])
+v1.include_router(admin.router)
 
 
 @v1.get("/tools", tags=["tools"])

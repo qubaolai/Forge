@@ -6,6 +6,7 @@ Redis 不可用时自动降级为 no-op，所有操作返回 None/False。
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 from config.settings import get_settings
@@ -22,6 +23,9 @@ class RedisClient:
         data = await client.get_json("key")  # -> dict | None
     """
 
+    _instances: dict[str, "RedisClient"] = {}
+    _instances_lock = threading.Lock()
+
     def __init__(self, redis_url: str) -> None:
         self._redis_url = redis_url
         self._redis: Any = None
@@ -32,9 +36,19 @@ class RedisClient:
         settings = get_settings()
         redis_cfg = getattr(settings, "redis", None)
         if redis_cfg is None:
-            return cls("")
+            return cls._get_or_create("")
         url = getattr(redis_cfg, "url", "")
-        return cls(url)
+        return cls._get_or_create(url)
+
+    @classmethod
+    def _get_or_create(cls, redis_url: str) -> RedisClient:
+        with cls._instances_lock:
+            inst = cls._instances.get(redis_url)
+            if inst is not None:
+                return inst
+            inst = cls(redis_url)
+            cls._instances[redis_url] = inst
+            return inst
 
     async def _ensure(self) -> Any:
         if self._redis is not None:
@@ -42,6 +56,7 @@ class RedisClient:
 
         if not self._redis_url:
             self._available = False
+            logger.warning("Redis 未配置 URL，缓存不可用")
             return None
 
         try:
@@ -57,10 +72,14 @@ class RedisClient:
             await self._redis.ping()
             self._available = True
             logger.info("Redis 连接就绪: %s", self._redis_url)
-        except Exception:
+        except ModuleNotFoundError:
             self._available = False
             self._redis = None
-            logger.debug("Redis 不可用，降级直连 MySQL: %s", self._redis_url)
+            logger.warning("redis-py 未安装，缓存不可用。安装: poetry add redis")
+        except Exception as e:
+            self._available = False
+            self._redis = None
+            logger.warning("Redis 连接失败 url=%s err=%s", self._redis_url, e)
 
         return self._redis
 
@@ -68,14 +87,27 @@ class RedisClient:
     def available(self) -> bool:
         return self._available
 
+    async def ping(self) -> bool:
+        r = await self._ensure()
+        if r is None:
+            return False
+        try:
+            await r.ping()
+            self._available = True
+            return True
+        except Exception as e:
+            self._available = False
+            logger.warning("Redis PING 失败 err=%s", e)
+            return False
+
     async def get(self, key: str) -> str | None:
         r = await self._ensure()
         if r is None:
             return None
         try:
             return await r.get(key)
-        except Exception:
-            logger.debug("Redis GET 失败 key=%s", key, exc_info=True)
+        except Exception as e:
+            logger.warning("Redis GET 失败 key=%s err=%s", key, e)
             return None
 
     async def set(self, key: str, value: str, ttl: int = 3600) -> bool:
@@ -83,10 +115,13 @@ class RedisClient:
         if r is None:
             return False
         try:
-            await r.setex(key, ttl, value)
+            if ttl > 0:
+                await r.setex(key, ttl, value)
+            else:
+                await r.set(key, value)
             return True
-        except Exception:
-            logger.debug("Redis SET 失败 key=%s", key, exc_info=True)
+        except Exception as e:
+            logger.warning("Redis SET 失败 key=%s err=%s", key, e)
             return False
 
     async def get_json(self, key: str) -> dict | list | None:
@@ -112,9 +147,36 @@ class RedisClient:
         try:
             await r.delete(*keys)
             return True
-        except Exception:
-            logger.debug("Redis DEL 失败 keys=%s", keys, exc_info=True)
+        except Exception as e:
+            logger.warning("Redis DEL 失败 keys=%s err=%s", keys, e)
             return False
+
+    async def delete_prefix(self, prefix: str) -> int:
+        """删除指定前缀的所有 key，返回删除数量。"""
+        r = await self._ensure()
+        if r is None:
+            return 0
+        pattern = f"{prefix}*"
+        cursor: int | str = 0
+        to_delete: list[str] = []
+        try:
+            while True:
+                cursor, batch = await r.scan(cursor=cursor, match=pattern, count=200)
+                if batch:
+                    to_delete.extend(batch)
+                if cursor in (0, "0"):
+                    break
+            if not to_delete:
+                return 0
+            deleted = 0
+            chunk_size = 200
+            for idx in range(0, len(to_delete), chunk_size):
+                chunk = to_delete[idx : idx + chunk_size]
+                deleted += int(await r.delete(*chunk))
+            return deleted
+        except Exception as e:
+            logger.warning("Redis 按前缀删除失败 prefix=%s err=%s", prefix, e)
+            return 0
 
     # ---- Hash 操作 ----
     async def hgetall(self, key: str) -> dict[str, str] | None:
@@ -123,18 +185,23 @@ class RedisClient:
             return None
         try:
             return await r.hgetall(key)
-        except Exception:
+        except Exception as e:
+            logger.warning("Redis HGETALL 失败 key=%s err=%s", key, e)
             return None
 
     async def hset(self, key: str, mapping: dict, ttl: int = 3600) -> bool:
         r = await self._ensure()
         if r is None:
             return False
+        if not mapping:
+            return True
         try:
             await r.hset(key, mapping=mapping)
-            await r.expire(key, ttl)
+            if ttl > 0:
+                await r.expire(key, ttl)
             return True
-        except Exception:
+        except Exception as e:
+            logger.warning("Redis HSET 失败 key=%s err=%s", key, e)
             return False
 
     # ---- List 操作 ----

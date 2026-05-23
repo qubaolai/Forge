@@ -15,7 +15,7 @@ class ProviderOrm(Base, BigIntPKMixin):
         String(40), unique=True, nullable=False, default=lambda: new_id("prov"), comment="业务ID: prov_xxx"
     )
     name: Mapped[str] = mapped_column(String(64), nullable=False, comment="anthropic / openai / deepseek / dashscope")
-    impl: Mapped[str] = mapped_column(String(64), nullable=False, comment="SDK 实现类名")
+    impl: Mapped[str] = mapped_column(String(64), nullable=True, comment="SDK 实现类名")
     base_url: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="API 地址, NULL=官方默认")
     is_enabled: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

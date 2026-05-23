@@ -79,56 +79,9 @@ memory:
     every_n_turns: 999
 
 llm:
-  provider: ${LLM_DEFAULT_PROVIDER:dashscope}
-  default_model: ${LLM_DEFAULT_MODEL:qwen-plus}
-  fallback_chain: ""
   max_retries: 1
   retry_backoff_seconds: 0.0
-
-  # 测试环境 providers: mock 密钥 + 短超时 (精简版)
-  providers:
-    dashscope:
-      api_keys: ["${DASHSCOPE_API_KEY:sk-test}"]
-      timeout: 10
-      models:
-        - name: qwen-plus
-          display_name: 通义千问 Plus
-          context_window: 131072
-      default_params:
-        temperature: 0.7
-    openai:
-      api_keys: ["${OPENAI_API_KEY:sk-test}"]
-      timeout: 10
-      models:
-        - name: gpt-4o-mini
-          display_name: GPT-4o mini
-          context_window: 128000
-      default_params:
-        temperature: 0.7
-    deepseek:
-      api_keys: ["${DEEPSEEK_API_KEY:sk-test}"]
-      timeout: 10
-      models:
-        - name: deepseek-v4-pro
-          display_name: DeepSeek V4 PRO
-          context_window: 1000000
-      default_params:
-        temperature: 0.7
-        thinking: false
-    anthropic:
-      api_keys: ["${ANTHROPIC_API_KEY:sk-test}"]
-      timeout: 10
-      models:
-        - name: claude-sonnet-4-6
-          display_name: Claude Sonnet 4.6
-          context_window: 200000
-      default_params:
-        temperature: 1.0
-        max_tokens: 4096
-
-utility_llm:
-  provider: dashscope
-  model: qwen3.5-flash
+  providers: {}
 
 ingest:
   documents_path: data/documents
@@ -141,16 +94,6 @@ ingest:
 embedding:
   provider: mock
   providers:
-    dashscope:
-      api_key: ${DASHSCOPE_API_KEY:sk-test-key}
-      model: text-embedding-v3
-      dimension: 1024
-      batch_size: 10
-      max_retries: 1
-      retry_backoff: 0.0
-    bge_local:
-      model_path: BAAI/bge-m3
-      device: cpu
     mock:
       dimension: 768
 
@@ -175,21 +118,6 @@ bm25_store:
 reranker:
   provider: mock
   providers:
-    dashscope:
-      api_key: ${DASHSCOPE_API_KEY:sk-test-key}
-      model: gte-rerank
-      timeout: 5.0
-      truncation:
-        strategy: tail
-        max_doc_chars: 4000
-        monitor_threshold: 0.1
-    bge_local:
-      model_path: BAAI/bge-reranker-v2-m3
-      device: cpu
-      truncation:
-        strategy: tail
-        max_doc_chars: 4000
-        monitor_threshold: 0.1
     mock: {}
 
 retrieval:

@@ -90,7 +90,7 @@ class SummaryService:
         try:
             provider = settings.memory.summarizer.provider or None
             model = settings.memory.summarizer.model or None
-            chain = build_chain_from_settings(settings, provider=provider, model=model)
+            chain = await build_chain_from_settings(settings, provider=provider, model=model)
             used_model = chain.primary_spec.model
         except Exception as exc:
             raise InfrastructureError(f"Summarizer LLM 初始化失败: {exc}") from exc

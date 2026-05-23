@@ -170,7 +170,7 @@ def build_real_planner_callable(
         try:
             settings = get_settings()
             target_model = _resolve_model_profile(settings, model_profile)
-            chain = build_chain_from_settings(settings, model=target_model)
+            chain = await build_chain_from_settings(settings, model=target_model)
         except Exception as exc:
             logger.exception("Planner LLM chain 构造失败")
             raise PlannerError(f"Planner LLM chain 构造失败: {exc}") from exc

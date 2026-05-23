@@ -103,6 +103,54 @@ class LLMClientPool:
             self._keys[impl] = [k for k in keys if k.api_key != api_key]
         logger.info("LLM client 失效: impl=%s key=%s***", impl, api_key[:6])
 
+    def reconcile_provider(
+        self, impl: str, new_keys: list[dict], client_options: dict | None = None
+    ) -> dict:
+        """用 DB 中的 key 列表同步池状态：移除过期的，新增缺失的。
+
+        Args:
+            impl: provider 实现名
+            new_keys: [{"api_key": "sk-xxx", "weight": 1}, ...]  明文 key 列表
+            client_options: 建 client 用的参数
+
+        Returns:
+            {"added": N, "removed": N}
+        """
+        with self._lock:
+            existing_entries = self._keys.get(impl, [])
+            existing_keys = {e.api_key for e in existing_entries}
+            new_key_set = {k["api_key"] for k in new_keys}
+
+            # 移除过期的
+            removed = 0
+            for old_key in existing_keys - new_key_set:
+                self._instances.pop((impl, old_key), None)
+                removed += 1
+            self._keys[impl] = [e for e in existing_entries if e.api_key in new_key_set]
+
+        for old_key in existing_keys - new_key_set:
+            logger.info("LLM client reconcile 移除: impl=%s key=%s***", impl, old_key[:6])
+
+        # 新增缺失的（在锁外 warm，避免持有锁时做 HTTP 调用）
+        added = 0
+        for k in new_keys:
+            if k["api_key"] not in existing_keys:
+                self.register_key(impl, k["api_key"], weight=k.get("weight", 1))
+                try:
+                    self.warm(impl, k["api_key"], client_options or {})
+                    added += 1
+                except Exception:
+                    logger.exception(
+                        "LLM client reconcile 预热失败: impl=%s fingerprint=%s",
+                        impl, k.get("fingerprint", "?")[:6],
+                    )
+
+        if added or removed:
+            logger.info(
+                "LLM client reconcile 完成: impl=%s added=%d removed=%d", impl, added, removed
+            )
+        return {"added": added, "removed": removed}
+
     def clear(self) -> None:
         with self._lock:
             count = len(self._instances)

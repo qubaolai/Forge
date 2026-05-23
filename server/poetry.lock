@@ -363,7 +363,7 @@ trio = ["trio (>=0.32.0)"]
 name = "async-timeout"
 version = "5.0.1"
 description = "Timeout context manager for asyncio programs"
-optional = true
+optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 markers = "(extra == \"memory\" or extra == \"all\") and python_full_version < \"3.11.3\""
@@ -2224,7 +2224,7 @@ tests = ["pytest"]
 name = "hiredis"
 version = "3.3.1"
 description = "Python wrapper for hiredis"
-optional = true
+optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 markers = "extra == \"memory\""
@@ -6088,7 +6088,7 @@ tqdm = "*"
 name = "redis"
 version = "5.3.1"
 description = "Python client for Redis database and key-value store"
-optional = true
+optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 markers = "extra == \"memory\" or extra == \"all\""
@@ -8420,4 +8420,4 @@ rag = ["chromadb", "dashscope", "docling", "jieba", "sentence-transformers"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "a18e3c88ab34fb7a49b88d9ac156e669db1b9c72269feea757ea73e6f84d41dd"
+content-hash = "f45f7cdf1a6ec48bf732cbfcfe22af748feb88f9f3f72bc602e8a0478c44c51b"

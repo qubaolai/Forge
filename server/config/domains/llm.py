@@ -243,7 +243,7 @@ class LLMConfig(BaseModel):
     """LLM 段配置: 多 provider, 每个 provider 下多个 model + 多 api_key."""
     model_config = {"extra": "forbid"}
 
-    provider: str
+    provider: str = ""
     default_model: str | None = None
     providers: dict[str, LLMProviderConfig] = Field(default_factory=dict)
     fallback_chain: str = ""

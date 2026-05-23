@@ -96,7 +96,7 @@ def build_real_discovery_callable(
                 if isinstance(profiles, dict)
                 else getattr(profiles, model_profile, None)
             )
-        chain = build_chain_from_settings(settings, provider=None, model=target_model)
+        chain = await build_chain_from_settings(settings, provider=None, model=target_model)
 
         all_tools = ToolRegistry.get_all()
         allowed_names = set(DEFAULT_DISCOVERY_TOOLS)

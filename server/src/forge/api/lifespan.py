@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 import os
@@ -111,68 +112,67 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:  # noqa: BLE001
         logger.exception("memory hooks 安装失败, 摘要任务不会被派发")
 
-    # 3. LLM 预热: 遍历所有配置 (provider, api_key) 组合
-    #    - 每个 (impl, api_key) 都建一个 SDK client, 存进 LLMClientPool
-    #    - 单个 api_key 失败不阻断, 只记录
-    #    - 整体失败仍允许服务启动 (首次调用时再尝试)
-    from forge.llm.client_pool import get_llm_pool
+    # 3. Redis + ModelConfigCache: 从 DB 全量加载供应商和 Key 到 Redis
+    from forge.infrastructure.cache.redis_client import RedisClient
 
-    import os
+    redis_client = RedisClient.from_settings()
+    app.state.redis_client = redis_client
+
+    from forge.llm.model_config_cache import ModelConfigCache
+    from forge.llm.model_sync_service import ModelSyncService
+
+    model_cache = ModelConfigCache.get_global(redis_client)
+    model_sync = ModelSyncService(model_cache)
+    from forge.infrastructure.database.database import get_session_factory
+
+    session_factory = get_session_factory()
+    try:
+        async with session_factory() as cache_db:
+            await model_cache.reload_all(cache_db)
+        logger.info("ModelConfigCache 加载完成: ready=%s", await model_cache.is_ready())
+    except Exception:
+        logger.exception("ModelConfigCache 加载失败, LLM 将不可用")
+
+    providers = await model_cache.get_providers_enabled() if await model_cache.is_ready() else []
+
+    # 3.1 模型目录同步: 调供应商 API 拉模型列表 → 写 DB → 刷 Redis
+    #    ★ 必须在 LLM 预热之前执行，确保 models 表有数据
+    try:
+        async with session_factory() as sync_db:
+            sync_results = await model_sync.sync_all_enabled(sync_db)
+        providers = await model_cache.get_providers_enabled() if await model_cache.is_ready() else []
+        logger.info(
+            "模型目录同步完成 providers=%d details=%s",
+            len(sync_results),
+            [r.to_dict() for r in sync_results],
+        )
+    except Exception:
+        logger.exception("模型目录整体同步失败")
+    logger.info("模型目录就绪: providers=%s", [p["name"] for p in providers] if providers else "[]")
+
+    # 3.2 LLM 预热: 从 ModelConfigCache 读取启用的供应商和 Key
+    #    ★ 必须在模型同步之后执行，确保缓存中已有 keys 和 models
+    from forge.llm.client_pool import get_llm_pool
 
     llm_pool = get_llm_pool()
     warmed, failed = 0, 0
-    if settings.llm.providers:
-        for provider_name, pcfg in settings.llm.providers.items():
-            impl = pcfg.impl or provider_name
-            client_options = {"base_url": pcfg.base_url, "timeout": pcfg.timeout}
-            for api_key in pcfg.api_keys:
-                if not api_key:
-                    continue
-                try:
-                    llm_pool.warm(impl, api_key, client_options)
-                    llm_pool.register_key(impl, api_key)
-                    warmed += 1
-                except Exception:
-                    logger.exception("LLM 预热失败: impl=%s key=%s***", impl, api_key[:6])
-                    failed += 1
-    else:
-        # 无 YAML 模式: 从环境变量加载 key
-        for impl in ("anthropic", "deepseek", "dashscope", "openai"):
-            env_key = f"{impl.upper()}_API_KEY"
-            api_key = os.environ.get(env_key, "")
-            if api_key:
-                try:
-                    llm_pool.warm(impl, api_key)
-                    llm_pool.register_key(impl, api_key)
-                    warmed += 1
-                except Exception:
-                    logger.exception("LLM 预热失败: impl=%s", impl)
-                    failed += 1
+    for p in providers:
+        impl = p.get("impl") or p["name"]
+        client_options = {"base_url": p.get("base_url"), "timeout": p.get("timeout", 30)}
+        keys = await model_cache.get_keys(p["name"])
+        for key_data in keys:
+            api_key = key_data.get("api_key", "")
+            if not api_key:
+                continue
+            try:
+                llm_pool.warm(impl, api_key, client_options)
+                llm_pool.register_key(impl, api_key, weight=key_data.get("weight", 1))
+                warmed += 1
+            except Exception:
+                logger.exception("LLM 预热失败: impl=%s fingerprint=%s", impl, key_data.get("fingerprint", "?"))
+                failed += 1
     logger.info("LLM 池预热完成: 成功=%d 失败=%d 池容量=%d", warmed, failed, llm_pool.size())
     app.state.llm_pool = llm_pool
-
-    # 3.1 模型目录: 从各供应商 API 获取模型列表 + 能力元数据
-    from forge.llm.model_catalog import init_model_catalog
-
-    catalog = init_model_catalog()
-    catalog_providers: list[dict] = []
-    if settings.llm.providers:
-        for pname, pcfg in settings.llm.providers.items():
-            keys = pcfg.api_keys or []
-            catalog_providers.append({
-                "name": pname, "impl": pcfg.impl or pname,
-                "api_key": keys[0] if keys else "", "base_url": pcfg.base_url,
-            })
-    else:
-        # 无 YAML 模式: 从 @register_llm 注册表 + 环境变量获取
-        from forge.llm.gateway import list_providers as list_registered
-        for pname in list_registered():
-            catalog_providers.append({
-                "name": pname, "impl": pname,
-                "api_key": "", "base_url": None,
-            })
-    await catalog.refresh(catalog_providers)
-    logger.info("模型目录就绪: providers=%s", catalog.list_providers())
 
     # 3.2 CostTracker: 加载 budget 配置 + baseline hydrate
     #   - configure_budget 把 settings.llm.budget 推到 tracker (硬: 配错则启动失败)
@@ -220,8 +220,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:  # noqa: BLE001
         logger.exception("CostTracker budget 配置失败, 预算检查降级为 no-op")
 
+    # 3.3 启动后台模型同步任务（每 N 分钟从供应商 API 同步模型列表）
+    _sync_interval_min = int(os.environ.get("MODEL_SYNC_INTERVAL_MIN", "60"))
+    app.state.model_cache = model_cache
+    app.state.model_sync_service = model_sync
+
+    async def _background_sync() -> None:
+        await asyncio.sleep(300)  # 启动后 5 分钟首次同步
+        while True:
+            try:
+                from forge.infrastructure.database.database import get_session_factory
+                async with get_session_factory()() as sync_db:
+                    results = await model_sync.sync_all_enabled(sync_db)
+                logger.info("后台模型同步完成: providers=%d", len(results))
+            except Exception:
+                logger.debug("后台模型同步异常", exc_info=True)
+            await asyncio.sleep(_sync_interval_min * 60)
+
+    app.state._sync_task = asyncio.create_task(_background_sync())
+    logger.info("后台模型同步任务已启动 interval_min=%d", _sync_interval_min)
+
     # 4. RAG 组件 (软: 失败跳过, 除非 STRICT_RAG=true)
-    _setup_rag_components(app, settings)
+    await _setup_rag_components(app, settings, model_cache)
 
     # 5. N17: 清理 stale forge worktree (软: 失败仅 WARN)
     try:
@@ -236,6 +256,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         # ---------- 关闭 ----------
         logger.info("服务关闭中...")
+
+        # 停止后台模型同步任务
+        sync_task = getattr(app.state, "_sync_task", None)
+        if sync_task:
+            sync_task.cancel()
+            try:
+                await sync_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("后台模型同步任务已停止")
 
         if hasattr(app.state, "llm_pool"):
             try:
@@ -302,7 +332,7 @@ def _cleanup_stale_worktrees(*, ttl_seconds: int = 24 * 3600) -> None:
         logger.info("已清理 stale worktree 数量=%d ttl_h=%.1f", removed, ttl_seconds / 3600)
 
 
-def _setup_rag_components(app, settings) -> None:
+async def _setup_rag_components(app, settings, model_cache=None) -> None:
     """装配 RAG 栈 (tokenizer / embedder / vector_store / bm25 / retriever).
 
     任一步骤失败:
@@ -333,20 +363,36 @@ def _setup_rag_components(app, settings) -> None:
     except Exception as e:  # noqa: BLE001
         _fail("tokenizer", e)
 
-    # 4b. Embedder (走模型网关: 池化 + 可选 fallback chain)
+    # 4b. Embedder: 优先从 DB 读取 embedding 类型模型配置，YAML 作为 fallback
     embedder = None
     try:
-        from forge.retrieval.embedders.factory import (
-            build_embedder_from_settings,
-        )
+        from forge.retrieval.embedders.factory import EmbedderFactory
 
-        embedder = build_embedder_from_settings(settings)
+        if model_cache is not None and model_cache.ready:
+            embedding_models = await model_cache.get_models_by_type("embedding")
+            if embedding_models:
+                # 使用第一个启用的 embedding 模型的 extra_params 构造 config
+                em = embedding_models[0]
+                config = em.get("extra_params") or {}
+                provider_name = em.get("name")
+                # 从 provider name 推断 provider impl（优先用 model 配置里的信息）
+                provider = (em.get("extra_params") or {}).get("provider") or "dashscope"
+                logger.info(
+                    "Embedder 从 DB 加载: provider=%s model=%s extra_params=%s",
+                    provider, provider_name, list(config.keys()),
+                )
+                embedder = EmbedderFactory.create(provider, config)
+            else:
+                # fallback 到 YAML settings
+                from forge.retrieval.embedders.factory import build_embedder_from_settings
+                embedder = build_embedder_from_settings(settings)
+                logger.info("Embedder 从 YAML 加载 (DB 中无 embedding 模型)")
+        else:
+            from forge.retrieval.embedders.factory import build_embedder_from_settings
+            embedder = build_embedder_from_settings(settings)
+            logger.info("Embedder 从 YAML 加载 (cache 不可用)")
+
         app.state.embedder = embedder
-        logger.info(
-            "Embedder 就绪: provider=%s fallbacks=%s",
-            settings.embedding.provider,
-            getattr(settings.embedding, "fallback_chain", []) or [],
-        )
     except Exception as e:  # noqa: BLE001
         _fail("embedder", e)
 
@@ -381,7 +427,23 @@ def _setup_rag_components(app, settings) -> None:
     except Exception as e:  # noqa: BLE001
         _fail("bm25_store", e)
 
-    # 4e. Retriever (依赖 vector_store / bm25_store / embedder)
+    # 4e. Reranker: 优先从 DB 读取 reranker 类型模型，YAML 作为 fallback
+    db_reranker = None
+    try:
+        if model_cache is not None and model_cache.ready:
+            reranker_models = await model_cache.get_models_by_type("reranker")
+            if reranker_models:
+                from forge.retrieval.rerankers.factory import RerankerFactory
+
+                rm = reranker_models[0]
+                config = rm.get("extra_params") or {}
+                provider = (rm.get("extra_params") or {}).get("provider") or "dashscope"
+                db_reranker = RerankerFactory.create(provider, config)
+                logger.info("Reranker 从 DB 加载: provider=%s model=%s", provider, rm.get("name"))
+    except Exception:
+        logger.debug("Reranker DB 加载失败, 将降级到 YAML", exc_info=True)
+
+    # 4f. Retriever (依赖 vector_store / bm25_store / embedder)
     try:
         if embedder is None or vector_store is None or bm25_store is None:
             raise RuntimeError("retriever 需要 embedder / vector_store / bm25_store 全部就绪")
@@ -392,6 +454,7 @@ def _setup_rag_components(app, settings) -> None:
             child_store=vector_store,
             bm25_store=bm25_store,
             embedder=embedder,
+            reranker=db_reranker,
         )
         app.state.retriever = retriever
         # 同步发布到 retrieval 模块级单例, 供 knowledge_search 等工具读取
@@ -402,7 +465,7 @@ def _setup_rag_components(app, settings) -> None:
     except Exception as e:  # noqa: BLE001
         _fail("retriever", e)
 
-    # 4f. 文件存储 + KbIngestService + KbService
+    # 4g. 文件存储 + KbIngestService + KbService
     # 上传 API 需要这三个组件; 任一缺失则 KB 路由不可用 (路由内会报错).
     try:
         if embedder is None or vector_store is None or bm25_store is None:
