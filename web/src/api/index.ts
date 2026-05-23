@@ -108,3 +108,21 @@ export const auditApi = {
   list: (params: PaginationParams & { user_id?: string; action?: string }) =>
     apiClient.get<PaginatedData<AuditLog>>('/audit-logs', { params }),
 };
+
+export interface ModelInfo {
+  name: string;
+  display_name: string;
+  context_window: number;
+  supports_tools: boolean;
+  supports_images: boolean;
+  thinking: { type: string; options?: string[]; default?: string } | null;
+}
+
+export const systemApi = {
+  models: (provider?: string) =>
+    apiClient.get<{
+      providers?: string[];
+      models?: ModelInfo[];
+      provider?: string;
+    }>('/models', { params: provider ? { provider } : undefined }),
+};

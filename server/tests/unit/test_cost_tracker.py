@@ -6,7 +6,7 @@ import logging
 
 import pytest
 
-from forge.api.middleware.tracing import user_id_scope
+from forge.core.request_context import user_id_scope
 from forge.llm.cost_tracker import (
     BudgetConfig,
     CostTracker,

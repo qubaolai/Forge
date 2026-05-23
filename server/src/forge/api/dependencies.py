@@ -1,26 +1,20 @@
-"""依赖注入.
+"""依赖注入。
 
-认证模式 (三套兼容):
+认证模式 (两套兼容):
     - ``AuthenticatedUser`` (JWT, 用于 Web / 多端登录场景)
         客户端从 ``/auth/login`` 拿 access_token, 后续 ``Authorization: Bearer ...``
         进程内 ``UserCache`` (TTL) 减轻 DB 压力.
-    - ``CurrentUser`` (本地 token, 单机 CLI 场景)
-        若 ``~/.assistant/local_token`` 存在, 强校验 ``X-Local-Token`` header;
-        否则放行, 返回固定 ``LocalUser``.
     - ``ApiKeyUser`` (API Key, 用于 CLI / 第三方工具分机部署)
         客户端在 Web UI 或 CLI 创建 API Key 后, 请求带 ``X-API-Key`` header.
         Key 的 SHA256 哈希存库, 明文仅在创建时返回一次.
 
-三者并存: 路由按场景选其中一个. ``AdminUser`` 走 ``CurrentUser`` 链 + 角色校验.
+两者并存: 路由按场景选其中一个.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Annotated
 
-from config import paths
 from fastapi import Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,45 +60,8 @@ async def _get_jwt_current_user(
 AuthenticatedUser = Annotated[UserOrm, Depends(_get_jwt_current_user)]
 
 
-# ---------- 本地单用户 (CLI / 本机) ----------
-@dataclass(frozen=True)
-class LocalUser:
-    """单机模式的固定本地用户."""
-
-    id: str = "local"
-    email: str = "local@localhost"
-    name: str = "Local User"
-    avatar_url: str | None = None
-    role: str = "owner"
-    status: str = "active"
-
-
-def _read_local_token() -> str | None:
-    """读取本机 token. 缺失时返回 None (表示不强制 header)."""
-    token_path: Path = paths.local_token_path()
-    if not token_path.exists():
-        return None
-    try:
-        token = token_path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    return token or None
-
-
-async def _get_local_user(
-    x_local_token: Annotated[str | None, Header(alias="X-Local-Token")] = None,
-) -> LocalUser:
-    expected = _read_local_token()
-    if expected and x_local_token != expected:
-        raise Unauthorized("X-Local-Token 无效", code=40120)
-    return LocalUser()
-
-
-CurrentUser = Annotated[LocalUser, Depends(_get_local_user)]
-
-
-# ---------- 管理员 ----------
-async def _require_admin(user: CurrentUser) -> LocalUser:
+# ---------- 管理员 (owner / admin 角色) ----------
+async def _require_admin(user: AuthenticatedUser) -> UserOrm:
     from forge.core.exceptions import Forbidden
 
     if user.role not in ("owner", "admin"):
@@ -112,7 +69,7 @@ async def _require_admin(user: CurrentUser) -> LocalUser:
     return user
 
 
-AdminUser = Annotated[LocalUser, Depends(_require_admin)]
+AdminUser = Annotated[UserOrm, Depends(_require_admin)]
 
 
 # ---------- API Key 认证 (CLI / 第三方工具分机部署) ----------
@@ -123,6 +80,7 @@ async def _get_api_key_user(
     """从 X-API-Key header 解析并验证 API Key，返回关联用户。
 
     Key 在库中存 SHA256 哈希，明文仅在创建时返回一次。
+    user_id 为 BIGINT，需二次查询用户表。
     """
     from datetime import UTC, datetime
 
@@ -131,13 +89,16 @@ async def _get_api_key_user(
     from forge.infrastructure.database.repositories.api_key_repo import (
         ApiKeyRepository,
     )
+    from forge.infrastructure.database.repositories.user_repo import (
+        UserRepository,
+    )
 
     if not x_api_key:
         raise Unauthorized("缺少 X-API-Key 头", code=40130)
 
     key_hash = hash_api_key(x_api_key)
-    repo = ApiKeyRepository(db)
-    api_key = await repo.get_by_hash(key_hash)
+    key_repo = ApiKeyRepository(db)
+    api_key = await key_repo.get_by_hash(key_hash)
 
     if not api_key:
         raise Unauthorized("API Key 无效", code=40131)
@@ -146,7 +107,9 @@ async def _get_api_key_user(
     if api_key.expires_at and api_key.expires_at < datetime.now(UTC):
         raise Unauthorized("API Key 已过期", code=40133)
 
-    user = api_key.user
+    # 应用层二次查询用户（无 FK 关联）
+    user_repo = UserRepository(db)
+    user = await user_repo.get_by_db_id(api_key.user_id)
     if not user:
         raise Unauthorized("API Key 关联的用户不存在", code=40134)
     if user.status != "active":
@@ -154,7 +117,7 @@ async def _get_api_key_user(
 
     # 更新最后使用时间（失败不影响主流程）
     try:
-        await repo.touch_last_used(api_key)
+        await key_repo.touch_last_used(api_key)
     except Exception:
         pass
 
@@ -177,7 +140,4 @@ def _app_state(name: str):
     return _dep
 
 
-# RAG 栈依赖 (lifespan 装配后挂在 app.state)
-Retriever = Annotated[object, Depends(_app_state("retriever"))]
-KbIngestServiceDep = Annotated[object, Depends(_app_state("kb_ingest_service"))]
-FileStorageDep = Annotated[object, Depends(_app_state("file_storage"))]
+# _app_state 辅助函数保留，KB 路由通过 request.app.state 手动提取服务实例

@@ -83,7 +83,7 @@ class _Ctx:
         repo.load_recent = AsyncMock(return_value=self.rows)
         self.patches.append(
             patch(
-                "forge.infrastructure.database.repositories.message_repo.MessageRepository",
+                "forge.infrastructure.database.repositories.chat_message_repo.ChatMessageRepository",
                 return_value=repo,
             )
         )

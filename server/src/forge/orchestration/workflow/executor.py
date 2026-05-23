@@ -9,10 +9,27 @@ from typing import Any, Protocol
 from forge.agents.roles import get_agent_role, resolve_runtime_model_id
 from forge.api.schemas.chat import ChatCompletionIn
 from forge.chat import build_turn_orchestrator
-from forge.chat.orchestrator import RunTurnOverrides
+from forge.chat.types import TurnContext
 from forge.context.base import WorkflowContextLayer
 from forge.prompts import get_registry
 from forge.tools.base import Tool
+
+
+@dataclass(frozen=True)
+class RunTurnOverrides:
+    """workflow 内部使用的 chat turn 覆盖参数 (已从 chat 模块迁出)。"""
+    role: str = "local"
+    tools: tuple[Tool, ...] | None = None
+    max_steps: int | None = None
+    model_id: str | None = None
+    system_prompt: str | None = None
+    model_options: dict[str, Any] | None = None
+    workspace_id: str | None = None
+    workflow_id: str | None = None
+    workspace_context: Any | None = None
+    workflow_context: Any | None = None
+    project_decisions: tuple[str, ...] = ()
+    role_history: tuple[str, ...] = ()
 from forge.tools.registry import ToolRegistry
 
 from .artifact import Artifact

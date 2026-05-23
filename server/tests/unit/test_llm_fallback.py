@@ -13,7 +13,7 @@ import pytest
 from config.domains.llm import LLMCallSpec
 from config.domains.quota import UsageQuotaWindowSettings, UserQuotaSettings
 
-from forge.api.middleware.tracing import user_id_scope
+from forge.core.request_context import user_id_scope
 from forge.llm.cost_tracker import get_cost_tracker
 from forge.llm.fallback import LLMFallbackChain
 from forge.llm.providers.base import LLM, ChatChunk, ChatMessage, ChatResult

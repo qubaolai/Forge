@@ -1,14 +1,13 @@
-"""TurnPreparer: 一次 turn 启动前的所有 DB 工作.
+"""TurnPreparer: 一次 turn 启动前的所有 DB 工作。
 
 职责:
     1. 解析 / 校验 / 新建 session
-    2. 加载 agent + 校验 mode
-    3. 自动重命名判断
-    4. 持久化 user 消息 + assistant 占位
-    5. 把以上都打包成 frozen TurnContext, 后续阶段消费
+    2. 自动重命名判断
+    3. 持久化 user 消息 + assistant 占位
+    4. 把以上都打包成 frozen TurnContext, 后续阶段消费
 
 异常:
-    - session 不存在 / 无权访问 / mode 不支持 -> raise TurnPreparationError;
+    - session 不存在 / 无权访问 -> raise TurnPreparationError;
       TurnOrchestrator 捕获后转 SSE error 事件.
     - DB 错误穿透抛出.
 """
@@ -16,21 +15,19 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 
 from forge.chat.types import TurnContext
 from forge.infrastructure.database.database import get_session_factory
-from forge.infrastructure.database.repositories.agent_repo import (
-    AgentRepository,
-)
 
-# Storage protocol injected, swap by deployment_mode (S6.5 M3).
-from forge.infrastructure.storage import make_message_store, make_session_store
+from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
+from forge.infrastructure.database.repositories.chat_session_repo import ChatSessionRepository
 from forge.observability.tracing.tracer import span
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_MODES = {"react"}  # PR R1 暂时一个; 多 mode 加注册表后扩展
+# 当前只支持 react 模式，后续 CLI plan 模式通过 runner 注册表扩展
+_DEFAULT_MODE = "react"
+_DEFAULT_CONTEXT_WINDOW = 128_000
 
 
 class TurnPreparationError(Exception):
@@ -42,23 +39,8 @@ class TurnPreparationError(Exception):
         self.code = code
 
 
-@dataclass
-class _AgentSnapshot:
-    """从 AgentOrm 摘出 Preparer / Assembler 需要的字段, 避免 ORM 反向依赖."""
-
-    agent_id: str | None
-    mode: str
-    name: str | None
-    system_prompt: str
-    model_id: str | None
-    context_window: int
-
-
 class TurnPreparer:
-    """无状态. session_factory 在构造时注入, 每个 prepare() 自有 DB 事务."""
-
-    def __init__(self, supported_modes: set[str] = _SUPPORTED_MODES) -> None:
-        self._supported_modes = supported_modes
+    """无状态. 每个 prepare() 自有 DB 事务."""
 
     async def prepare(
         self,
@@ -70,12 +52,8 @@ class TurnPreparer:
         agent_id_hint: str | None,
         trace_id: str,
         model_options: dict | None = None,
-    ) -> tuple[TurnContext, _AgentSnapshot]:
-        """跑完所有 DB 准备工作, 返回 (TurnContext, AgentSnapshot).
-
-        AgentSnapshot 单独返回是给 ContextAssembler / Runner 用 (system_prompt / model_id / name).
-        TurnContext 是后续步骤的统一上下文, 不暴露 ORM.
-        """
+    ) -> TurnContext:
+        """跑完所有 DB 准备工作, 返回 TurnContext."""
         factory = get_session_factory()
         with span(
             "chat.prepare",
@@ -84,15 +62,13 @@ class TurnPreparer:
             input_len=len(message or ""),
         ) as s:
             async with factory() as db:
-                sess_repo = make_session_store(db)
-                agent_repo = AgentRepository(db)  # AgentStore Protocol 未列入 S6.5
-                msg_repo = make_message_store(db)
+                sess_repo = ChatSessionRepository(db)
+                msg_repo = ChatMessageRepository(db)
 
                 # 1. session 解析 / 新建
                 is_new_session = session_id is None
                 if is_new_session:
-                    agent_id = agent_id_hint or "default"
-                    session = await sess_repo.create(user_id=user_id, agent_id=agent_id)
+                    session = await sess_repo.create(user_id=user_id, agent_id="default")
                 else:
                     existing_session = await sess_repo.get_by_id(session_id or "")
                     if existing_session is None:
@@ -100,25 +76,14 @@ class TurnPreparer:
                     session = existing_session
                 session_id_actual = session.id
 
-                # 2. agent + mode 守卫
-                agent_orm = None
-                if session.agent_id and session.agent_id != "default":
-                    agent_orm = await agent_repo.get_by_id(session.agent_id)
-                mode = getattr(agent_orm, "mode", None) or "react"
-                if mode not in self._supported_modes:
-                    raise TurnPreparationError(
-                        f"暂不支持 agent.mode={mode!r}, 当前仅实现 {sorted(self._supported_modes)}",
-                        code="50301",
-                    )
-
-                # 3. 自动重命名
+                # 2. 自动重命名
                 if is_new_session:
                     should_rename = True
                 else:
                     existing_count = await msg_repo.count_by_session(session_id_actual)
                     should_rename = existing_count == 0 and session.title == "新会话"
 
-                # 4. 持久化 user 消息
+                # 3. 持久化 user 消息
                 user_msg = await msg_repo.add(
                     session_id=session_id_actual,
                     role="user",
@@ -126,7 +91,7 @@ class TurnPreparer:
                     status="done",
                 )
 
-                # 5. 占位 assistant
+                # 4. 占位 assistant
                 asst_msg = await msg_repo.add(
                     session_id=session_id_actual,
                     role="assistant",
@@ -135,7 +100,7 @@ class TurnPreparer:
                     parent_id=user_msg.id,
                 )
 
-                # 6. 重命名 (与消息一起原子提交)
+                # 5. 重命名 (与消息一起原子提交)
                 new_title: str | None = None
                 if should_rename:
                     new_title = _make_title(message)
@@ -148,18 +113,10 @@ class TurnPreparer:
 
                 s.set("session_id", session_id_actual)
                 s.set("assistant_msg_id", assistant_msg_id)
-                s.set("agent_mode", mode)
+                s.set("agent_mode", _DEFAULT_MODE)
                 s.set("is_new_session", is_new_session)
                 s.set("renamed", new_title is not None)
 
-        snapshot = _AgentSnapshot(
-            agent_id=session.agent_id if session.agent_id != "default" else None,
-            mode=mode,
-            name=getattr(agent_orm, "name", None),
-            system_prompt=(getattr(agent_orm, "system_prompt", "") or ""),
-            model_id=getattr(agent_orm, "model_id", None),
-            context_window=getattr(agent_orm, "context_window", 128_000),
-        )
         ctx = TurnContext(
             user_id=user_id,
             user_name=user_name,
@@ -167,33 +124,29 @@ class TurnPreparer:
             assistant_msg_id=assistant_msg_id,
             user_msg_id=user_msg_id,
             current_user_message=message,
-            agent_id=snapshot.agent_id,
-            agent_mode=snapshot.mode,
+            agent_id=None,
+            agent_mode=_DEFAULT_MODE,
             is_new_session=is_new_session,
             new_title=new_title,
             trace_id=trace_id,
-            model_options=model_options,
+            model_options=model_options.model_dump() if model_options else None,
             exclude_message_ids=(user_msg_id,),
-            context_window=snapshot.context_window,
+            context_window=_DEFAULT_CONTEXT_WINDOW,
         )
         logger.info(
-            "对话准备完成 session=%s user=%s agent=%s message_id=%s new_session=%s "
-            "input_len=%d agent_mode=%s",
+            "对话准备完成 session=%s user=%s message_id=%s new_session=%s input_len=%d",
             session_id_actual,
             user_id,
-            snapshot.agent_id or "default",
             assistant_msg_id,
             is_new_session,
             len(message),
-            mode,
             extra={
                 "session_id": session_id_actual,
                 "user_id": user_id,
                 "message_id": assistant_msg_id,
-                "agent_id": snapshot.agent_id,
             },
         )
-        return ctx, snapshot
+        return ctx
 
 
 def _make_title(text: str, max_len: int = 25) -> str:

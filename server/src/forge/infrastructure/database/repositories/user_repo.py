@@ -3,6 +3,7 @@
 约定:
 - 只做数据访问,不调用其他层、不写业务规则
 - 只 flush 不 commit,事务边界由 get_db 控制
+- get_by_id 接收业务 ID (user_xxx), 非 BIGINT 主键
 """
 
 from collections.abc import Sequence
@@ -21,18 +22,31 @@ class UserRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_by_id(self, user_id: str) -> UserOrm | None:
-        res = await self.db.execute(select(UserOrm).where(UserOrm.id == user_id))
+    async def get_by_id(self, business_id: str) -> UserOrm | None:
+        """按业务 ID (user_xxx) 查找。"""
+        res = await self.db.execute(
+            select(UserOrm).where(UserOrm.user_id == business_id)
+        )
+        return res.scalar_one_or_none()
+
+    async def get_by_db_id(self, db_id: int) -> UserOrm | None:
+        """按 BIGINT 主键查找。"""
+        res = await self.db.execute(
+            select(UserOrm).where(UserOrm.id == db_id)
+        )
         return res.scalar_one_or_none()
 
     async def get_by_email(self, email: str) -> UserOrm | None:
         res = await self.db.execute(select(UserOrm).where(UserOrm.email == email))
         return res.scalar_one_or_none()
 
-    async def get_by_ids(self, user_ids: list[str]) -> Sequence[UserOrm]:
-        if not user_ids:
+    async def get_by_ids(self, business_ids: list[str]) -> Sequence[UserOrm]:
+        """按业务 ID 批量查找。"""
+        if not business_ids:
             return []
-        res = await self.db.execute(select(UserOrm).where(UserOrm.id.in_(user_ids)))
+        res = await self.db.execute(
+            select(UserOrm).where(UserOrm.user_id.in_(business_ids))
+        )
         return res.scalars().all()
 
     async def list_all(
@@ -42,10 +56,16 @@ class UserRepository:
         cnt = select(func.count(UserOrm.id))
         if q:
             like = f"%{q}%"
-            stmt = stmt.where(or_(UserOrm.name.like(like), UserOrm.email.like(like)))
-            cnt = cnt.where(or_(UserOrm.name.like(like), UserOrm.email.like(like)))
+            stmt = stmt.where(
+                or_(UserOrm.name.like(like), UserOrm.email.like(like))
+            )
+            cnt = cnt.where(
+                or_(UserOrm.name.like(like), UserOrm.email.like(like))
+            )
         stmt = (
-            stmt.order_by(UserOrm.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+            stmt.order_by(UserOrm.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
         )
         items = (await self.db.execute(stmt)).scalars().all()
         total = (await self.db.execute(cnt)).scalar_one()

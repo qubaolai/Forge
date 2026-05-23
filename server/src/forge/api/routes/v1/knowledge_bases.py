@@ -12,7 +12,7 @@ import logging
 
 from fastapi import APIRouter, File, Query, Request, UploadFile
 
-from forge.api.dependencies import CurrentUser, DbSession
+from forge.api.dependencies import AuthenticatedUser, DbSession
 from forge.api.schemas.knowledge_base import (
     KbCreateIn,
     KbDocumentInfo,
@@ -81,13 +81,13 @@ def _doc_to_info(doc) -> KbDocumentInfo:
 async def create_kb(
     body: KbCreateIn,
     request: Request,
-    user: CurrentUser,
+    user: AuthenticatedUser,
     db: DbSession,
 ):
     svc = _svc(request)
     kb = await svc.create_kb(
         db,
-        user_id=user.id,
+        user_id=user.user_id,
         name=body.name,
         description=body.description,
         visibility=body.visibility,
@@ -99,9 +99,9 @@ async def create_kb(
 
 
 @router.get("")
-async def list_kbs(request: Request, user: CurrentUser, db: DbSession):
+async def list_kbs(request: Request, user: AuthenticatedUser, db: DbSession):
     svc = _svc(request)
-    kbs = await svc.list_kbs_for_user(db, user_id=user.id)
+    kbs = await svc.list_kbs_for_user(db, user_id=user.user_id)
     return success(
         KbListResponse(
             items=[_kb_to_info(kb) for kb in kbs],
@@ -111,16 +111,16 @@ async def list_kbs(request: Request, user: CurrentUser, db: DbSession):
 
 
 @router.get("/{kb_id}")
-async def get_kb(kb_id: str, request: Request, user: CurrentUser, db: DbSession):
+async def get_kb(kb_id: str, request: Request, user: AuthenticatedUser, db: DbSession):
     svc = _svc(request)
-    kb = await svc.get_kb(db, kb_id=kb_id, user_id=user.id)
+    kb = await svc.get_kb(db, kb_id=kb_id, user_id=user.user_id)
     return success(_kb_to_info(kb).model_dump(mode="json"))
 
 
 @router.delete("/{kb_id}")
-async def delete_kb(kb_id: str, request: Request, user: CurrentUser, db: DbSession):
+async def delete_kb(kb_id: str, request: Request, user: AuthenticatedUser, db: DbSession):
     svc = _svc(request)
-    await svc.delete_kb(db, kb_id=kb_id, user_id=user.id)
+    await svc.delete_kb(db, kb_id=kb_id, user_id=user.user_id)
     await db.commit()
     return success({"kb_id": kb_id, "deleted": True})
 
@@ -132,7 +132,7 @@ async def delete_kb(kb_id: str, request: Request, user: CurrentUser, db: DbSessi
 async def upload_document(
     kb_id: str,
     request: Request,
-    user: CurrentUser,
+    user: AuthenticatedUser,
     db: DbSession,
     file: UploadFile = File(...),
 ):
@@ -143,7 +143,7 @@ async def upload_document(
         doc = await svc.upload_document(
             db,
             kb_id=kb_id,
-            user_id=user.id,
+            user_id=user.user_id,
             filename=file.filename or "unnamed",
             mime_type=file.content_type or "application/octet-stream",
             content=content,
@@ -159,7 +159,7 @@ async def upload_document(
 async def list_documents(
     kb_id: str,
     request: Request,
-    user: CurrentUser,
+    user: AuthenticatedUser,
     db: DbSession,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
@@ -169,7 +169,7 @@ async def list_documents(
     docs, total = await svc.list_documents(
         db,
         kb_id=kb_id,
-        user_id=user.id,
+        user_id=user.user_id,
         page=page,
         page_size=page_size,
         status=status,
@@ -189,11 +189,11 @@ async def get_document(
     kb_id: str,
     document_id: str,
     request: Request,
-    user: CurrentUser,
+    user: AuthenticatedUser,
     db: DbSession,
 ):
     svc = _svc(request)
-    doc = await svc.get_document(db, kb_id=kb_id, document_id=document_id, user_id=user.id)
+    doc = await svc.get_document(db, kb_id=kb_id, document_id=document_id, user_id=user.user_id)
     return success(_doc_to_info(doc).model_dump(mode="json"))
 
 
@@ -202,10 +202,10 @@ async def delete_document(
     kb_id: str,
     document_id: str,
     request: Request,
-    user: CurrentUser,
+    user: AuthenticatedUser,
     db: DbSession,
 ):
     svc = _svc(request)
-    await svc.delete_document(db, kb_id=kb_id, document_id=document_id, user_id=user.id)
+    await svc.delete_document(db, kb_id=kb_id, document_id=document_id, user_id=user.user_id)
     await db.commit()
     return success({"document_id": document_id, "deleted": True})

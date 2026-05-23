@@ -64,14 +64,14 @@ async def ping() -> None:
 
 
 async def bootstrap_schema() -> None:
-    """启动期 schema bootstrap.
+    """启动期 schema bootstrap — 幂等执行 create_all，所有驱动通用。
 
-    单机/SQLite 模式不依赖外部迁移工具; 此函数幂等执行 create_all.
+    SQLAlchemy create_all 对已存在的表会跳过（不报错），
+    新表自动创建，已有表不改动。
     """
     if _engine is None:
         raise RuntimeError("Engine 尚未初始化")
-    # 导入 ORM 集合触发模型注册
-    from forge.infrastructure.database import orm  # noqa: F401
+    import forge.infrastructure.database.orm  # noqa: F401 — 触发模型注册
     from forge.infrastructure.database.orm.base import Base
 
     async with _engine.begin() as conn:

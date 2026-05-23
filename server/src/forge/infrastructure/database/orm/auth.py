@@ -1,37 +1,28 @@
 """refresh token 黑名单表。
 
-登出 / 主动失效 / 强制下线后, 把对应 refresh token 的 jti 加入此表。
-生产环境也可改用 Redis 实现, 此处 MySQL 版本作为持久兜底。
+登出 / 失效后把对应 refresh token 的 jti 加入此表。
 """
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, String
+from sqlalchemy import BigInteger, DateTime, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base
-from forge.infrastructure.database.orm.mixins import table_args
+from forge.infrastructure.database.orm.mixins import BigIntPKMixin, table_args
 
 
-class RefreshTokenBlacklist(Base):
-    """已撤销的 refresh token (按 jti 索引)。"""
-
+class RefreshTokenBlacklist(Base, BigIntPKMixin):
     __tablename__ = "refresh_token_blacklist"
 
     jti: Mapped[str] = mapped_column(
-        String(64),
-        primary_key=True,
-        comment="JWT ID, refresh token 唯一标识",
+        String(64), unique=True, nullable=False, comment="JWT ID, refresh token 唯一标识"
     )
-    user_id: Mapped[str] = mapped_column(
-        String(40),
-        nullable=False,
-        comment="所属用户 ID",
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, comment="→ users.id (应用层引用, 无 FK)"
     )
     expires_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        nullable=False,
-        comment="原 token 过期时间, 用于定期清理已自然过期的黑名单条目",
+        DateTime, nullable=False, comment="原 token 过期时间, 用于定期清理"
     )
 
     __table_args__ = table_args(

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-from forge.api.middleware.tracing import user_id_scope
+from forge.core.request_context import user_id_scope
 from forge.guardrails.compliance.audit_logger import (
     AuditLogger,
     LLMCallAuditRecord,

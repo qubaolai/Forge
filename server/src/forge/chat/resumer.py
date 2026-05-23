@@ -23,15 +23,11 @@ from __future__ import annotations
 
 import logging
 
-from forge.chat.preparer import _AgentSnapshot
 from forge.chat.types import ResumeState, TurnContext
 from forge.infrastructure.database.database import get_session_factory
-from forge.infrastructure.database.repositories.agent_repo import (
-    AgentRepository,
-)
 
-# Storage protocol injected, swap by deployment_mode (S6.5 M3).
-from forge.infrastructure.storage import make_message_store, make_session_store
+from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
+from forge.infrastructure.database.repositories.chat_session_repo import ChatSessionRepository
 from forge.observability.tracing.tracer import span
 from forge.prompts import get_registry
 
@@ -108,7 +104,7 @@ class TurnResumer:
         user_id: str,
         message_id: str,
         trace_id: str,
-    ) -> tuple[TurnContext, _AgentSnapshot, ResumeState]:
+    ) -> tuple[TurnContext, ResumeState]:
         """加载 assistant_msg, 校验, 重置 streaming, 返回所需上下文.
 
         步骤:
@@ -123,9 +119,8 @@ class TurnResumer:
         factory = get_session_factory()
         with span("chat.resume.prepare", user_id=user_id, message_id=message_id) as s:
             async with factory() as db:
-                msg_repo = make_message_store(db)
-                sess_repo = make_session_store(db)
-                agent_repo = AgentRepository(db)  # AgentStore Protocol 未列入 S6.5
+                msg_repo = ChatMessageRepository(db)
+                sess_repo = ChatSessionRepository(db)
 
                 asst = await msg_repo.get_by_id(message_id)
                 if asst is None or asst.role != "assistant":
@@ -147,11 +142,8 @@ class TurnResumer:
                 if parent is None or parent.role != "user":
                     raise ResumeError("原始用户消息已删除", code="40441")
 
-                # agent + mode (跟 Preparer 同款)
-                agent_orm = None
-                if session.agent_id and session.agent_id != "default":
-                    agent_orm = await agent_repo.get_by_id(session.agent_id)
-                mode = getattr(agent_orm, "mode", None) or "react"
+                # agent 已废弃，使用默认配置
+                mode = "react"
 
                 # 先在状态被改之前抓快照 (update 之后 asst.status 会变成 "streaming")
                 session_id = session.id
@@ -177,15 +169,6 @@ class TurnResumer:
                 s.set("prev_tool_calls", len(prev_tool_calls))
                 s.set("agent_mode", mode)
 
-        snapshot = _AgentSnapshot(
-            agent_id=session.agent_id if session.agent_id != "default" else None,
-            mode=mode,
-            name=getattr(agent_orm, "name", None),
-            system_prompt=(getattr(agent_orm, "system_prompt", "") or ""),
-            model_id=getattr(agent_orm, "model_id", None),
-            context_window=getattr(agent_orm, "context_window", 128_000),
-        )
-
         # 渲染续写提示词: 含 suffix_anchor (上次末尾 80 字符) + 结构感知 (代码块/表格)
         resume_prompt = _render_resume_prompt(prev_content)
 
@@ -196,18 +179,14 @@ class TurnResumer:
             assistant_msg_id=assistant_msg_id,
             user_msg_id=user_msg_id,
             current_user_message=resume_prompt,
-            agent_id=snapshot.agent_id,
-            agent_mode=snapshot.mode,
+            agent_id=None,
+            agent_mode="react",
             is_new_session=False,
             new_title=None,
             trace_id=trace_id,
             model_options=None,
-            # 不排除任何 message: 原 user_msg + 上次 streaming 时其他持久化的消息
-            # 都要进 history. partial assistant 因 status=streaming (刚才置的),
-            # load_recent 只返回 status="done" 不会包含它, 后续 Orchestrator
-            # 手工把 partial assistant 拼进 messages 末端.
             exclude_message_ids=(),
-            context_window=snapshot.context_window,
+            context_window=128_000,
         )
 
         resume = ResumeState(
@@ -235,4 +214,4 @@ class TurnResumer:
                 "message_id": assistant_msg_id,
             },
         )
-        return ctx, snapshot, resume
+        return ctx, resume

@@ -27,7 +27,7 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import Literal, cast
+from typing import cast
 
 import yaml
 
@@ -59,15 +59,12 @@ _load_dotenv_if_present = load_dotenv_if_present
 
 __all__ = [
     "Settings",
-    "DeploymentMode",
     "get_settings",
     "init_settings",
     "reset_settings",
     "ComponentConfig",
 ]
 
-DeploymentMode = Literal["local", "sandbox", "cloud"]
-_DEPLOYMENT_MODES: frozenset[str] = frozenset({"local", "sandbox", "cloud"})
 
 
 # ======================================================================
@@ -80,9 +77,6 @@ class Settings:
     """
 
     def __init__(self, config: dict) -> None:
-        self.deployment_mode: DeploymentMode = _parse_deployment_mode(
-            config.get("deployment_mode", "local")
-        )
         self.app = AppConfig(**config.get("app", {}))
         self.middleware = MiddlewareConfig(**config.get("middleware", {}))
         self.observability = ObservabilityConfig(**config.get("observability", {}))
@@ -126,13 +120,6 @@ class Settings:
         p = provider or self.utility_llm.provider or None
         m = model or self.utility_llm.model or None
         return self.llm.resolve(provider=p, model=m)
-
-
-def _parse_deployment_mode(value: object) -> DeploymentMode:
-    raw = str(value or "local").strip().lower()
-    if raw not in _DEPLOYMENT_MODES:
-        raise ValueError(f"deployment_mode 必须是 local / sandbox / cloud 之一, 实际为 {value!r}")
-    return cast(DeploymentMode, raw)
 
 
 # ======================================================================

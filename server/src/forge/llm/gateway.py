@@ -69,63 +69,48 @@ def build_chain_from_settings(
     model: str | None = None,
     routing_request: RoutingRequest | None = None,
 ) -> LLMFallbackChain:
-    """根据 settings 构建带 fallback 的 LLM 调用链.
+    """根据 settings 构建 LLM 调用链。
 
-    路由优先级 (高 → 低):
-        1. 显式 provider / model 入参 (用户 pin / agent.model_id) → 完全绕过 router
-        2. routing_request 非空 → 走 CompositeRouter 决策 primary
-        3. 都没传 → 用 settings.llm.provider + default_model
-
-    无论 router 是否参与, fallback 链都按 settings.llm.fallback_chain 静态装配.
-
-    实现要点:
-        - 主/备 spec 通过 settings.llm.resolve() 解析 (含 api_key 选择)
-        - client 走 LLMClientPool, 进程内同 (impl, api_key) 复用同一个 SDK 实例
-        - 每次请求都新建一个轻量 LLMFallbackChain 包装 [(client, spec), ...]
+    当 settings.llm.providers 有配置时走 YAML 解析，
+    为空时直接从 provider 名 + 环境变量构造（无 YAML 模式）。
     """
     from .client_pool import get_llm_pool
     from .fallback import LLMFallbackChain
 
     pool = get_llm_pool()
-
-    if provider is None and model is None and routing_request is not None:
-        decision = _route_primary(settings, routing_request)
-        if decision is not None:
-            provider, model = decision.provider, decision.model
-            logger.info(
-                "Router 决策 primary=%s:%s reason=%s",
-                decision.provider,
-                decision.model,
-                decision.reason,
-            )
-
-    primary_spec = settings.llm.resolve(provider, model)
-    primary_client = pool.get(
-        primary_spec.impl,
-        primary_spec.api_key,
-        primary_spec.client_options,
-    )
-
     fallbacks: list = []
-    for prov, mdl in settings.llm.fallback_pairs():
-        try:
-            spec = settings.llm.resolve(prov, mdl)
-            client = pool.get(spec.impl, spec.api_key, spec.client_options)
-            fallbacks.append((client, spec))
-        except Exception:
-            logger.warning("fallback 装配失败, 跳过: %s:%s", prov, mdl)
+
+    if settings.llm.providers:
+        # ── YAML 模式 ──
+        if provider is None and model is None and routing_request is not None:
+            decision = _route_primary(settings, routing_request)
+            if decision is not None:
+                provider, model = decision.provider, decision.model
+
+        primary_spec = settings.llm.resolve(provider, model)
+        primary_client = pool.get(
+            primary_spec.impl, primary_spec.api_key, primary_spec.client_options,
+        )
+        for prov, mdl in settings.llm.fallback_pairs():
+            try:
+                spec = settings.llm.resolve(prov, mdl)
+                client = pool.get(spec.impl, spec.api_key, spec.client_options)
+                fallbacks.append((client, spec))
+            except Exception:
+                logger.warning("fallback 装配失败, 跳过: %s:%s", prov, mdl)
+    else:
+        # ── 无 YAML 模式: 从 provider 名 + 环境变量直接构造 ──
+        if not provider or not model:
+            raise ValueError("未配置 LLM provider 且未传入 provider/model 参数")
+        primary_spec = _resolve_from_env(provider, model, settings)
+        primary_client = pool.get(
+            primary_spec.impl, primary_spec.api_key, primary_spec.client_options,
+        )
 
     logger.info(
-        "LLM 选型 impl=%s model=%s key=%s thinking=%s reasoning_effort=%s "
-        "temperature=%s max_tokens=%s quota_controlled=%s fallbacks=%s",
-        primary_spec.impl,
-        primary_spec.model,
-        primary_client.api_key_fingerprint,
-        primary_spec.thinking,
-        primary_spec.reasoning_effort or "-",
-        primary_spec.temperature,
-        primary_spec.max_tokens,
-        primary_spec.quota_controlled,
+        "LLM 选型 impl=%s model=%s temperature=%s max_tokens=%s fallbacks=%s",
+        primary_spec.impl, primary_spec.model,
+        primary_spec.temperature, primary_spec.max_tokens,
         [f"{c.provider_name}:{s.model}" for c, s in fallbacks] or "[]",
     )
 
@@ -134,6 +119,40 @@ def build_chain_from_settings(
         fallbacks,
         max_retries=settings.llm.max_retries,
         retry_backoff_seconds=settings.llm.retry_backoff_seconds,
+    )
+
+
+def _resolve_from_env(provider: str, model: str, settings) -> "LLMCallSpec":
+    """无 YAML 模式: 从池中选一个可用 key，构造 LLMCallSpec。"""
+    import os
+
+    from config.domains.llm import LLMCallSpec
+    from .client_pool import get_llm_pool
+
+    pool = get_llm_pool()
+    # 先尝试从池中选 key（支持多 Key + 冷却）
+    client = pool.get_by_impl(provider)
+    if client is not None:
+        return LLMCallSpec(
+            impl=provider,
+            api_key="",  # client 已持有 key
+            model=model,
+            temperature=0.7,
+            max_tokens=4096,
+        )
+
+    # 池中无 key: 从环境变量取
+    env_key = f"{provider.upper()}_API_KEY"
+    api_key = os.environ.get(env_key, "")
+    if not api_key:
+        raise ValueError(f"环境变量 {env_key} 未设置，且池中无可用 key: provider={provider}")
+
+    return LLMCallSpec(
+        impl=provider,
+        api_key=api_key,
+        model=model,
+        temperature=0.7,
+        max_tokens=4096,
     )
 
 

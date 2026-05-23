@@ -2,19 +2,36 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 from config.settings import reset_settings
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from forge.adaptive.models import Artifact, ArtifactKind
 from forge.adaptive.store import AdaptiveRunStore
+from forge.api.dependencies import _get_jwt_current_user
 from forge.api.routes.v1 import artifacts, runs
+
+
+def _fake_user():
+    return SimpleNamespace(
+        id=1,
+        user_id="user_test",
+        name="测试用户",
+        email="test@test.com",
+        role="owner",
+        status="active",
+    )
 
 
 def _app() -> FastAPI:
     app = FastAPI()
     app.include_router(runs.router)
     app.include_router(artifacts.router)
+    # 覆盖 AuthenticatedUser 依赖，测试中不需要真实 JWT 鉴权
+    app.dependency_overrides[_get_jwt_current_user] = _fake_user
     return app
 
 

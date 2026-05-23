@@ -6,7 +6,7 @@
       为纯文本, 避免日志里混杂转义码.
     - JSON (生产环境采集): 单行 JSON, 关键字段固定, 透传 extra={...}.
 
-trace_id / user_id / client_type 由 TraceIdLogFilter 注入到每条 LogRecord.
+trace_id / user_id / client_type 由 RequestContextLogFilter 注入到每条 LogRecord.
 
 启动时调一次 setup_logging() 即可, 替换默认的 basicConfig.
 """
@@ -20,7 +20,7 @@ import sys
 import warnings
 from datetime import datetime
 
-from forge.api.middleware.tracing import TraceIdLogFilter
+from forge.core.request_context import RequestContextLogFilter
 
 # 模块级过滤：早于 setup_logging() 调用，捕获 import 期间的 warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="jieba")
@@ -192,7 +192,7 @@ def setup_logging(
         root.removeHandler(h)
 
     handler = logging.StreamHandler(sys.stdout)
-    handler.addFilter(TraceIdLogFilter())
+    handler.addFilter(RequestContextLogFilter())
 
     if json_format:
         handler.setFormatter(JSONFormatter())

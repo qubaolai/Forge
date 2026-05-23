@@ -22,10 +22,9 @@ from forge.chat.resumer import ResumeError, TurnResumer
 
 
 def _build_fake_db(*, asst, session, parent, agent=None):
-    """造 session_factory + 三个 repo 的 mock."""
+    """造 session_factory + repo mock。agent 参数已废弃，保留兼容。"""
     msg_repo = MagicMock()
     sess_repo = MagicMock()
-    agent_repo = MagicMock()
 
     by_id = {}
     if asst is not None and getattr(asst, "id", None):
@@ -42,7 +41,6 @@ def _build_fake_db(*, asst, session, parent, agent=None):
 
     msg_repo.update = AsyncMock(side_effect=_update)
     sess_repo.get_by_id = AsyncMock(return_value=session)
-    agent_repo.get_by_id = AsyncMock(return_value=agent)
 
     fake_db = MagicMock()
     fake_db.commit = AsyncMock()
@@ -51,17 +49,15 @@ def _build_fake_db(*, asst, session, parent, agent=None):
     ctx_mgr.__aenter__.return_value = fake_db
     ctx_mgr.__aexit__.return_value = None
     factory = MagicMock(return_value=ctx_mgr)
-    return factory, msg_repo, sess_repo, agent_repo
+    return factory, msg_repo, sess_repo
 
 
-def _patches(factory, msg_repo, sess_repo, agent_repo):
+def _patches(factory, msg_repo, sess_repo):
     """一组 patch (按 resumer 内部 import 的位置)."""
     return [
         patch("forge.chat.resumer.get_session_factory", return_value=factory),
-        # S6.5 M3: resumer 改走 factory.make_*_store, patch 工厂函数即可.
-        patch("forge.chat.resumer.make_message_store", return_value=msg_repo),
-        patch("forge.chat.resumer.make_session_store", return_value=sess_repo),
-        patch("forge.chat.resumer.AgentRepository", return_value=agent_repo),
+        patch("forge.chat.resumer.ChatMessageRepository", return_value=msg_repo),
+        patch("forge.chat.resumer.ChatSessionRepository", return_value=sess_repo),
     ]
 
 
@@ -90,14 +86,14 @@ def _session(user_id="u1"):
 
 
 async def _prepare(asst, session, parent, *, user_id="u1"):
-    factory, m, s, a = _build_fake_db(asst=asst, session=session, parent=parent)
+    factory, m, s = _build_fake_db(asst=asst, session=session, parent=parent)
     with ExitStack() as stack:
-        for p in _patches(factory, m, s, a):
+        for p in _patches(factory, m, s):
             stack.enter_context(p)
-        ctx, snapshot, resume = await TurnResumer().prepare(
+        ctx, resume = await TurnResumer().prepare(
             user_id=user_id, message_id="msg_a1", trace_id="trace-x"
         )
-    return ctx, snapshot, resume, m
+    return ctx, resume, m
 
 
 # ---------------------------------------------------------------------------
@@ -105,10 +101,10 @@ async def _prepare(asst, session, parent, *, user_id="u1"):
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_missing_message_raises() -> None:
-    factory, m, s, a = _build_fake_db(asst=None, session=None, parent=None)
+    factory, m, s = _build_fake_db(asst=None, session=None, parent=None)
     m.get_by_id = AsyncMock(return_value=None)
     with ExitStack() as stack, pytest.raises(ResumeError) as exc:
-        for p in _patches(factory, m, s, a):
+        for p in _patches(factory, m, s):
             stack.enter_context(p)
         await TurnResumer().prepare(user_id="u1", message_id="msg_a1", trace_id="")
     assert exc.value.code == "40440"
@@ -117,9 +113,9 @@ async def test_missing_message_raises() -> None:
 @pytest.mark.asyncio
 async def test_session_mismatch_raises() -> None:
     other = _session(user_id="someone_else")
-    factory, m, s, a = _build_fake_db(asst=_asst(), session=other, parent=_parent())
+    factory, m, s = _build_fake_db(asst=_asst(), session=other, parent=_parent())
     with ExitStack() as stack, pytest.raises(ResumeError) as exc:
-        for p in _patches(factory, m, s, a):
+        for p in _patches(factory, m, s):
             stack.enter_context(p)
         await TurnResumer().prepare(user_id="u1", message_id="msg_a1", trace_id="")
     assert exc.value.code == "40310"
@@ -127,11 +123,11 @@ async def test_session_mismatch_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_status_done_rejected() -> None:
-    factory, m, s, a = _build_fake_db(
+    factory, m, s = _build_fake_db(
         asst=_asst(status="done"), session=_session(), parent=_parent()
     )
     with ExitStack() as stack, pytest.raises(ResumeError) as exc:
-        for p in _patches(factory, m, s, a):
+        for p in _patches(factory, m, s):
             stack.enter_context(p)
         await TurnResumer().prepare(user_id="u1", message_id="msg_a1", trace_id="")
     assert exc.value.code == "40901"
@@ -140,11 +136,11 @@ async def test_status_done_rejected() -> None:
 @pytest.mark.asyncio
 async def test_status_streaming_rejected() -> None:
     """并发 resume 防护."""
-    factory, m, s, a = _build_fake_db(
+    factory, m, s = _build_fake_db(
         asst=_asst(status="streaming"), session=_session(), parent=_parent()
     )
     with ExitStack() as stack, pytest.raises(ResumeError) as exc:
-        for p in _patches(factory, m, s, a):
+        for p in _patches(factory, m, s):
             stack.enter_context(p)
         await TurnResumer().prepare(user_id="u1", message_id="msg_a1", trace_id="")
     assert exc.value.code == "40901"
@@ -152,9 +148,9 @@ async def test_status_streaming_rejected() -> None:
 
 @pytest.mark.asyncio
 async def test_missing_parent_raises() -> None:
-    factory, m, s, a = _build_fake_db(asst=_asst(parent_id=None), session=_session(), parent=None)
+    factory, m, s = _build_fake_db(asst=_asst(parent_id=None), session=_session(), parent=None)
     with ExitStack() as stack, pytest.raises(ResumeError) as exc:
-        for p in _patches(factory, m, s, a):
+        for p in _patches(factory, m, s):
             stack.enter_context(p)
         await TurnResumer().prepare(user_id="u1", message_id="msg_a1", trace_id="")
     assert exc.value.code == "40441"
@@ -184,7 +180,7 @@ async def test_resume_happy_path_marks_streaming_and_returns_state() -> None:
             },
         ],
     )
-    ctx, snapshot, resume, msg_repo = await _prepare(asst, _session(), _parent())
+    ctx, resume, msg_repo = await _prepare(asst, _session(), _parent())
 
     # status 已置回 streaming
     msg_repo.update.assert_awaited_once()

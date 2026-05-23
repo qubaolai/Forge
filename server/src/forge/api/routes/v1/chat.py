@@ -26,8 +26,8 @@ import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
-from forge.api.dependencies import CurrentUser
-from forge.api.middleware.client_type import set_client_type
+from forge.api.dependencies import AuthenticatedUser
+from forge.core.request_context import set_client_type
 from forge.api.schemas.chat import (
     ChatCompletionIn,
     ChatRegenerateIn,
@@ -38,7 +38,8 @@ from forge.chat import build_turn_orchestrator, get_active_streams
 from forge.core.exceptions import NotFound
 from forge.core.response import success
 from forge.infrastructure.database.database import get_session_factory
-from forge.infrastructure.storage import make_message_store, make_session_store
+from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
+from forge.infrastructure.database.repositories.chat_session_repo import ChatSessionRepository
 from forge.quota import get_usage_quota_manager
 from forge.utils.id_generator import new_id
 
@@ -54,7 +55,7 @@ def _sse(event: dict) -> bytes:
 @router.post("/completions")
 async def chat_completions(
     body: ChatCompletionIn,
-    user: CurrentUser,
+    user: AuthenticatedUser,
     request: Request,
 ):
     """流式聊天对话 — 纯 ReAct + 查询类工具。"""
@@ -66,7 +67,7 @@ async def chat_completions(
     async def event_stream():
         set_client_type(client_type)
         async for event in orchestrator.run_turn(
-            user_id=user.id,
+            user_id=user.user_id,
             user_name=user.name,
             body=body,
             trace_id=trace_id,
@@ -85,14 +86,14 @@ async def chat_completions(
 
 
 @router.get("/quota")
-async def chat_quota(user: CurrentUser):
+async def chat_quota(user: AuthenticatedUser):
     """查看当前用户滚动 LLM 用量额度."""
-    status = await get_usage_quota_manager().status(user.id)
+    status = await get_usage_quota_manager().status(user.user_id)
     return success(status.to_dict())
 
 
 @router.post("/resume")
-async def chat_resume(body: ChatResumeIn, user: CurrentUser, request: Request):
+async def chat_resume(body: ChatResumeIn, user: AuthenticatedUser, request: Request):
     """继续未完成的 assistant 消息 (status=aborted / partial)."""
     trace_id = getattr(request.state, "trace_id", "")
     client_type = getattr(request.state, "client_type", "cli")
@@ -101,7 +102,7 @@ async def chat_resume(body: ChatResumeIn, user: CurrentUser, request: Request):
     async def event_stream():
         set_client_type(client_type)
         async for event in orchestrator.resume_turn(
-            user_id=user.id,
+            user_id=user.user_id,
             message_id=body.message_id,
             trace_id=trace_id,
         ):
@@ -119,7 +120,7 @@ async def chat_resume(body: ChatResumeIn, user: CurrentUser, request: Request):
 
 
 @router.post("/stop")
-async def chat_stop(body: ChatStopIn, user: CurrentUser):
+async def chat_stop(body: ChatStopIn, user: AuthenticatedUser):
     """中断指定消息的流式生成."""
     streams = get_active_streams()
     event = streams.get(body.message_id)
@@ -130,12 +131,12 @@ async def chat_stop(body: ChatStopIn, user: CurrentUser):
 
 
 @router.post("/regenerate")
-async def chat_regenerate(body: ChatRegenerateIn, user: CurrentUser):
+async def chat_regenerate(body: ChatRegenerateIn, user: AuthenticatedUser):
     """重新生成 assistant 消息."""
     factory = get_session_factory()
     async with factory() as db:
-        repo = make_message_store(db)
-        sess_repo = make_session_store(db)
+        repo = ChatMessageRepository(db)
+        sess_repo = ChatSessionRepository(db)
         asst = await repo.get_by_id(body.message_id)
         if not asst or asst.role != "assistant":
             raise NotFound("消息不存在", code=40440)

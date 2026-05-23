@@ -40,7 +40,7 @@ async def test_hook_dispatches_to_local_queue_and_runs_summary_service(
             return_value=factory,
         ),
         patch(
-            "forge.infrastructure.database.repositories.message_repo.MessageRepository",
+            "forge.infrastructure.database.repositories.chat_message_repo.ChatMessageRepository",
             return_value=fake_repo,
         ),
         patch(

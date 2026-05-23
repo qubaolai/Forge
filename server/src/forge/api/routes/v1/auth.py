@@ -46,7 +46,7 @@ def _clear_refresh_cookie(response: Response) -> None:
 @router.post("/login")
 async def login(body: LoginIn, response: Response, svc: AuthServiceDep):
     user = await svc.authenticate(body.email, body.password)
-    access, access_exp, refresh, _refresh_exp, _jti = svc.issue_tokens(user.id)
+    access, access_exp, refresh, _refresh_exp, _jti = svc.issue_tokens(user.user_id)
 
     max_age = settings.app.auth.refresh_token_expire_days * 24 * 3600
     _set_refresh_cookie(response, refresh, max_age)

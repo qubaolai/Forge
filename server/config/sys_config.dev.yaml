@@ -3,8 +3,6 @@
 # 启动: APP_ENV=dev make dev
 # ============================================================
 
-deployment_mode: ${DEPLOYMENT_MODE:local}
-
 app:
   log_level: ${APP_LOG_LEVEL}
   port: ${APP_PORT:8553}
@@ -46,21 +44,6 @@ celery:
   broker_url: ${CELERY_BROKER_URL:}
   backend_url: ${CELERY_BACKEND_URL:}
 
-user_quota:
-  enabled: true
-  alert_threshold: 0.8
-  five_hour:
-    window_seconds: 18000
-    limit_usd:
-    limit_tokens:
-    limit_calls:
-  weekly:
-    window_seconds: 604800
-    limit_usd:
-    limit_tokens:
-    limit_calls:
-
-
 memory:
   enabled: ${MEMORY_ENABLED:true}
   summarizer:
@@ -78,86 +61,12 @@ llm:
   max_retries: 2
   retry_backoff_seconds: 0.5
 
-  # dev 默认不开预算 (调试不阻断); 通过 env 临时启用即可
   budget:
     global_daily_limit_usd: ${LLM_BUDGET_GLOBAL_USD:}
     default_user_daily_limit_usd: ${LLM_BUDGET_DEFAULT_USER_USD:}
     alert_threshold: ${LLM_BUDGET_ALERT:0.8}
 
-  providers:
-    dashscope:
-      api_keys:
-      - ${DASHSCOPE_API_KEY}
-      - ${DASHSCOPE_API_KEY_2:}
-      key_strategy: round_robin
-      timeout: 30
-      models:
-      - name: qwen3-max-preview
-        display_name: 通义千问 Max
-        context_window: 32768
-      - name: qwen3.6-plus
-        display_name: 通义千问 qwen3.6-plus
-        context_window: 131072
-      - name: qwen3.5-flash
-        display_name: 通义千问 qwen3.5-flash
-        context_window: 131072
-      - name: qwen3.5-27b
-        display_name: 通义千问 qwen3.5-27b
-        context_window: 131072
-      - name: qwen3.7-max
-        display_name: 通义千问 qwen3.7-max
-        context_window: 131072
-      - name: qwen3.6-27b
-        display_name: 通义千问 qwen3.6-27b
-        context_window: 131072
-      default_params:
-        temperature: 0.7
-
-    openai:
-      api_keys:
-      - ${OPENAI_API_KEY:}
-      timeout: 30
-      models:
-      - name: gpt-4o
-        display_name: GPT-4o
-        context_window: 128000
-      - name: gpt-4o-mini
-        display_name: GPT-4o mini
-        context_window: 128000
-      default_params:
-        temperature: 0.7
-
-    deepseek:
-      api_keys:
-      - ${DEEPSEEK_API_KEY:}
-      timeout: 30
-      models:
-      - name: deepseek-v4-pro
-        display_name: DeepSeek V4 PRO
-        context_window: 1000000
-        reasoning_effort: high
-      - name: deepseek-v4-flash
-        display_name: DeepSeek V4 flash
-        context_window: 1000000
-        reasoning_effort: high
-      default_params:
-        temperature: 0.7
-        thinking: ${DEEPSEEK_THINKING_DEFAULT:true}
-
-    anthropic:
-      api_keys:
-      - ${ANTHROPIC_API_KEY:}
-      timeout: 30
-      models:
-      - name: claude-sonnet-4-5
-        display_name: Claude Sonnet 4.5
-        context_window: 200000
-      - name: claude-haiku-4-5
-        display_name: Claude Haiku 4.5
-        context_window: 200000
-      default_params:
-        temperature: 1.0
-        max_tokens: 4096
+  # providers 在 sys_config.yaml 中定义，dev 环境继承
 
 utility_llm:
   provider: ${UTILITY_LLM_PROVIDER:dashscope}

@@ -65,16 +65,17 @@ def install_memory_hooks(
             workspace_id = None
 
         # 本地 import, 避免 hooks 模块在 worker / 测试场景无端拉 DB 依赖.
-        # Storage protocol injected, swap by deployment_mode (S6.5 M3).
         from forge.infrastructure.database.database import (
             get_session_factory,
         )
-        from forge.infrastructure.storage import make_message_store
+        from forge.infrastructure.database.repositories.chat_message_repo import (
+            ChatMessageRepository,
+        )
 
         try:
             factory = get_session_factory()
             async with factory() as db:
-                repo = make_message_store(db)
+                repo = ChatMessageRepository(db)
                 count = await repo.count_by_session(session_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning(

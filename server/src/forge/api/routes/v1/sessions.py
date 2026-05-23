@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Query
 
-from forge.api.dependencies import CurrentUser
+from forge.api.dependencies import AuthenticatedUser
 from forge.api.schemas.chat import MessageOut, SessionCreateIn, SessionUpdateIn
 from forge.api.services.session_service import SessionServiceDep
 from forge.core.response import success
@@ -12,13 +12,13 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 @router.get("")
 async def list_sessions(
-    user: CurrentUser,
+    user: AuthenticatedUser,
     svc: SessionServiceDep,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     q: str = "",
 ):
-    items, total = await svc.list_for_user(user.id, page, page_size, q)
+    items, total = await svc.list_for_user(user.user_id, page, page_size, q)
     return success(
         {
             "items": items,
@@ -30,14 +30,14 @@ async def list_sessions(
 
 
 @router.post("")
-async def create_session(body: SessionCreateIn, user: CurrentUser, svc: SessionServiceDep):
-    session = await svc.create(user.id, agent_id=body.agent_id, title=body.title)
+async def create_session(body: SessionCreateIn, user: AuthenticatedUser, svc: SessionServiceDep):
+    session = await svc.create(user.user_id, agent_id=body.agent_id, title=body.title)
     return success(await svc.get_single_enriched(session))
 
 
 @router.get("/{session_id}")
-async def get_session(session_id: str, user: CurrentUser, svc: SessionServiceDep):
-    session = await svc.get_owned(session_id, user.id)
+async def get_session(session_id: str, user: AuthenticatedUser, svc: SessionServiceDep):
+    session = await svc.get_owned(session_id, user.user_id)
     return success(await svc.get_single_enriched(session))
 
 
@@ -45,17 +45,17 @@ async def get_session(session_id: str, user: CurrentUser, svc: SessionServiceDep
 async def update_session(
     session_id: str,
     body: SessionUpdateIn,
-    user: CurrentUser,
+    user: AuthenticatedUser,
     svc: SessionServiceDep,
 ):
-    session = await svc.get_owned(session_id, user.id)
+    session = await svc.get_owned(session_id, user.user_id)
     session = await svc.rename(session, body.title)
     return success(await svc.get_single_enriched(session))
 
 
 @router.delete("/{session_id}")
-async def delete_session(session_id: str, user: CurrentUser, svc: SessionServiceDep):
-    session = await svc.get_owned(session_id, user.id)
+async def delete_session(session_id: str, user: AuthenticatedUser, svc: SessionServiceDep):
+    session = await svc.get_owned(session_id, user.user_id)
     await svc.delete(session)
     return success(None)
 
@@ -63,12 +63,12 @@ async def delete_session(session_id: str, user: CurrentUser, svc: SessionService
 @router.get("/{session_id}/messages")
 async def list_messages(
     session_id: str,
-    user: CurrentUser,
+    user: AuthenticatedUser,
     svc: SessionServiceDep,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
 ):
-    await svc.get_owned(session_id, user.id)  # 校验归属
+    await svc.get_owned(session_id, user.user_id)  # 校验归属
     items, total = await svc.list_messages(session_id, page, page_size)
     return success(
         {

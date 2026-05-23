@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from forge.api.middleware.tracing import current_user_id
+from forge.core.request_context import current_user_id
 from forge.infrastructure.database.database import get_session_factory
 from forge.infrastructure.database.repositories.kb_document_repo import (
     KbDocumentRepository,

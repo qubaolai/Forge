@@ -1,4 +1,4 @@
-"""存储抽象层.
+"""存储抽象层。
 
 包含两类抽象:
 
@@ -7,31 +7,23 @@
 
 2. **结构化数据存储 (data)** — ``data_protocols.py`` 定义 7 个 Protocol
    (SessionStore / MessageStore / CostStore / AuditStore / SummaryStore /
-   KnowledgeBaseStore / KbDocumentStore), ``data_factory.py`` 按
-   ``deployment_mode`` 装配本地实现. S6.5 阶段仅支持 ``local`` 模式.
+   KnowledgeBaseStore / KbDocumentStore) 及共享数据视图
+   (SessionView / ChatMessageView).
 
-业务代码 (chat / memory / api / kb) 只 import 本模块的 Protocol 与 factory,
-不再 import 具体 ``*Repository`` 类.
+业务代码 (chat / memory / api / kb) 只 import 本模块的 Protocol 与视图,
+不 import 具体 ``*Repository`` 类.
 """
 
 from forge.infrastructure.storage.base import FileStorage, StoredFile
-from forge.infrastructure.storage.data_factory import (
-    get_deployment_mode,
-    make_audit_store,
-    make_cost_store,
-    make_kb_document_store,
-    make_knowledge_base_store,
-    make_message_store,
-    make_session_store,
-    make_summary_store,
-)
 from forge.infrastructure.storage.data_protocols import (
     AuditStore,
+    ChatMessageView,
     CostStore,
     KbDocumentStore,
     KnowledgeBaseStore,
     MessageStore,
     SessionStore,
+    SessionView,
     SummaryStore,
 )
 from forge.infrastructure.storage.local_fs import LocalFileStorage
@@ -49,13 +41,7 @@ __all__ = [
     "SummaryStore",
     "KnowledgeBaseStore",
     "KbDocumentStore",
-    # 装配工厂
-    "make_session_store",
-    "make_message_store",
-    "make_cost_store",
-    "make_audit_store",
-    "make_summary_store",
-    "make_knowledge_base_store",
-    "make_kb_document_store",
-    "get_deployment_mode",
+    # 共享数据视图
+    "SessionView",
+    "ChatMessageView",
 ]

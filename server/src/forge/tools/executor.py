@@ -289,7 +289,7 @@ class ToolExecutor:
     # ------------------------------------------------------------------
     @staticmethod
     def _log_exec(call: ToolCall, status: str, content: str, t0: float) -> None:
-        from forge.api.middleware.client_type import current_client_type
+        from forge.core.request_context import current_client_type
 
         duration_ms = (time.perf_counter() - t0) * 1000
         args_preview = str(call.arguments)

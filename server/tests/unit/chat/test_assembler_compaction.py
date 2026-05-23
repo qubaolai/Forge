@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from forge.chat.assembler import ContextAssembler
-from forge.chat.preparer import _AgentSnapshot
 from forge.chat.types import TurnContext
 from forge.context.base import AssembledContext, BuildMeta
 
@@ -36,17 +35,6 @@ def _ctx(context_window: int = 8192) -> TurnContext:
         new_title=None,
         trace_id="",
         context_window=context_window,
-    )
-
-
-def _snapshot() -> _AgentSnapshot:
-    return _AgentSnapshot(
-        agent_id=None,
-        mode="react",
-        name=None,
-        system_prompt="",
-        model_id=None,
-        context_window=8192,
     )
 
 
@@ -123,7 +111,7 @@ async def test_compact_failure_falls_back_to_prev() -> None:
         "forge.memory.summary.service.get_summary_service",
         return_value=fake_service,
     ):
-        new_result, prompt, saved = await asm.compact_and_reassemble(_ctx(), _snapshot(), prev)
+        new_result, prompt, saved = await asm.compact_and_reassemble(_ctx(), prev)
 
     assert new_result is prev
     assert saved == 0
@@ -154,7 +142,7 @@ async def test_compact_success_marks_meta_and_rebuilds() -> None:
         patch.object(asm, "_build_once", side_effect=fake_build_once),
         patch.object(asm, "_render_system_prompt", return_value="prompt"),
     ):
-        new_result, prompt, saved = await asm.compact_and_reassemble(_ctx(), _snapshot(), prev)
+        new_result, prompt, saved = await asm.compact_and_reassemble(_ctx(), prev)
 
     assert new_result is new
     assert prompt == "prompt"

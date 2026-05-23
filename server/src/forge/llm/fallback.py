@@ -53,12 +53,7 @@ def _call_kwargs(spec: LLMCallSpec) -> dict[str, Any]:
         "temperature": spec.temperature,
         "max_tokens": spec.max_tokens,
         "top_p": spec.top_p,
-        "thinking": spec.thinking,
-        "reasoning_effort": spec.reasoning_effort,
-        "thinking_budget": spec.thinking_budget,
-        "top_k": spec.top_k,
     }
-    # None 不传, 让 provider 用自己的默认; model 必传
     return {k: v for k, v in kw.items() if v is not None or k == "model"}
 
 
@@ -127,7 +122,7 @@ class LLMFallbackChain:
         if prompt or completion:
             llm_metrics.record_tokens(provider, spec.model, prompt, completion)
         if cost > 0:
-            from forge.api.middleware.tracing import current_user_id
+            from forge.core.request_context import current_user_id
 
             llm_metrics.record_cost(provider, spec.model, current_user_id(), cost)
         if cached_tokens > 0:

@@ -122,22 +122,19 @@ class AnthropicLLM(LLM):
         *,
         temperature: float | None,
         max_tokens: int | None,
-        thinking: bool | None,
-        thinking_budget: int | None,
+        thinking: bool | None = None,
+        thinking_budget: int | None = None,
         extra_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         kw: dict[str, Any] = {
             "temperature": temperature if temperature is not None else 1.0,
             "max_tokens": max_tokens if max_tokens is not None else 4096,
         }
-        # thinking 优先级: extra_options > spec
-        effective_thinking = (extra_options or {}).get("thinking")
-        if effective_thinking is None:
-            effective_thinking = bool(thinking) if thinking is not None else False
+        # thinking 只从 extra_options 读取 (per-request 前端传入)
+        opts = extra_options or {}
+        effective_thinking = opts.get("thinking")
         if effective_thinking:
-            kw["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": int(thinking_budget or 5000),
-            }
-            kw["temperature"] = 1.0  # extended thinking 强制 temperature=1
+            budget = opts.get("thinking_budget") or thinking_budget or 5000
+            kw["thinking"] = {"type": "enabled", "budget_tokens": int(budget)}
+            kw["temperature"] = 1.0
         return kw

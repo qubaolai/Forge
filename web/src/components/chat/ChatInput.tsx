@@ -1,5 +1,6 @@
 import { useRef, useState, KeyboardEvent } from 'react';
 import { Send, Square, Brain } from 'lucide-react';
+import type { ModelInfo } from '@/api';
 
 export type ReasoningEffort = 'high' | 'max';
 
@@ -11,6 +12,14 @@ interface Props {
   placeholder?: string;
   reasoning?: ReasoningEffort;
   onReasoningChange?: (value: ReasoningEffort) => void;
+  // 模型选择
+  selectedProvider: string;
+  selectedModel: string;
+  availableModels: ModelInfo[];
+  onProviderChange: (value: string) => void;
+  onModelChange: (value: string) => void;
+  thinkingEnabled: boolean;
+  onThinkingChange: (enabled: boolean) => void;
 }
 
 const REASONING_LABELS: Record<ReasoningEffort, string> = {
@@ -26,6 +35,13 @@ export function ChatInput({
   placeholder,
   reasoning = 'high',
   onReasoningChange,
+  selectedProvider,
+  selectedModel,
+  availableModels,
+  onProviderChange,
+  onModelChange,
+  thinkingEnabled,
+  onThinkingChange,
 }: Props) {
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -51,6 +67,12 @@ export function ChatInput({
       handleSubmit();
     }
   }
+
+  // 从选中模型元数据中获取思考能力
+  const currentModel = availableModels.find((m) => m.name === selectedModel);
+  const thinkingMeta = currentModel?.thinking;
+  const showReasoningEffort = thinkingMeta?.type === 'reasoning_effort' && onReasoningChange;
+  const showThinkingToggle = thinkingMeta?.type === 'enabled';
 
   return (
     <div className="border-t bg-white px-6 py-4">
@@ -92,27 +114,63 @@ export function ChatInput({
           )}
         </div>
         <div className="mt-2 flex items-center justify-between px-1 text-[12px] text-gray-400">
-          <span>AI 回答可能不准确,请核实关键信息</span>
-          {onReasoningChange && (
-            <label
-              className="flex items-center gap-1.5 text-gray-500 hover:text-gray-700 cursor-pointer"
-              title="思考强度: 标准 (high) 适合大多数场景, 深度 (max) 用于复杂推理 (DeepSeek thinking 模式始终开启)"
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedProvider}
+              onChange={(e) => onProviderChange(e.target.value)}
+              className="bg-transparent border rounded px-1.5 py-0.5 text-gray-500 cursor-pointer"
             >
-              <Brain size={13} />
-              <span>思考</span>
-              <select
-                value={reasoning}
-                onChange={(e) => onReasoningChange(e.target.value as ReasoningEffort)}
-                className="bg-transparent border-none outline-none cursor-pointer text-gray-700"
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="dashscope">DashScope</option>
+            </select>
+            <select
+              value={selectedModel}
+              onChange={(e) => onModelChange(e.target.value)}
+              className="bg-transparent border rounded px-1.5 py-0.5 text-gray-500 cursor-pointer min-w-[120px]"
+            >
+              {availableModels.map((m) => (
+                <option key={m.name} value={m.name}>
+                  {m.display_name || m.name}
+                </option>
+              ))}
+            </select>
+            {showThinkingToggle && (
+              <label className="flex items-center gap-1 cursor-pointer text-gray-500">
+                <input
+                  type="checkbox"
+                  checked={thinkingEnabled}
+                  onChange={(e) => onThinkingChange(e.target.checked)}
+                  className="rounded"
+                />
+                <span>思考</span>
+              </label>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span>AI 回答可能不准确,请核实关键信息</span>
+            {showReasoningEffort && (
+              <label
+                className="flex items-center gap-1.5 text-gray-500 hover:text-gray-700 cursor-pointer"
+                title="思考强度: 标准适用于大多数场景, 深度用于复杂推理"
               >
-                {(['high', 'max'] as ReasoningEffort[]).map((v) => (
-                  <option key={v} value={v}>
-                    {REASONING_LABELS[v]}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
+                <Brain size={13} />
+                <span>思考</span>
+                <select
+                  value={reasoning}
+                  onChange={(e) => onReasoningChange?.(e.target.value as ReasoningEffort)}
+                  className="bg-transparent border-none outline-none cursor-pointer text-gray-700"
+                >
+                  {(thinkingMeta?.options || ['high', 'max']).map((v: string) => (
+                    <option key={v} value={v}>
+                      {REASONING_LABELS[v as ReasoningEffort] || v}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
         </div>
       </div>
     </div>

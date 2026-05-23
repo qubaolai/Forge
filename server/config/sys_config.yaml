@@ -4,9 +4,6 @@
 # 项目根 .env 文件会被自动加载 (不覆盖已设置的环境变量).
 # ============================================================
 
-# 部署模式: S6.5 M4 仅实现 local; sandbox/cloud 作为后续 SaaS 控制点占位.
-deployment_mode: ${DEPLOYMENT_MODE:local}
-
 app:
   log_level: ${APP_LOG_LEVEL:INFO} # DEBUG | INFO | WARNING | ERROR
   port: ${APP_PORT:8553}
@@ -154,20 +151,11 @@ llm:
       - name: deepseek-v4-pro
         display_name: DeepSeek V4 PRO
         context_window: 1000000
-        # reasoning_effort 官方取值: high | max
-        reasoning_effort: high
       - name: deepseek-v4-flash
         display_name: DeepSeek V4 flash
         context_window: 1000000
-        reasoning_effort: high
       default_params:
         temperature: 0.7
-        # 思考模式 provider 级默认值. 解析优先级 (高到低):
-        #   1. 前端 model_options.thinking (per-request, extra_options)
-        #   2. ModelConfig.thinking         (per-model 覆盖, yaml 里 models[i].thinking)
-        #   3. default_params.thinking      (provider 级默认, 即此处)
-        #   4. provider 内部默认 (DeepSeek 视 None 为 True)
-        thinking: ${DEEPSEEK_THINKING_DEFAULT:true}
 
     anthropic:
       api_keys:

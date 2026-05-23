@@ -54,8 +54,6 @@ class ModelConfig(BaseModel):
     name: str
     display_name: str | None = None
     context_window: int | None = None
-    thinking: bool | None = None
-    reasoning_effort: Literal["low", "medium", "high", "max"] | None = None
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
     quota_controlled: bool | None = None
     """是否按服务端预置模型计入用户额度. None 表示继承 provider 配置."""
@@ -175,10 +173,6 @@ class LLMCallSpec:
     temperature: float | None = None
     max_tokens: int | None = None
     top_p: float | None = None
-    thinking: bool | None = None
-    reasoning_effort: str | None = None
-    thinking_budget: int | None = None
-    top_k: int | None = None
     base_url: str | None = None
     timeout: float = 30.0
     quota_controlled: bool = False
@@ -251,7 +245,7 @@ class LLMConfig(BaseModel):
 
     provider: str
     default_model: str | None = None
-    providers: dict[str, LLMProviderConfig]
+    providers: dict[str, LLMProviderConfig] = Field(default_factory=dict)
     fallback_chain: str = ""
     max_retries: int = 3
     retry_backoff_seconds: float = 1.0
@@ -259,13 +253,14 @@ class LLMConfig(BaseModel):
 
     @model_validator(mode="after")
     def _check_default(self) -> LLMConfig:
-        if self.provider not in self.providers:
-            raise ValueError(
-                f"llm.provider={self.provider!r} 未在 providers 中声明, "
-                f"可用: {sorted(self.providers.keys())}"
-            )
-        if self.default_model is not None:
-            self.providers[self.provider].find_model(self.default_model)
+        if self.providers:
+            if self.provider not in self.providers:
+                raise ValueError(
+                    f"llm.provider={self.provider!r} 未在 providers 中声明, "
+                    f"可用: {sorted(self.providers.keys())}"
+                )
+            if self.default_model is not None:
+                self.providers[self.provider].find_model(self.default_model)
         return self
 
     def fallback_pairs(self) -> list[tuple[str, str]]:
@@ -337,10 +332,6 @@ class LLMConfig(BaseModel):
             temperature=merged.get("temperature"),
             max_tokens=merged.get("max_tokens"),
             top_p=merged.get("top_p"),
-            thinking=merged.get("thinking"),
-            reasoning_effort=merged.get("reasoning_effort"),
-            thinking_budget=merged.get("thinking_budget"),
-            top_k=merged.get("top_k"),
             base_url=pcfg.base_url,
             timeout=pcfg.timeout,
             quota_controlled=quota_controlled,

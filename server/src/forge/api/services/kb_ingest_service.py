@@ -40,11 +40,12 @@ from forge.infrastructure.database.repositories.kb_document_chunk_repo import (
     KbDocumentChunkRepository,
 )
 
-# Storage protocol injected, swap by deployment_mode (S6.5 M3).
 # KbDocumentChunkRepository 不在 S6.5 7 Protocol 内, 暂保留直接 import.
-from forge.infrastructure.storage import (
-    make_kb_document_store,
-    make_knowledge_base_store,
+from forge.infrastructure.database.repositories.kb_document_repo import (
+    KbDocumentRepository,
+)
+from forge.infrastructure.database.repositories.knowledge_base_repo import (
+    KnowledgeBaseRepository,
 )
 from forge.retrieval.chunkers import ChunkConfig, select_chunker
 from forge.retrieval.embedders.base import Embedder
@@ -103,8 +104,8 @@ class KbIngestService:
             KbIngestError: 任意阶段失败. 调用方需要 rollback session +
                            处理补偿 (服务内已尝试清理库外存储).
         """
-        kb_repo = make_knowledge_base_store(session)
-        doc_repo = make_kb_document_store(session)
+        kb_repo = KnowledgeBaseRepository(session)
+        doc_repo = KbDocumentRepository(session)
         chunk_repo = KbDocumentChunkRepository(session)  # 不在 S6.5 Protocol 内
 
         # 0. embedding_model 一致性: 首次入库回填, 后续严格校验

@@ -24,10 +24,12 @@ from forge.infrastructure.database.orm.knowledge_base_orm import (
     KnowledgeBaseOrm,
 )
 
-# Storage protocol injected, swap by deployment_mode (S6.5 M3).
-from forge.infrastructure.storage import (
-    make_kb_document_store,
-    make_knowledge_base_store,
+# 直接注入具体 repo 类。
+from forge.infrastructure.database.repositories.kb_document_repo import (
+    KbDocumentRepository,
+)
+from forge.infrastructure.database.repositories.knowledge_base_repo import (
+    KnowledgeBaseRepository,
 )
 from forge.infrastructure.storage.base import FileStorage
 
@@ -74,7 +76,7 @@ class KbService:
             chunk_overlap=chunk_overlap,
             embedding_model="",
         )
-        await make_knowledge_base_store(session).create(kb)
+        await KnowledgeBaseRepository(session).create(kb)
         logger.info("KB 创建: id=%s name=%s owner=%s", kb.id, kb.name, user_id)
         return kb
 
@@ -84,7 +86,7 @@ class KbService:
         *,
         user_id: str,
     ) -> list[KnowledgeBaseOrm]:
-        return await make_knowledge_base_store(session).list_for_user(user_id)
+        return await KnowledgeBaseRepository(session).list_for_user(user_id)
 
     async def get_kb(
         self,
@@ -94,7 +96,7 @@ class KbService:
         user_id: str,
     ) -> KnowledgeBaseOrm:
         _ = user_id
-        kb = await make_knowledge_base_store(session).get(kb_id)
+        kb = await KnowledgeBaseRepository(session).get(kb_id)
         if kb is None:
             raise NotFound(f"KB 不存在: {kb_id}", code=40410)
         return kb
@@ -108,8 +110,8 @@ class KbService:
     ) -> None:
         """硬删除 KB. CASCADE 带走 kb_documents 与 kb_document_chunks,
         本服务再主动清理 Chroma / BM25 / 本地文件 (库外存储)."""
-        kb_repo = make_knowledge_base_store(session)
-        doc_repo = make_kb_document_store(session)
+        kb_repo = KnowledgeBaseRepository(session)
+        doc_repo = KbDocumentRepository(session)
         kb = await kb_repo.get_owned(kb_id, user_id)
         if kb is None:
             raise NotFound("KB 不存在或无权限", code=40411)
@@ -144,7 +146,7 @@ class KbService:
         status: str | None = None,
     ) -> tuple[list[KbDocumentOrm], int]:
         await self.get_kb(session, kb_id=kb_id, user_id=user_id)
-        return await make_kb_document_store(session).list_by_kb(
+        return await KbDocumentRepository(session).list_by_kb(
             kb_id, status=status, page=page, page_size=page_size
         )
 
@@ -157,7 +159,7 @@ class KbService:
         user_id: str,
     ) -> KbDocumentOrm:
         await self.get_kb(session, kb_id=kb_id, user_id=user_id)
-        doc = await make_kb_document_store(session).get_in_kb(document_id, kb_id)
+        doc = await KbDocumentRepository(session).get_in_kb(document_id, kb_id)
         if doc is None:
             raise NotFound("文档不存在", code=40412)
         return doc
@@ -182,8 +184,8 @@ class KbService:
             5. KbIngestService.ingest() 同步驱动完整流水线
             6. 失败时清掉本地文件 + 标记 status=failed
         """
-        kb_repo = make_knowledge_base_store(session)
-        doc_repo = make_kb_document_store(session)
+        kb_repo = KnowledgeBaseRepository(session)
+        doc_repo = KbDocumentRepository(session)
 
         kb = await kb_repo.get_owned(kb_id, user_id)
         if kb is None:
@@ -252,8 +254,8 @@ class KbService:
         user_id: str,
     ) -> None:
         """硬删除文档 (元数据 + 索引 + 文件)."""
-        kb_repo = make_knowledge_base_store(session)
-        doc_repo = make_kb_document_store(session)
+        kb_repo = KnowledgeBaseRepository(session)
+        doc_repo = KbDocumentRepository(session)
         kb = await kb_repo.get_owned(kb_id, user_id)
         if kb is None:
             raise NotFound("KB 不存在或无权限", code=40411)

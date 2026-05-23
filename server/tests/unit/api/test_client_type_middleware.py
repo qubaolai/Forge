@@ -8,10 +8,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
-from forge.api.middleware.client_type import (
+from forge.api.middleware.client_type import ClientTypeMiddleware
+from forge.core.request_context import (
     _CLIENT_TYPE,
     CLIENT_TYPE_HEADER,
-    ClientTypeMiddleware,
     current_client_type,
     set_client_type,
 )

@@ -41,18 +41,13 @@ async def test_chat_system_prompt_only_lists_chat_tools() -> None:
     ctx = MagicMock()
     ctx.user_id = "u1"
     ctx.user_name = "用户"
-    agent = MagicMock()
-    agent.system_prompt = ""
 
     with (
         patch("forge.chat.tools.ToolRegistry.get_all", return_value=tools),
         patch("forge.chat.assembler.get_settings", return_value=settings),
-        patch.object(asm, "_fetch_kb_list", return_value=[]),
-        patch("forge.chat.assembler.load_workspace_context") as load_ctx,
+        patch("forge.chat.assembler.fetch_kb_list", return_value=[]),
     ):
-        load_ctx.return_value.assistant_prompt = ""
-        load_ctx.return_value.settings = {}
-        prompt = await asm._render_system_prompt(ctx, agent)  # noqa: SLF001
+        prompt = await asm._render_system_prompt(ctx)  # noqa: SLF001
 
     assert "knowledge_search" in prompt
     assert "read_file" not in prompt

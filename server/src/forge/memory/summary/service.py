@@ -53,11 +53,10 @@ class SummaryService:
             init_engine,
         )
 
-        # Storage protocol injected, swap by deployment_mode (S6.5 M3).
-        from forge.infrastructure.storage import (
-            make_message_store,
-            make_summary_store,
+        from forge.infrastructure.database.repositories.chat_message_repo import (
+            ChatMessageRepository,
         )
+        from forge.memory.summary.store import SummaryStore
         from forge.llm.gateway import build_chain_from_settings
         from forge.memory.summary.summarizer import Summarizer
 
@@ -67,7 +66,7 @@ class SummaryService:
 
         # 1. 加载 history
         async with factory() as db:
-            repo = make_message_store(db)
+            repo = ChatMessageRepository(db)
             rows = await repo.load_recent(
                 session_id, limit=settings.memory.summarizer.history_limit
             )
@@ -108,7 +107,7 @@ class SummaryService:
 
         # 4. 持久化
         token_count = max(1, len(summary_text) // 2)
-        store = make_summary_store(factory)
+        store = SummaryStore(factory)
         try:
             summary = await store.upsert(
                 session_id=session_id,

@@ -1,0 +1,28 @@
+"""Provider ORM — LLM 供应商表。"""
+
+from sqlalchemy import BigInteger, Index, Integer, JSON, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
+
+from forge.infrastructure.database.orm.base import Base
+from forge.infrastructure.database.orm.mixins import BigIntPKMixin, table_args
+from forge.utils.id_generator import new_id
+
+
+class ProviderOrm(Base, BigIntPKMixin):
+    __tablename__ = "providers"
+
+    provider_id: Mapped[str] = mapped_column(
+        String(40), unique=True, nullable=False, default=lambda: new_id("prov"), comment="业务ID: prov_xxx"
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False, comment="anthropic / openai / deepseek / dashscope")
+    impl: Mapped[str] = mapped_column(String(64), nullable=False, comment="SDK 实现类名")
+    base_url: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="API 地址, NULL=官方默认")
+    is_enabled: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    routing_config: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="fallback 图谱 / 重试策略")
+
+    __table_args__ = table_args(
+        Index("ix_prov_name", "name"),
+        Index("ix_prov_enabled", "is_enabled"),
+        comment="LLM 供应商表",
+    )

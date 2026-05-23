@@ -35,12 +35,10 @@ def _ctx() -> TurnContext:
     )
 
 
-async def _collect(finalizer, ctx, result, meta):
-    """跑 finalize generator, 收齐 yielded events."""
-    events = []
-    async for ev in finalizer.finalize(ctx, result, meta):
-        events.append(ev)
-    return events
+async def _collect(finalizer, ctx, result, meta, *, prev_state=None):
+    """跑 finalize，返回事件列表。"""
+    ev = await finalizer.finalize(ctx, result, meta, prev_state=prev_state)
+    return [ev] if ev else []
 
 
 def _patches(*, update_message_mock: AsyncMock, publish_mock: AsyncMock):

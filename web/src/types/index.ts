@@ -292,11 +292,14 @@ export interface ChatSession {
 }
 
 export interface ChatCompletionRequest {
-  session_id: string;
+  session_id?: string;
   message: string;
   attachments?: { file_id: string; type: string }[];
-  // 临时覆盖 Agent 默认配置(可选)
-  override_retrieval?: Partial<RetrievalConfig>;
+  model_options: {
+    provider: string;
+    model: string;
+    reasoning_effort?: 'high' | 'max';
+  };
 }
 
 // ============================================================================

@@ -30,7 +30,7 @@ from __future__ import annotations
 import logging
 from dataclasses import asdict, dataclass
 
-from forge.api.middleware.tracing import (
+from forge.core.request_context import (
     current_trace_id,
     current_user_id,
 )

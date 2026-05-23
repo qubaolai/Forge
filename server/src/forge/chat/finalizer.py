@@ -10,16 +10,15 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
 from dataclasses import asdict
 
 from forge.agents.base import AgentEvent
 from forge.chat.types import ResumeState, RunResult, TurnContext
 from forge.context.base import BuildMeta
+from forge.core.content_merge import strip_overlap
 from forge.infrastructure.database.database import get_session_factory
 
-# Storage protocol injected, swap by deployment_mode (S6.5 M3).
-from forge.infrastructure.storage import make_message_store
+from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
 from forge.observability.tracing.tracer import span
 
 logger = logging.getLogger(__name__)
@@ -35,39 +34,18 @@ class TurnFinalizer:
         build_meta: BuildMeta,
         *,
         prev_state: ResumeState | None = None,
-    ) -> AsyncIterator[AgentEvent]:
-        """落库 + 发终态事件 + 发布 turn.completed.
-
-        AsyncIterator: 单事件 yield 一次, 走 generator 接口让 Orchestrator
-        统一 `async for` 透传.
-
-        三条终态分支:
-            stop        -> done       事件, status=done,    publish turn.completed
-            aborted     -> task_partial 事件, status=aborted, 不 publish (用户可能继续)
-            partial_*   -> task_partial 事件, status=partial,  不 publish (同上)
-            error       -> error      事件, status=error,    不 publish
-
-        Resume 场景 (prev_state 非空):
-            - 把 result.content 追加到 prev_state.prev_content (不替换)
-            - tool_calls / reasoning / usage 都累加
-            - 写库时是合并后的全量, 跟普通 turn 一致
-        """
+    ) -> AgentEvent | None:
+        """落库 + 发终态事件 + 发布 turn.completed。返回终态事件，调用方负责 yield。"""
         with span(
             "chat.finalize",
             session_id=ctx.session_id,
             assistant_msg_id=ctx.assistant_msg_id,
             is_resume=prev_state is not None,
-            workspace_id=ctx.workspace_id,
-            workflow_id=ctx.workflow_id,
         ) as s:
-            # 0. resume 合并 (resume 时 result 只是本次新增, 不是全量; 合并出全量)
             if prev_state is not None:
                 result = self._merge_with_prev(result, prev_state)
 
-            # 1. DB 状态
             status = self._status_for(result.finish_reason)
-
-            # 2. DB 更新
             await self._update_message(ctx, result, build_meta, status)
 
             s.set("finish_reason", result.finish_reason)
@@ -79,61 +57,28 @@ class TurnFinalizer:
             logger.info(
                 "终态落库 session=%s message_id=%s status=%s finish_reason=%s "
                 "content_len=%d tool_calls=%d usage=%s resumed=%s",
-                ctx.session_id,
-                ctx.assistant_msg_id,
-                status,
-                result.finish_reason,
-                len(result.content or ""),
-                len(result.tool_calls or []),
-                result.usage or {},
-                prev_state is not None,
+                ctx.session_id, ctx.assistant_msg_id, status, result.finish_reason,
+                len(result.content or ""), len(result.tool_calls or []),
+                result.usage or {}, prev_state is not None,
             )
 
-            # 3. 发终态事件
+            # 终态事件
             if result.finish_reason == "error":
-                yield self._error_event(ctx, result)
+                event = self._error_event(ctx, result)
             elif result.is_resumable:
-                yield self._partial_event(ctx, result)
+                event = self._partial_event(ctx, result)
             else:
-                yield self._done_event(ctx, result)
+                event = self._done_event(ctx, result)
 
-            # 4. publish turn.completed -- 仅在 LLM 真正自然完成时
             if result.is_terminal_ok:
                 await self._publish_turn_completed(ctx)
                 s.set("turn_completed_published", True)
 
+            return event
+
     # ------------------------------------------------------------------
-    # Resume 合并: 关键 = strip suffix-prefix overlap (修 LLM 续写重复问题)
+    # Resume 合并: 用 longest suffix-prefix match 修复 LLM 续写重复问题
     # ------------------------------------------------------------------
-    # 续写重复 (continuation overlap / resume duplication) 修复:
-    # LLM 在 resume 场景下经常重复 prev_content 末尾的一小段, 尤其在代码块 / 表格
-    # 截断处. 即使 prompt 里明确告知 "不要重复", 失误率仍不为零.
-    # 服务端在 _merge_with_prev 里做一次 longest suffix-prefix match, 自动 strip
-    # 重叠. 这是不依赖 LLM 配合的兜底.
-    OVERLAP_MAX = 256  # 最长检测重叠字符数 (取末尾这么多比对); 算法 O(min(N, 256))
-
-    @staticmethod
-    def _strip_overlap(prev: str, new: str, max_overlap: int = OVERLAP_MAX) -> tuple[str, int]:
-        """找 prev 的最长后缀, 它同时是 new 的前缀; 返回 (剥离后的 new, 重叠字符数).
-
-        prev = "...def foo():\\n    return"
-        new  = "    return 42\\n```"
-        ->   ("42\\n```", 10)   # "    return" 被识别为重叠
-
-        若 prev/new 任一为空 -> 直接返回原 new + 0.
-        若没找到任何重叠 -> 返回原 new + 0.
-
-        算法: 从可能的最长重叠 (= min(len(prev), len(new), max_overlap)) 向下试,
-        命中即返回, 保证拿到的是最长匹配.
-        """
-        if not prev or not new:
-            return new, 0
-        end = min(len(prev), len(new), max_overlap)
-        for k in range(end, 0, -1):
-            if prev.endswith(new[:k]):
-                return new[k:], k
-        return new, 0
-
     @classmethod
     def _merge_with_prev(cls, result: RunResult, prev: ResumeState) -> RunResult:
         """Resume 合并: 新生成的内容追加到上次的内容上 (含 overlap strip).
@@ -151,7 +96,7 @@ class TurnFinalizer:
                     continue
                 merged_usage[k] = merged_usage.get(k, 0) + v
 
-        stripped_new_content, overlap_chars = cls._strip_overlap(
+        stripped_new_content, overlap_chars = strip_overlap(
             prev.prev_content or "", result.content or ""
         )
         if overlap_chars > 0:
@@ -207,7 +152,7 @@ class TurnFinalizer:
     ) -> None:
         factory = get_session_factory()
         async with factory() as db:
-            repo = make_message_store(db)
+            repo = ChatMessageRepository(db)
             msg = await repo.get_by_id(ctx.assistant_msg_id)
             if msg:
                 await repo.update(
@@ -286,8 +231,6 @@ class TurnFinalizer:
                     "session_id": ctx.session_id,
                     "user_id": ctx.user_id,
                     "trace_id": ctx.trace_id,
-                    "workspace_id": ctx.workspace_id,
-                    "workflow_id": ctx.workflow_id,
                 },
             )
         except Exception:  # noqa: BLE001

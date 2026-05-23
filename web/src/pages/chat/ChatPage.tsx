@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { sessionsApi, agentsApi } from '@/api';
+import { sessionsApi, agentsApi, systemApi, ModelInfo } from '@/api';
 import { ChatMessage, Citation } from '@/types';
 import { useChatStream } from '@/hooks/useChatStream';
 import { MessageList } from '@/components/chat/MessageList';
@@ -20,7 +20,6 @@ export default function ChatPage() {
   const noSession = !sessionId; // /chat 根路由
   const agentIdParam = searchParams.get('agent');
 
-  // 从 /chat/new 导航到真实会话时跳过 Effect 清场，保持流不中断
   const skipResetRef = useRef(false);
 
   const { data: history, isLoading } = useQuery({
@@ -44,6 +43,30 @@ export default function ChatPage() {
   const [showPanel, setShowPanel] = useState(true);
   const [selectedCitation, setSelectedCitation] = useState<number | null>(null);
   const [reasoning, setReasoning] = useState<ReasoningEffort>('high');
+  const [thinkingEnabled, setThinkingEnabled] = useState(true);
+
+  // 模型选择
+  const [selectedProvider, setSelectedProvider] = useState('anthropic');
+  const [selectedModel, setSelectedModel] = useState('claude-sonnet-4-6');
+  const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
+
+  // 加载可用模型列表
+  const loadModelsForProvider = useCallback(async (provider: string) => {
+    try {
+      const res = await systemApi.models(provider);
+      const models = res.models || [];
+      setAvailableModels(models);
+      if (models.length > 0) {
+        setSelectedModel(models[0].name);
+      }
+    } catch {
+      setAvailableModels([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadModelsForProvider(selectedProvider);
+  }, [selectedProvider, loadModelsForProvider]);
 
   const { send, abort, resume, reset, streaming, current } = useChatStream({
     onComplete: () => {
@@ -138,8 +161,15 @@ export default function ChatPage() {
   }, [messages]);
 
   function buildModelOptions(): ModelOptions {
-    // thinking 由后端 DeepSeekLLM 默认开启, 前端只传强度
-    return { reasoning_effort: reasoning };
+    const opts: ModelOptions = { provider: selectedProvider, model: selectedModel };
+    const meta = availableModels.find((m) => m.name === selectedModel)?.thinking;
+    if (meta?.type === 'reasoning_effort') {
+      opts.reasoning_effort = reasoning;
+    } else if (meta?.type === 'enabled' && thinkingEnabled) {
+      opts.thinking = true;
+      opts.thinking_budget = 5000;
+    }
+    return opts;
   }
 
   function handleSend(text: string) {
@@ -246,6 +276,13 @@ export default function ChatPage() {
           placeholder={undefined}
           reasoning={reasoning}
           onReasoningChange={setReasoning}
+          selectedProvider={selectedProvider}
+          selectedModel={selectedModel}
+          availableModels={availableModels}
+          onProviderChange={setSelectedProvider}
+          onModelChange={setSelectedModel}
+          thinkingEnabled={thinkingEnabled}
+          onThinkingChange={setThinkingEnabled}
         />
       </main>
 

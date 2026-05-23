@@ -15,7 +15,7 @@ from forge.adaptive.models import AdaptiveRun, RunStatus
 from forge.adaptive.options import TaskOptions
 from forge.adaptive.store import AdaptiveRunStore
 from forge.adaptive.supervisor import build_orchestrator_factory, get_run_supervisor
-from forge.api.dependencies import CurrentUser
+from forge.api.dependencies import AuthenticatedUser
 from forge.api.schemas.run import DecideIn, RunCreateIn
 from forge.core.exceptions import BadRequest, Conflict, Forbidden, NotFound
 from forge.core.response import success
@@ -52,7 +52,7 @@ def _run_to_dict(run: AdaptiveRun) -> dict:
 
 def _ensure_owner(run: AdaptiveRun, user) -> None:
     """校验 run 归属。非 owner 也非 admin 直接拒绝（多租户隔离）。"""
-    if run.owner_user_id == user.id:
+    if run.owner_user_id == user.user_id:
         return
     if getattr(user, "role", "") in ("owner", "admin"):
         return
@@ -60,7 +60,7 @@ def _ensure_owner(run: AdaptiveRun, user) -> None:
 
 
 @router.post("")
-async def create_run(body: RunCreateIn, user: CurrentUser):
+async def create_run(body: RunCreateIn, user: AuthenticatedUser):
     """创建 run（仅建档，不触发执行）。"""
     settings = get_settings()
     options = TaskOptions.build(body.task_options, settings=settings)
@@ -77,7 +77,7 @@ async def create_run(body: RunCreateIn, user: CurrentUser):
         run_id=new_id("run"),
         workspace_path=workspace_path,
         goal=body.goal,
-        owner_user_id=user.id,
+        owner_user_id=user.user_id,
         status=RunStatus.CREATED,
         metadata={"source": "api:/runs"},
         options_snapshot=options.to_dict(),
@@ -86,7 +86,7 @@ async def create_run(body: RunCreateIn, user: CurrentUser):
     # C11/D6: 写全局 run index，让查询 API 不依赖客户端持续传 workspace_path
     await run_index.record_run(
         run_id=run.run_id,
-        owner_user_id=user.id,
+        owner_user_id=user.user_id,
         workspace_path=workspace_path,
     )
     await store.append_event(
@@ -95,7 +95,7 @@ async def create_run(body: RunCreateIn, user: CurrentUser):
         {
             "status": run.status.value,
             "goal": run.goal,
-            "owner_user_id": user.id,
+            "owner_user_id": user.user_id,
         },
     )
 
@@ -114,14 +114,14 @@ async def create_run(body: RunCreateIn, user: CurrentUser):
 
 @router.get("")
 async def list_runs(
-    user: CurrentUser,
+    user: AuthenticatedUser,
     workspace_path: str | None = None,
     status: RunStatus | None = None,
     limit: int = Query(100, ge=1, le=500),
 ):
     """列出 run（仅当前用户拥有的）。管理员可见所有。"""
     store = AdaptiveRunStore(workspace_path=_resolve_workspace_path(workspace_path))
-    owner_filter = None if getattr(user, "role", "") in ("owner", "admin") else user.id
+    owner_filter = None if getattr(user, "role", "") in ("owner", "admin") else user.user_id
     runs = await store.list_runs(limit=limit, owner_user_id=owner_filter)
     if status is not None:
         runs = [run for run in runs if run.status == status]
@@ -130,7 +130,7 @@ async def list_runs(
 
 
 @router.get("/{run_id}")
-async def get_run(run_id: str, user: CurrentUser, workspace_path: str | None = None):
+async def get_run(run_id: str, user: AuthenticatedUser, workspace_path: str | None = None):
     """查询单个 run。非 owner 也非 admin 直接 403。"""
     # C11/D6: 客户端可省略 workspace_path，由全局 index 反查
     resolved = await _resolve_workspace_for_run(run_id, workspace_path)
@@ -146,7 +146,7 @@ async def get_run(run_id: str, user: CurrentUser, workspace_path: str | None = N
 async def stream_run_events(
     run_id: str,
     request: Request,
-    user: CurrentUser,
+    user: AuthenticatedUser,
     workspace_path: str | None = None,
     after_event_id: str | None = None,
     follow: bool = False,
@@ -222,7 +222,7 @@ async def stream_run_events(
 
 
 @router.post("/{run_id}/abort")
-async def abort_run(run_id: str, user: CurrentUser, workspace_path: str | None = None):
+async def abort_run(run_id: str, user: AuthenticatedUser, workspace_path: str | None = None):
     """中止 run（同时取消后台执行任务）。"""
     resolved = await _resolve_workspace_for_run(run_id, workspace_path)
     store = AdaptiveRunStore(workspace_path=resolved)
@@ -249,7 +249,7 @@ async def abort_run(run_id: str, user: CurrentUser, workspace_path: str | None =
 
 
 @router.post("/{run_id}/decide")
-async def decide_run(run_id: str, body: DecideIn, user: CurrentUser, workspace_path: str | None = None):
+async def decide_run(run_id: str, body: DecideIn, user: AuthenticatedUser, workspace_path: str | None = None):
     """处理 BLOCKED run 的人工决策 (HITL)。
 
     - ``continue`` → 把 run 状态切回 PLANNING，并由 supervisor 重新唤起

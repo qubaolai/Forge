@@ -117,11 +117,6 @@ class OpenAICompatibleLLM(LLM):
         reasoning_effort: str | None = None,
         extra_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """统一构造 chat.completions.create 共用参数.
-
-        策略: 只传非 None 字段, 其余让 SDK 走默认.
-        reasoning_effort 翻译为 SDK 顶层 kwarg (OpenAI o-series / DeepSeek).
-        """
         kw: dict[str, Any] = {
             "model": model,
             "temperature": temperature if temperature is not None else 0.7,
@@ -130,11 +125,10 @@ class OpenAICompatibleLLM(LLM):
             kw["max_tokens"] = max_tokens
         if top_p is not None:
             kw["top_p"] = top_p
-
-        # reasoning_effort: extra_options 覆盖 spec
-        effective_reasoning = (extra_options or {}).get("reasoning_effort") or reasoning_effort
-        if effective_reasoning:
-            kw["reasoning_effort"] = effective_reasoning
+        # reasoning_effort 只从 extra_options 读取 (per-request 前端传入)
+        opts = extra_options or {}
+        if opts.get("reasoning_effort"):
+            kw["reasoning_effort"] = opts["reasoning_effort"]
         return kw
 
     # ------------------------------------------------------------------
@@ -359,7 +353,7 @@ class OpenAICompatibleLLM(LLM):
         return result
 
 
-@register_llm("openai")
+# @register_llm("openai")
 class OpenAILLM(OpenAICompatibleLLM):
     """OpenAI 官方 API."""
 
@@ -397,31 +391,18 @@ class DeepSeekLLM(OpenAICompatibleLLM):
         thinking: bool | None = None,
         extra_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """显式控制 thinking 模式 (enabled/disabled), 不依赖服务端默认.
-
-        thinking 优先级 (高→低):
-            1. extra_options.thinking  (前端 per-request)
-            2. thinking 参数           (spec.thinking, 来自 yaml ModelConfig)
-            3. 默认 True               (DeepSeek 常用形态)
-
-        始终往 extra_body 写显式 type, 不省略让服务端决定 — 这样 yaml/前端能真的关掉.
-        """
         kw = super()._build_kwargs(
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            reasoning_effort=reasoning_effort,
-            extra_options=extra_options,
+            model=model, temperature=temperature, max_tokens=max_tokens,
+            top_p=top_p, reasoning_effort=reasoning_effort, extra_options=extra_options,
         )
-        effective_thinking = (extra_options or {}).get("thinking")
-        if effective_thinking is None:
-            effective_thinking = thinking if thinking is not None else True
-
-        body = kw.setdefault("extra_body", {})
-        body["thinking"] = {"type": "enabled" if effective_thinking else "disabled"}
-        if not effective_thinking:
-            kw.pop("reasoning_effort", None)
+        # thinking 只从 extra_options 读取 (per-request 前端传入)
+        opts = extra_options or {}
+        effective_thinking = opts.get("thinking")
+        if effective_thinking is not None:
+            body = kw.setdefault("extra_body", {})
+            body["thinking"] = {"type": "enabled" if effective_thinking else "disabled"}
+            if not effective_thinking:
+                kw.pop("reasoning_effort", None)
         return kw
 
     def _messages_payload(self, messages: list) -> list[dict]:

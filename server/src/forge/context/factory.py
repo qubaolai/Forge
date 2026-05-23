@@ -18,8 +18,8 @@ from config.settings import get_settings
 from forge.context.base import ContextBuilder
 from forge.context.builder import CompositeContextBuilder
 
-# Storage protocol injected, swap by deployment_mode (S6.5 M3).
-from forge.infrastructure.storage import MessageStore, make_summary_store
+from forge.infrastructure.storage import MessageStore
+from forge.memory.summary.store import SummaryStore
 from forge.llm.token_counter import TokenCounter, get_token_counter
 from forge.memory.base import MemoryStore
 from forge.memory.null import NullMemoryStore
@@ -57,7 +57,7 @@ def get_memory_store() -> MemoryStore:
 
         factory = get_session_factory()
         _DEFAULT_MEMORY_STORE = CompositeMemoryStore(
-            summary_store=make_summary_store(factory),
+            summary_store=SummaryStore(factory),
         )
         logger.info("MemoryStore 就绪: CompositeMemoryStore (仅摘要)")
     except Exception as exc:  # noqa: BLE001

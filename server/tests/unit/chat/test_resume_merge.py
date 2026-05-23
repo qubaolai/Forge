@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from forge.chat.finalizer import TurnFinalizer
+from forge.core.content_merge import strip_overlap
 from forge.chat.orchestrator import _inject_partial_into_messages
 from forge.chat.types import ResumeState, RunResult, TurnContext
 from forge.context.base import BuildMeta
@@ -72,20 +73,20 @@ def test_merge_appends_content() -> None:
 # R8: continuation overlap / suffix-prefix overlap strip
 # ---------------------------------------------------------------------------
 def test_strip_overlap_no_overlap_returns_new_unchanged() -> None:
-    stripped, n = TurnFinalizer._strip_overlap("hello", "world")
+    stripped, n = strip_overlap("hello", "world")
     assert stripped == "world"
     assert n == 0
 
 
 def test_strip_overlap_empty_inputs() -> None:
-    assert TurnFinalizer._strip_overlap("", "x") == ("x", 0)
-    assert TurnFinalizer._strip_overlap("x", "") == ("", 0)
-    assert TurnFinalizer._strip_overlap("", "") == ("", 0)
+    assert strip_overlap("", "x") == ("x", 0)
+    assert strip_overlap("x", "") == ("", 0)
+    assert strip_overlap("", "") == ("", 0)
 
 
 def test_strip_overlap_full_word_overlap() -> None:
     """prev 以 'return' 结束, new 以 'return 42' 开头 -> strip 'return'."""
-    stripped, n = TurnFinalizer._strip_overlap("def foo():\n    return", "    return 42\n```")
+    stripped, n = strip_overlap("def foo():\n    return", "    return 42\n```")
     assert stripped == " 42\n```"
     assert n == 10  # "    return" = 10 chars
 
@@ -94,7 +95,7 @@ def test_strip_overlap_picks_longest_match() -> None:
     """有多个可能匹配长度时, 取最长的."""
     prev = "hello world"
     new = "world is great"
-    stripped, n = TurnFinalizer._strip_overlap(prev, new)
+    stripped, n = strip_overlap(prev, new)
     # 最长重叠 = "world" (5 chars)
     assert stripped == " is great"
     assert n == 5
@@ -104,7 +105,7 @@ def test_strip_overlap_respects_max() -> None:
     """超过 max_overlap 不会无限往前找."""
     prev = "x" * 1000
     new = "x" * 1000 + "tail"
-    stripped, n = TurnFinalizer._strip_overlap(prev, new, max_overlap=50)
+    stripped, n = strip_overlap(prev, new, max_overlap=50)
     # 即使可重叠 1000 chars, 也只检测 50
     assert n == 50
     assert stripped == "x" * 950 + "tail"
@@ -114,7 +115,7 @@ def test_strip_overlap_code_block_realistic() -> None:
     """实际代码块截断场景."""
     prev = "Here is the function:\n```python\ndef add(a, b):\n    return a"
     new = "    return a + b\n```\nDone."
-    stripped, n = TurnFinalizer._strip_overlap(prev, new)
+    stripped, n = strip_overlap(prev, new)
     assert n == 12  # "    return a" = 12 chars
     assert stripped == " + b\n```\nDone."
     # 合并后没有 "    return a" 重复
@@ -128,7 +129,7 @@ def test_strip_overlap_no_partial_word_false_positive() -> None:
     """prev 末尾是 'fooba', new 开头是 'foobar...' -> 仍能识别为 'fooba' 的overlap."""
     prev = "let's name it: fooba"
     new = "foobar (the rest)"
-    stripped, n = TurnFinalizer._strip_overlap(prev, new)
+    stripped, n = strip_overlap(prev, new)
     # "fooba" 5 chars 是 longest match
     assert n == 5
     assert stripped == "r (the rest)"
@@ -197,7 +198,8 @@ async def test_finalize_with_prev_state_writes_merged_content() -> None:
         patch.object(TurnFinalizer, "_update_message", update),
         patch.object(TurnFinalizer, "_publish_turn_completed", publish),
     ):
-        async for ev in finalizer.finalize(_ctx(), new_result, BuildMeta(), prev_state=prev):
+        ev = await finalizer.finalize(_ctx(), new_result, BuildMeta(), prev_state=prev)
+        if ev:
             events.append(ev)
 
     assert len(events) == 1

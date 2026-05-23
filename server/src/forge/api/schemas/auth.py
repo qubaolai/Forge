@@ -2,14 +2,14 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 # ---- 输出 ----
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: str
+    id: str = Field(validation_alias="user_id")
     email: EmailStr
     name: str
     avatar_url: str | None = None

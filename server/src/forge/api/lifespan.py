@@ -117,22 +117,64 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #    - 整体失败仍允许服务启动 (首次调用时再尝试)
     from forge.llm.client_pool import get_llm_pool
 
+    import os
+
     llm_pool = get_llm_pool()
     warmed, failed = 0, 0
-    for provider_name, pcfg in settings.llm.providers.items():
-        impl = pcfg.impl or provider_name
-        client_options = {"base_url": pcfg.base_url, "timeout": pcfg.timeout}
-        for api_key in pcfg.api_keys:
-            try:
-                llm_pool.warm(impl, api_key, client_options)
-                warmed += 1
-            except Exception:
-                logger.exception("LLM 预热失败: impl=%s key=%s***", impl, api_key[:6])
-                failed += 1
+    if settings.llm.providers:
+        for provider_name, pcfg in settings.llm.providers.items():
+            impl = pcfg.impl or provider_name
+            client_options = {"base_url": pcfg.base_url, "timeout": pcfg.timeout}
+            for api_key in pcfg.api_keys:
+                if not api_key:
+                    continue
+                try:
+                    llm_pool.warm(impl, api_key, client_options)
+                    llm_pool.register_key(impl, api_key)
+                    warmed += 1
+                except Exception:
+                    logger.exception("LLM 预热失败: impl=%s key=%s***", impl, api_key[:6])
+                    failed += 1
+    else:
+        # 无 YAML 模式: 从环境变量加载 key
+        for impl in ("anthropic", "deepseek", "dashscope", "openai"):
+            env_key = f"{impl.upper()}_API_KEY"
+            api_key = os.environ.get(env_key, "")
+            if api_key:
+                try:
+                    llm_pool.warm(impl, api_key)
+                    llm_pool.register_key(impl, api_key)
+                    warmed += 1
+                except Exception:
+                    logger.exception("LLM 预热失败: impl=%s", impl)
+                    failed += 1
     logger.info("LLM 池预热完成: 成功=%d 失败=%d 池容量=%d", warmed, failed, llm_pool.size())
     app.state.llm_pool = llm_pool
 
-    # 3.1 CostTracker: 加载 budget 配置 + baseline hydrate
+    # 3.1 模型目录: 从各供应商 API 获取模型列表 + 能力元数据
+    from forge.llm.model_catalog import init_model_catalog
+
+    catalog = init_model_catalog()
+    catalog_providers: list[dict] = []
+    if settings.llm.providers:
+        for pname, pcfg in settings.llm.providers.items():
+            keys = pcfg.api_keys or []
+            catalog_providers.append({
+                "name": pname, "impl": pcfg.impl or pname,
+                "api_key": keys[0] if keys else "", "base_url": pcfg.base_url,
+            })
+    else:
+        # 无 YAML 模式: 从 @register_llm 注册表 + 环境变量获取
+        from forge.llm.gateway import list_providers as list_registered
+        for pname in list_registered():
+            catalog_providers.append({
+                "name": pname, "impl": pname,
+                "api_key": "", "base_url": None,
+            })
+    await catalog.refresh(catalog_providers)
+    logger.info("模型目录就绪: providers=%s", catalog.list_providers())
+
+    # 3.2 CostTracker: 加载 budget 配置 + baseline hydrate
     #   - configure_budget 把 settings.llm.budget 推到 tracker (硬: 配错则启动失败)
     #   - hydrate_baseline 软依赖, 失败仅日志, 首日为空 baseline 行为正确
     try:

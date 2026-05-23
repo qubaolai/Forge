@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
 from forge.agents.base import AgentEvent, AgentResult, BaseAgent
-from forge.api.middleware.client_type import current_client_type
+from forge.core.request_context import current_client_type
 from forge.core.types.errors import AgentMaxStepsError
 from forge.core.types.message import Message
 from forge.observability.tracing.tracer import span

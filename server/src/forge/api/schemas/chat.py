@@ -1,7 +1,7 @@
 """会话与对话相关的 schema。"""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -65,6 +65,21 @@ class ChatAttachment(BaseModel):
     name: str | None = None
 
 
+class ModelOptionsIn(BaseModel):
+    """模型选择 — 前端必须指定 provider 和 model。
+
+    思考参数按供应商区分:
+    - DeepSeek: reasoning_effort = "high" | "max"
+    - Anthropic: thinking = true, 可配 thinking_budget (默认 5000)
+    """
+
+    provider: str
+    model: str
+    reasoning_effort: Literal["high", "max"] | None = None
+    thinking: bool | None = None
+    thinking_budget: int | None = None
+
+
 class ChatCompletionIn(BaseModel):
     """聊天对话请求 — 纯对话模式，不包含任务执行。
 
@@ -72,11 +87,10 @@ class ChatCompletionIn(BaseModel):
     """
 
     session_id: str | None = None
-    agent_id: str | None = None  # 无 session_id 时用于建会话
+    agent_id: str | None = None
     message: str = Field(min_length=1)
     attachments: list[ChatAttachment] = Field(default_factory=list)
-    override_retrieval: dict | None = None
-    model_options: dict | None = None
+    model_options: ModelOptionsIn
 
 
 class ChatStopIn(BaseModel):

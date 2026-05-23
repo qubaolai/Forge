@@ -16,13 +16,16 @@ interface UseChatStreamOptions {
   onSessionRenamed?: (sessionId: string, title: string) => void;
 }
 
-/** 后端 ChatCompletionIn.model_options 结构 (透传到 LLM provider).
+/** 后端 ChatCompletionIn.model_options 结构。
  *
- * 注: thinking 由后端 DeepSeekLLM 默认开启, 前端不再传该字段.
- * reasoning_effort 取值对齐 DeepSeek 官方文档: high (默认) | max (复杂推理).
+ * provider / model 必传，reasoning_effort 仅 DeepSeek 有效。
  */
 export interface ModelOptions {
-  reasoning_effort?: 'high' | 'max';
+  provider: string;
+  model: string;
+  reasoning_effort?: 'high' | 'max';  // DeepSeek
+  thinking?: boolean;                  // Anthropic
+  thinking_budget?: number;            // Anthropic budget_tokens
 }
 
 /**

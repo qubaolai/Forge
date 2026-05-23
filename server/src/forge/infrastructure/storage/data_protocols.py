@@ -3,8 +3,7 @@
 设计目的:
 - 把业务代码 (chat / memory / api 路由 / kb 服务) 跟具体存储实现解耦.
 - 业务侧只 import 本模块的 Protocol; 具体类由 ``data_factory.py`` 装配.
-- 单机模式下 Protocol 满足者是现有的 ``*Repository`` / ``*Log`` / ``SummaryStore`` 等.
-- 未来 SaaS 模式接入 RDS / S3 / Dynamo 时新增实现类, 业务代码不动.
+- MySQL 模式下 Protocol 满足者是 ChatSessionRepository / ChatMessageRepository 等.
 
 不引入新能力:
 - 每个 Protocol 的方法签名严格按 **当前业务实际调用** 列出. 不是完整 ORM.
@@ -23,6 +22,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -33,13 +33,46 @@ if TYPE_CHECKING:
     from forge.infrastructure.database.orm.knowledge_base_orm import (
         KnowledgeBaseOrm,
     )
-    from forge.infrastructure.database.repositories.message_repo import (
-        ChatMessageView,
-    )
-    from forge.infrastructure.database.repositories.session_repo import (
-        SessionView,
-    )
     from forge.memory.base import Summary
+
+
+# ---------------------------------------------------------------------------
+# 共享数据视图 — 业务层与存储层之间的传输对象
+# ---------------------------------------------------------------------------
+@dataclass
+class SessionView:
+    """会话元数据视图。"""
+
+    id: str
+    user_id: str
+    agent_id: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    message_count: int = 0
+    last_message_at: datetime | None = None
+    run_ids: list[str] | None = None
+
+
+@dataclass
+class ChatMessageView:
+    """消息视图。"""
+
+    id: str
+    session_id: str
+    role: str
+    content: str
+    status: str
+    citations: Any | None = None
+    tool_calls: Any | None = None
+    usage: dict[str, Any] | None = None
+    context_meta: dict[str, Any] | None = None
+    parent_id: str | None = None
+    error_message: str | None = None
+    reasoning_content: str | None = None
+    reasoning_duration_ms: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 # ---------------------------------------------------------------------------

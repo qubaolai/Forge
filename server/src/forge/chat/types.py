@@ -31,12 +31,6 @@ class TurnContext:
     # 给 Assembler 用的 agent 配置 (ContextAssembler 不直接拿 AgentOrm)
     system_prompt: str = ""
     context_window: int = 128_000
-    workspace_id: str | None = None
-    workflow_id: str | None = None
-    workspace_context: Any | None = None
-    workflow_context: Any | None = None
-    project_decisions: tuple[str, ...] = ()
-    role_history: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

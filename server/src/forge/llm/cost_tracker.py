@@ -31,7 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC
 
-from forge.api.middleware.tracing import current_user_id
+from forge.core.request_context import current_user_id
 
 logger = logging.getLogger(__name__)
 
