@@ -25,7 +25,7 @@ def _is_already_encrypted(text: str) -> bool:
 
 
 async def encrypt_keys() -> None:
-    from config.settings import get_settings
+    from forge.config.settings import get_settings
     from forge.infrastructure.database import database as db_module
     from forge.infrastructure.database.orm.provider_key_orm import ProviderKeyOrm
     from forge.core.crypto import encrypt, decrypt
@@ -92,7 +92,7 @@ if __name__ == "__main__":
     if src not in sys.path:
         sys.path.insert(0, src)
 
-    from config.settings import get_settings
+    from forge.config.settings import get_settings
     get_settings()
 
     if not os.environ.get("FORGE_ENCRYPTION_KEY", "").strip():

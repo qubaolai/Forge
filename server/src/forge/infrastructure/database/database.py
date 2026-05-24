@@ -9,7 +9,7 @@
 
 from collections.abc import AsyncGenerator
 
-from config.settings import get_settings
+from forge.config.settings import get_settings
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,

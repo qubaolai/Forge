@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from config.domains.quota import UsageQuotaWindowSettings, UserQuotaSettings
+from forge.config.domains.quota import UsageQuotaWindowSettings, UserQuotaSettings
 
 from forge.infrastructure.cost_log import CostEntry, default_cost_log
 from forge.quota import UsageQuotaManager, UserQuotaExceeded

@@ -59,7 +59,7 @@ class _Ctx:
         settings.memory.summarizer.max_summary_tokens = 1500
         settings.memory.summarizer.provider = ""
         settings.memory.summarizer.model = ""
-        self.patches.append(patch("config.settings.get_settings", return_value=settings))
+        self.patches.append(patch("forge.config.settings.get_settings", return_value=settings))
 
         # 2. DB: init_engine + get_session_factory + MessageRepository
         self.patches.append(

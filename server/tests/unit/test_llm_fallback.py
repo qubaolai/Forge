@@ -10,8 +10,8 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
-from config.domains.llm import LLMCallSpec
-from config.domains.quota import UsageQuotaWindowSettings, UserQuotaSettings
+from forge.config.domains.llm import LLMCallSpec
+from forge.config.domains.quota import UsageQuotaWindowSettings, UserQuotaSettings
 
 from forge.core.request_context import user_id_scope
 from forge.llm.cost_tracker import get_cost_tracker

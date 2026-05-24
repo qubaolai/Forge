@@ -83,7 +83,7 @@ _OTHER_MODELS = [
 
 async def seed() -> None:
     """幂等初始化数据库中的供应商和模型数据。"""
-    from config.settings import get_settings
+    from forge.config.settings import get_settings
     from forge.infrastructure.database import database as db_module
     from forge.infrastructure.database.orm.model_provider_orm import ProviderOrm
     from forge.infrastructure.database.orm.model_orm import ModelOrm

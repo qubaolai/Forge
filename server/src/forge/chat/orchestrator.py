@@ -22,7 +22,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 
-from config.settings import get_settings
+from forge.config.settings import get_settings
 
 from forge.agents.base import AgentEvent
 from forge.core.request_context import set_trace_id, set_user_id

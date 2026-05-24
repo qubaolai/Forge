@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 
-from config.settings import get_settings
+from forge.config.settings import get_settings
 
 from forge.context.base import ContextBuilder
 from forge.context.builder import CompositeContextBuilder

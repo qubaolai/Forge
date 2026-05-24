@@ -136,7 +136,7 @@ async def run_node_with_react(
     Raises:
         TaskRunnerError: 任何 LLM/工具异常都抛出，由 Executor 转 TaskStatus.FAILED
     """
-    from config.settings import get_settings
+    from forge.config.settings import get_settings
 
     from forge.agents.react.agent import ReActAgent
     from forge.llm.gateway import build_chain_from_settings, split_provider_model

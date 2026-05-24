@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from config.settings import get_settings
+from forge.config.settings import get_settings
 
 from forge.chat.kb_resolver import fetch_kb_list
 from forge.chat.types import TurnContext

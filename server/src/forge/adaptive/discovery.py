@@ -79,7 +79,7 @@ def build_real_discovery_callable(
         # 局部 import：避免 settings/LLM 在单测 collection 阶段被强制求值
         import asyncio
 
-        from config.settings import get_settings
+        from forge.config.settings import get_settings
 
         from forge.agents.react.agent import ReActAgent
         from forge.llm.gateway import build_chain_from_settings, split_provider_model

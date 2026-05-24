@@ -2,7 +2,7 @@
 配置管理唯一入口。
 
 用法:
-    from config.settings import get_settings
+    from forge.config.settings import get_settings
     s = get_settings()
 
     # LLM (支持运行时按 provider + model 切换)
@@ -16,8 +16,8 @@
 环境配置选择 (优先级从高到低):
     1. init_settings(path) 显式传入
     2. APP_CONFIG=/absolute/path/to/config.yaml  完整路径
-    3. APP_ENV=prod / dev / test  → config/sys_config.{env}.yaml
-    4. 默认 config/sys_config.yaml
+    3. APP_ENV=prod / dev / test  → <server_root>/config/sys_config.{env}.yaml
+    4. 默认 <server_root>/config/sys_config.yaml
 """
 
 from __future__ import annotations
@@ -26,33 +26,33 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import cast
 
 import yaml
 
-from config._env import expand_env, load_dotenv_if_present, load_env_files
-from config.domains.app import AppConfig, MiddlewareConfig
-from config.domains.db import CelerySettings, DBSettings, RedisSettings
-from config.domains.llm import LLMConfig, UtilityLLMConfig
-from config.domains.memory import MemorySettings, MemorySummarizerSettings, MemoryTriggerSettings
-from config.domains.observability import ObservabilityConfig
-from config.domains.quota import UserQuotaSettings
-from config.domains.retrieval import (
+from forge.config._env import expand_env, load_dotenv_if_present, load_env_files
+from forge.config.domains.app import AppConfig, MiddlewareConfig
+from forge.config.domains.db import CelerySettings, DBSettings, RedisSettings
+from forge.config.domains.llm import LLMConfig, UtilityLLMConfig
+from forge.config.domains.memory import MemorySettings, MemorySummarizerSettings, MemoryTriggerSettings
+from forge.config.domains.observability import ObservabilityConfig
+from forge.config.domains.quota import UserQuotaSettings
+from forge.config.domains.retrieval import (
     BM25StoreConfig,
     ComponentConfig,
     EmbeddingConfig,
     IngestConfig,
     RetrievalConfig,
 )
-from config.domains.task_execution import TaskExecutionConfig
+from forge.config.domains.task_execution import TaskExecutionConfig
 
 logger = logging.getLogger(__name__)
 
-ROOT_DIR = Path(__file__).parent.parent
-CONFIG_DIR = Path(__file__).parent
+SERVER_ROOT = Path(__file__).resolve().parents[3]
+ROOT_DIR = SERVER_ROOT
+CONFIG_DIR = SERVER_ROOT / "config"
 CONFIG_FILE = CONFIG_DIR / "sys_config.yaml"
 
-# 向后兼容别名 — 测试套件通过 `from config.settings import _expand_env` 导入
+# 向后兼容别名 — 测试套件通过 `from forge.config.settings import _expand_env` 导入
 _expand_env = expand_env
 _load_dotenv_if_present = load_dotenv_if_present
 
@@ -72,7 +72,7 @@ __all__ = [
 class Settings:
     """全局配置对象, 通过 get_settings() 获取单例.
 
-    各组件按领域平铺组织; 子模型定义在 config/domains/ 各文件中.
+    各组件按领域平铺组织; 子模型定义在 forge/config/domains/ 各文件中.
     """
 
     def __init__(self, config: dict) -> None:
@@ -119,8 +119,8 @@ def _resolve_config_path(explicit: Path | str | None = None) -> Path:
 
     1. explicit 参数
     2. APP_CONFIG 环境变量 (完整路径)
-    3. APP_ENV 环境变量 → config/sys_config.{env}.yaml
-    4. 默认 config/sys_config.yaml
+    3. APP_ENV 环境变量 → <server_root>/config/sys_config.{env}.yaml
+    4. 默认 <server_root>/config/sys_config.yaml
     """
     if explicit is not None:
         return Path(explicit)

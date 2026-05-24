@@ -29,7 +29,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from config.settings import get_settings
+from forge.config.settings import get_settings
 
 if TYPE_CHECKING:
     from fastapi import FastAPI

@@ -162,7 +162,7 @@ def build_real_planner_callable(
     ) -> str:
         import asyncio
 
-        from config.settings import get_settings
+        from forge.config.settings import get_settings
 
         from forge.llm.gateway import build_chain_from_settings, split_provider_model
 

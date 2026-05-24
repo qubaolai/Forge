@@ -27,7 +27,7 @@ import time
 from collections.abc import Iterator
 from typing import Any
 
-from config.domains.llm import LLMCallSpec
+from forge.config.domains.llm import LLMCallSpec
 
 from forge.guardrails.compliance.audit_logger import (
     LLMCallAuditRecord,

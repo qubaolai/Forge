@@ -11,7 +11,7 @@ from typing import Any
 
 import bcrypt
 import jwt
-from config.settings import get_settings
+from forge.config.settings import get_settings
 
 cfg = get_settings()
 

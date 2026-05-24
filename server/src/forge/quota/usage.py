@@ -16,8 +16,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from config.domains.quota import UsageQuotaWindowSettings, UserQuotaSettings
-from config.settings import Settings, get_settings
+from forge.config.domains.quota import UsageQuotaWindowSettings, UserQuotaSettings
+from forge.config.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 

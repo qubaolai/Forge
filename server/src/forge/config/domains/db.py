@@ -12,7 +12,7 @@ class DBSettings(BaseSettings):
     """数据库连接配置.
 
     单机模式默认 SQLite (`sqlite+aiosqlite`), 路径未显式配置时落
-    `config.paths.kb_db_path()`.
+    `forge.config.paths.kb_db_path()`.
     保留 MySQL 字段以兼容旧部署.
     """
     model_config = SettingsConfigDict(extra="ignore")
@@ -71,7 +71,7 @@ class DBSettings(BaseSettings):
             p = Path(raw).expanduser()
             p.parent.mkdir(parents=True, exist_ok=True)
             return str(p)
-        from config.paths import kb_db_path
+        from forge.config.paths import kb_db_path
 
         return str(kb_db_path())
 

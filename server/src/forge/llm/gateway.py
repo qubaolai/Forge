@@ -169,7 +169,7 @@ async def _build_entries_from_cache(
     model_cache=None,
 ) -> list[tuple[LLM, "LLMCallSpec"]]:
     """从 ModelConfigCache 构建同一 provider/model 的 key 候选链。"""
-    from config.domains.llm import LLMCallSpec
+    from forge.config.domains.llm import LLMCallSpec
     from .client_pool import get_llm_pool
 
     if not provider or not model:

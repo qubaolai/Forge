@@ -32,7 +32,7 @@ async def _main(dry_run: bool = False) -> None:
     from forge.infrastructure.database.orm.base import Base
     import forge.infrastructure.database.orm  # noqa: F401 — 触发模型注册
 
-    from config.settings import get_settings
+    from forge.config.settings import get_settings
 
     settings = get_settings()
     print(f"数据库驱动: {settings.db.driver}")

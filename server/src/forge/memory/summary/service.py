@@ -46,7 +46,7 @@ class SummaryService:
         Raises:
             InfrastructureError: LLM 初始化 / DB 写入失败.
         """
-        from config.settings import get_settings
+        from forge.config.settings import get_settings
 
         from forge.infrastructure.database.database import (
             get_session_factory,

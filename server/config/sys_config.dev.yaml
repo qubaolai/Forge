@@ -63,7 +63,7 @@ llm:
     global_daily_limit_usd: ${LLM_BUDGET_GLOBAL_USD:}
     default_user_daily_limit_usd: ${LLM_BUDGET_DEFAULT_USER_USD:}
     alert_threshold: ${LLM_BUDGET_ALERT:0.8}
-  providers: {}
+
 
 utility_llm:
   provider: ${UTILITY_LLM_PROVIDER:}

@@ -9,7 +9,7 @@ import logging
 import threading
 from typing import Any
 
-from config.settings import get_settings
+from forge.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 

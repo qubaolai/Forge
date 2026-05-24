@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from config.settings import get_settings
+from forge.config.settings import get_settings
 from fastapi import APIRouter, Cookie, Response
 
 from forge.api.dependencies import AuthenticatedUser

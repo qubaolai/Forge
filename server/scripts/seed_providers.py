@@ -22,7 +22,7 @@ if src not in sys.path:
 
 
 async def _main() -> None:
-    from config.settings import get_settings
+    from forge.config.settings import get_settings
 
     settings = get_settings()
     providers_cfg = settings.llm.providers  # type: ignore[attr-defined]

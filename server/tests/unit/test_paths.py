@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from config import paths
+from forge.config import paths
 
 
 @pytest.fixture(autouse=True)

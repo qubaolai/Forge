@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from config import paths
+from forge.config import paths
 
 
 @dataclass(frozen=True)

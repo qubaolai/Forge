@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 from .base import Reranker
 
 if TYPE_CHECKING:
-    from config.settings import Settings
+    from forge.config.settings import Settings
 
 logger = logging.getLogger(__name__)
 

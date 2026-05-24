@@ -115,7 +115,7 @@ def _register_worker_signals() -> None:
         # 把 settings.llm.budget 同步到 worker 进程的 CostTracker.
         # worker 进程也会调 LLM (摘要等), 必须有同一份预算配置.
         try:
-            from config.settings import get_settings
+            from forge.config.settings import get_settings
 
             from forge.llm.cost_tracker import BudgetConfig, get_cost_tracker
 

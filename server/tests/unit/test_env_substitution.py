@@ -1,11 +1,11 @@
-"""测试 config.settings 的环境变量替换逻辑."""
+"""测试 forge.config.settings 的环境变量替换逻辑."""
 
 from __future__ import annotations
 
 import os
 
 import pytest
-from config.settings import _expand_env
+from forge.config.settings import _expand_env
 
 
 def test_simple_substitution(monkeypatch):
@@ -50,7 +50,7 @@ def test_multiple_vars_in_string(monkeypatch):
 # ── dotenv 解析器测试 ────────────────────────────────────────────────────────
 def test_dotenv_strips_inline_comments(tmp_path, monkeypatch):
     """COOKIE_SECURE=false  # comment → 应该只设置 'false'."""
-    from config.settings import _load_dotenv_if_present
+    from forge.config.settings import _load_dotenv_if_present
 
     env_file = tmp_path / ".env"
     env_file.write_text("FOO=false              # 生产环境必须 true\n")
@@ -62,7 +62,7 @@ def test_dotenv_strips_inline_comments(tmp_path, monkeypatch):
 
 def test_dotenv_quoted_value_preserves_hash(tmp_path, monkeypatch):
     """密码里有 # 时, 用引号包裹应被保留."""
-    from config.settings import _load_dotenv_if_present
+    from forge.config.settings import _load_dotenv_if_present
 
     env_file = tmp_path / ".env"
     env_file.write_text('PASSWORD="pa#ss word"\n')
@@ -73,7 +73,7 @@ def test_dotenv_quoted_value_preserves_hash(tmp_path, monkeypatch):
 
 
 def test_dotenv_skips_full_line_comments(tmp_path, monkeypatch):
-    from config.settings import _load_dotenv_if_present
+    from forge.config.settings import _load_dotenv_if_present
 
     (tmp_path / ".env").write_text("# this is a comment\nREAL=value\n")
     monkeypatch.delenv("REAL", raising=False)
@@ -83,7 +83,7 @@ def test_dotenv_skips_full_line_comments(tmp_path, monkeypatch):
 
 def test_dotenv_does_not_override_existing_env(tmp_path, monkeypatch):
     """已设置的环境变量优先, .env 仅补缺."""
-    from config.settings import _load_dotenv_if_present
+    from forge.config.settings import _load_dotenv_if_present
 
     (tmp_path / ".env").write_text("X=from_dotenv\n")
     monkeypatch.setenv("X", "from_shell")

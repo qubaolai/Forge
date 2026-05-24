@@ -28,7 +28,8 @@ forge/
 - `server/src/forge/chat/` — TurnOrchestrator 等对话引擎（保留，被 executor 复用）
 - `server/src/forge/llm/`, `context/`, `memory/`, `retrieval/`, `tools/`, `guardrails/`, `prompts/`, `observability/`, `infrastructure/`, `utils/` — 从 assistant 直接复制
 - `server/src/forge/api/` — 路由、中间件、schemas
-- `server/src/forge/config/` — 配置，含 sys_config.yaml
+- `server/src/forge/config/` — 配置代码（settings/paths/domains）
+- `server/config/` — 可编辑配置资源（sys_config*.yaml）
 
 ## 核心概念
 

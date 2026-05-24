@@ -6,7 +6,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from config.settings import get_settings
+from forge.config.settings import get_settings
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 

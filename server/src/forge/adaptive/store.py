@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import aiofiles
-from config import paths
+from forge.config import paths
 
 from forge.adaptive import events
 from forge.adaptive.models import AdaptiveRun, Artifact, ArtifactKind, RunEvent, RunStatus

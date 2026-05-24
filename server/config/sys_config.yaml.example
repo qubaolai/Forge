@@ -1,200 +1,408 @@
 # ============================================================
-# sys_config.yaml — 全量配置
-# 密钥/连接信息通过 ${VAR} / ${VAR:default} 占位符从环境变量读取.
-# 项目根 .env 文件会被自动加载 (不覆盖已设置的环境变量).
+# sys_config.yaml.example — 全量配置注释真源
+#
+# 维护规则:
+# 1) 新增/重命名配置项时，必须先更新本文件注释，再修改代码。
+# 2) dev/test 仅保留环境差异注释，不重复全量字段说明。
+# 3) 密钥/连接信息优先通过 ${VAR} / ${VAR:default} 从环境变量注入。
 # ============================================================
 
 app:
-  log_level: ${APP_LOG_LEVEL:INFO} # DEBUG | INFO | WARNING | ERROR
-  port: ${APP_PORT:8553}
-  auth:
-    jwt_secret: ${JWT_SECRET} # 必填, 生产环境必须设置
-    jwt_algorithm: ${JWT_ALGORITHM:HS256}
-    access_token_expire_minutes: ${ACCESS_TOKEN_EXPIRE_MIN:60}
-    refresh_token_expire_days: ${REFRESH_TOKEN_EXPIRE_DAYS:30}
-    cookie_secure: ${COOKIE_SECURE:false}
-    cookie_samesite: ${COOKIE_SAMESITE:strict}
-  
+  # 应用日志级别。
+  # 取值: DEBUG | INFO | WARNING | ERROR。
+  # 默认: INFO。
+  log_level: ${APP_LOG_LEVEL:INFO}
 
-# CORS / 限流 / 中间件配置
+  # HTTP 服务监听端口。
+  # 单位: 端口号。
+  # 默认: 8553。
+  port: ${APP_PORT:8553}
+
+  auth:
+    # JWT 签名密钥。
+    # 生产环境必须显式设置，不应使用默认值。
+    jwt_secret: ${JWT_SECRET}
+
+    # JWT 签名算法。
+    # 常用: HS256。
+    jwt_algorithm: ${JWT_ALGORITHM:HS256}
+
+    # Access Token 过期时间。
+    # 单位: 分钟。
+    access_token_expire_minutes: ${ACCESS_TOKEN_EXPIRE_MIN:60}
+
+    # Refresh Token 过期时间。
+    # 单位: 天。
+    refresh_token_expire_days: ${REFRESH_TOKEN_EXPIRE_DAYS:30}
+
+    # 是否仅在 HTTPS 下发送鉴权 Cookie。
+    # 生产环境建议: true。
+    cookie_secure: ${COOKIE_SECURE:false}
+
+    # Cookie SameSite 策略。
+    # 取值: strict | lax | none。
+    cookie_samesite: ${COOKIE_SAMESITE:strict}
+
 middleware:
   cors:
-    allow_origins: ${CORS_ALLOW_ORIGINS:http://localhost:3000} # 逗号分隔多个 origin
+    # 允许跨域的来源地址。
+    # 多个值使用英文逗号分隔。
+    allow_origins: ${CORS_ALLOW_ORIGINS:http://localhost:3000}
+
+    # CORS 是否允许携带凭证（Cookie/Authorization）。
+    # 默认: true。
     allow_credentials: ${CORS_ALLOW_CREDENTIALS:true}
 
-# 数据库
+# 数据库连接配置。
+# 支持 sqlite+aiosqlite / mysql+aiomysql 等驱动。
 db:
+  # SQLAlchemy 异步驱动名。
+  # 例: sqlite+aiosqlite, mysql+aiomysql。
   driver: ${DB_DRIVER:sqlite+aiosqlite}
+
+  # SQLite 文件路径。
+  # 仅 sqlite 驱动有效；MySQL 场景可留空。
   path: ${DB_PATH:}
+
+  # 数据库主机地址。
+  # MySQL 场景必填；SQLite 可留空。
   host: ${DB_HOST:}
+
+  # 数据库端口。
+  # 单位: 端口号。
   port: ${DB_PORT:3306}
+
+  # 数据库用户名。
   user: ${DB_USER:}
+
+  # 数据库密码。
   password: ${DB_PASSWORD:}
+
+  # 数据库名。
   database: ${DB_DATABASE:}
+
+  # SQLAlchemy SQL 回显开关。
+  # true 会打印 SQL，便于调试。
   echo: ${DB_ECHO:false}
+
+  # 数据库字符集。
+  # MySQL 建议 utf8mb4。
   charset: ${DB_CHARSET:utf8mb4}
 
+  # 连接池常驻连接数。
   pool_size: ${DB_POOL_SIZE:5}
+
+  # 连接池溢出连接上限。
   max_overflow: ${DB_MAX_OVERFLOW:10}
+
+  # 连接回收周期。
+  # 单位: 秒。
   pool_recycle: ${DB_POOL_RECYCLE:3600}
+
+  # 出借连接前是否先做 ping 检测。
+  # 某些驱动版本可能不兼容，按实际环境设置。
   pool_pre_ping: ${DB_POOL_PRE_PING:false}
 
 redis:
+  # Redis 主机地址。
   host: ${REDIS_HOST:127.0.0.1}
+
+  # Redis 端口。
   port: ${REDIS_PORT:6379}
+
+  # Redis 用户名（若实例启用 ACL）。
   username: ${REDIS_USERNAME:}
+
+  # Redis 密码。
   password: ${REDIS_PASSWORD:}
+
+  # Redis 逻辑库编号。
   database: ${REDIS_DB:0}
+
+  # Redis 客户端连接池大小。
   pool_size: ${REDIS_POOL_SIZE:10}
 
-# Celery 异步任务: 摘要 / 事实抽取等.
-# broker_url / backend_url 留空 -> 走 redis 上面的配置 (推荐).
-# enabled=false -> 整套降级到 NullTaskQueue (只记日志, 不真派发), 服务照常起.
+# Celery 异步任务系统。
+# enabled=false 时降级为 NullTaskQueue（仅记录日志，不派发任务）。
 celery:
+  # 是否启用 Celery 队列。
   enabled: ${CELERY_ENABLED:true}
+
+  # Celery Broker URL。
+  # 留空时回退到 redis 配置推导。
   broker_url: ${CELERY_BROKER_URL:}
+
+  # Celery Backend URL。
+  # 留空时回退到 broker_url。
   backend_url: ${CELERY_BACKEND_URL:}
 
-# 用户额度: 服务端策略, 按 LLM 用量计量, 类似 OpenAI / Claude Code 的滚动窗口.
-# 只对 llm.providers / models 中 quota_controlled=true 的服务端预置模型生效。
-# 用户自带 provider / API key 应保持 quota_controlled=false, 不扣这里的额度。
+# 用户额度控制。
+# 仅对 quota_controlled=true 的服务端预置模型生效。
 user_quota:
+  # 是否启用用户额度控制。
   enabled: true
+
+  # 额度告警阈值。
+  # 取值: 0~1，达到阈值写 WARNING 日志。
   alert_threshold: 0.8
+
   five_hour:
+    # 5 小时窗口长度。
+    # 单位: 秒；默认 18000。
     window_seconds: 18000
+
+    # 5 小时窗口美元上限。
+    # 为空表示不限制。
     limit_usd:
+
+    # 5 小时窗口 token 上限。
+    # 为空表示不限制。
     limit_tokens:
-    limit_calls:
-  weekly:
-    window_seconds: 604800
-    limit_usd:
-    limit_tokens:
+
+    # 5 小时窗口调用次数上限。
+    # 为空表示不限制。
     limit_calls:
 
-# 记忆系统 (摘要 / 长期事实)
-# - summarizer: 摘要走独立 LLM (建议用便宜的小模型), 留空则复用 llm 默认
-# - trigger.every_n_turns: 每 N 轮触发一次摘要任务
+  weekly:
+    # 周窗口长度。
+    # 单位: 秒；默认 604800。
+    window_seconds: 604800
+
+    # 周窗口美元上限。
+    # 为空表示不限制。
+    limit_usd:
+
+    # 周窗口 token 上限。
+    # 为空表示不限制。
+    limit_tokens:
+
+    # 周窗口调用次数上限。
+    # 为空表示不限制。
+    limit_calls:
+
+# 记忆系统（摘要/长期事实）。
 memory:
+  # 是否启用记忆系统。
   enabled: ${MEMORY_ENABLED:true}
+
   summarizer:
+    # 摘要模型 provider。
+    # 留空表示复用主对话模型。
     provider: ${MEMORY_SUMMARIZER_PROVIDER:}
+
+    # 摘要模型名称。
+    # 留空表示复用主对话模型。
     model: ${MEMORY_SUMMARIZER_MODEL:}
+
+    # 摘要时最多读取的历史轮次。
+    # 单位: turn 数量。
     history_limit: ${MEMORY_SUMMARIZER_HISTORY_LIMIT:100}
+
+    # 摘要结果最大 token 数。
     max_summary_tokens: ${MEMORY_SUMMARIZER_MAX_TOKENS:1500}
+
   trigger:
+    # 每 N 轮触发一次摘要任务。
+    # N 越小摘要越频繁。
     every_n_turns: ${MEMORY_TRIGGER_EVERY_N:10}
 
-# LLM: 供应商 + 模型由数据库管理 (providers / provider_keys / models 表)。
-# 对话时的供应商和模型以前端传递为准，gateway 会校验 DB 中 is_enabled=true。
-# 配置文件中仅保留重试策略和预算配额，不再维护供应商模型列表。
+# LLM 通用策略配置。
+# 供应商与模型目录由数据库维护，配置文件不再承载 providers 列表。
 llm:
+  # 默认 provider（保留兼容字段）。
+  # 对话时可被前端请求覆盖。
   provider: ${LLM_PROVIDER:}
+
+  # 默认模型名称（保留兼容字段）。
   default_model: ${LLM_DEFAULT_MODEL:}
+
+  # 调用失败最大重试次数。
+  # 单位: 次。
   max_retries: ${LLM_MAX_RETRIES:3}
+
+  # 重试退避基线时长。
+  # 单位: 秒。
   retry_backoff_seconds: ${LLM_RETRY_BACKOFF:1.0}
 
-  # ── 预算 (Phase 4a/4b) ────────────────────────────────────────────────
-  # 全 None 时不限制 (向后兼容). 超出抛 LLMBudgetExceeded, retry/fallback 不救场.
-  # 优先级: user_daily_limits_usd[user] > default_user_daily_limit_usd > global_daily_limit_usd.
-  # daily 语义由 Celery beat 每 60s flush DB + hydrate baseline 提供.
   budget:
-    global_daily_limit_usd: ${LLM_BUDGET_GLOBAL_USD:}      # 例: 100.0
-    default_user_daily_limit_usd: ${LLM_BUDGET_DEFAULT_USER_USD:}  # 例: 5.0
-    alert_threshold: ${LLM_BUDGET_ALERT:0.8}               # 达到比例打 WARNING
-    # user_daily_limits_usd: { "u_xxx": 50.0 }            # 显式 per-user 上限
+    # 全局日预算上限。
+    # 单位: 美元；为空表示不限制。
+    global_daily_limit_usd: ${LLM_BUDGET_GLOBAL_USD:}
 
-  # 兼容性占位: providers 留空，实际供应商/模型全部从 DB 加载
-  providers: {}
+    # 用户默认日预算上限。
+    # 单位: 美元；为空表示不限制。
+    default_user_daily_limit_usd: ${LLM_BUDGET_DEFAULT_USER_USD:}
 
-# 工具模型: 标题生成、摘要等轻量任务优先使用；留空则回落到任务主模型/主模型。
+    # 预算告警阈值。
+    # 取值: 0~1。
+    alert_threshold: ${LLM_BUDGET_ALERT:0.8}
+
+    # 按用户覆盖预算。
+    # 结构: { "user_id": usd_limit }。
+    # user_daily_limits_usd: { "u_xxx": 50.0 }
+
 utility_llm:
+  # 轻量任务默认 provider。
+  # 留空时回退到主模型链路。
   provider: ${UTILITY_LLM_PROVIDER:}
+
+  # 轻量任务默认模型名。
+  # 留空时回退到主模型链路。
   model: ${UTILITY_LLM_MODEL:}
 
-# 入库相关
 ingest:
+  # 文档入库根目录。
+  # 相对路径基于 server 工作目录。
   documents_path: data/documents
+
   chunking:
-    strategy: hierarchical # hierarchical | sliding_window
+    # 切块策略。
+    # 取值: hierarchical | sliding_window。
+    strategy: hierarchical
+
+    # 切块目标长度。
+    # 单位: token/近似字符片段（由切块器实现决定）。
     chunk_size: 500
+
+    # 相邻切块重叠长度。
+    # 必须小于 chunk_size。
     chunk_overlap: 50
 
-# Embedding 模型 — 不支持运行时 fallback，入库和召回必须保持同一向量模型。
 embedding:
+  # 向量模型 provider。
+  # 入库与召回必须一致。
   provider: mock
+
   providers:
     mock:
+      # 向量维度。
+      # 单位: 维。
       dimension: 768
 
-# 向量库
 vector_store:
+  # 向量库 provider。
   provider: chroma
+
   providers:
     chroma:
+      # Chroma 持久化目录。
       persist_dir: data/chroma
+
+      # Chroma 集合名称。
       collection_name: child_chunks
 
-# BM25 倒排索引
 bm25_store:
+  # BM25 存储实现 provider。
   provider: sqlite_fts5
+
   providers:
     sqlite_fts5:
+      # BM25 SQLite 文件路径。
       db_path: data/bm25/bm25.db
+
+      # BM25 FTS 表名。
       table_name: bm25_chunks
+
   tokenizer:
+    # BM25 分词器类型。
+    # 当前支持: jieba。
     type: jieba
+
+    # 分词器用户词典路径。
+    # null 表示不加载自定义词典。
     user_dict: null
 
-# Reranker — 模型配置从 DB models 表 (model_type=reranker) 加载。
-# 以下为 DB 不可用时的 fallback。
 reranker:
+  # 重排器 provider。
+  # DB 可用时优先读 models 表；这里是兜底。
   provider: mock
+
   providers:
     mock: {}
 
-# 检索流程
 retrieval:
+  # 最终返回父块数量。
   top_n_parent: 5
+
+  # 进入 rerank 阶段的候选数量。
   top_m_for_rerank: 20
 
   recall:
     vector:
+      # 是否启用向量召回通道。
       enabled: true
+
+      # 向量召回 top_k。
       top_k: 30
+
     bm25:
+      # 是否启用 BM25 召回通道。
       enabled: true
+
+      # BM25 召回 top_k。
       top_k: 30
 
   fusion:
+    # 融合策略。
+    # 取值: rrf | weighted。
     strategy: rrf
+
+    # RRF 的 k 参数。
+    # 单位: 正整数。
     rrf_k: 60
+
+    # weighted 融合时向量通道权重。
     weighted_vector: 0.7
+
+    # weighted 融合时 BM25 通道权重。
     weighted_bm25: 0.3
 
   aggregation:
+    # 子块聚合为父块时的打分聚合方式。
+    # 取值: max | sum | mean。
     score_agg: max
 
   rerank:
+    # 是否启用重排阶段。
     enabled: true
 
-# 可观测性
 observability:
   tracing:
+    # 是否启用 tracing。
     enabled: ${TRACING_ENABLED:false}
-    exporter: ${TRACING_EXPORTER:none} # none | otel | langfuse
-    service_name: ${OTEL_SERVICE_NAME:forge}
+
+    # tracing 导出器。
+    # 取值: none | otel | langfuse。
+    exporter: ${TRACING_EXPORTER:none}
+
+    # 服务名。
+    # 用于 tracing 平台区分服务实例。
+    service_name: ${OTEL_SERVICE_NAME:Forge}
+
+    # OTLP 端点地址。
+    # exporter=otel 时生效。
     otel_endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:}
+
+    # Langfuse 公钥。
+    # exporter=langfuse 时生效。
     langfuse_public_key: ${LANGFUSE_PUBLIC_KEY:}
+
+    # Langfuse 私钥。
+    # exporter=langfuse 时生效。
     langfuse_secret_key: ${LANGFUSE_SECRET_KEY:}
+
+    # Langfuse 服务地址。
     langfuse_host: ${LANGFUSE_HOST:https://cloud.langfuse.com}
 
-# Forge Adaptive Task Execution
+# Adaptive Task 执行配置。
 task_execution:
-  # 纯聊天只开放无文件系统/命令副作用的工具；工程文件操作走 adaptive。
+  # chat 模式工具白名单。
+  # 仅允许无文件系统/命令副作用工具。
   chat_tool_allowlist:
     - knowledge_search
 
+  # task/adaptive 模式工具白名单。
+  # Planner 声明工具必须在此列表内。
   tool_allowlist:
     - read_file
     - write_file
@@ -208,28 +416,56 @@ task_execution:
     - run_tests
     - knowledge_search
 
-  # model_profiles 必须使用 provider:model，运行时不再猜测 provider。
+  # 模型档位映射。
+  # 格式必须为 provider:model。
   model_profiles:
-    fast:   "${FAST_MODEL:dashscope:qwen-plus}"
-    smart:  "${SMART_MODEL:dashscope:qwen-plus}"
+    fast: "${FAST_MODEL:dashscope:qwen-plus}"
+    smart: "${SMART_MODEL:dashscope:qwen-plus}"
     strong: "${STRONG_MODEL:dashscope:qwen3-max-preview}"
+
+  # Planner 默认使用的模型档位。
   planner_model_profile: smart
+
+  # Discovery 默认使用的模型档位。
   discovery_model_profile: fast
 
   hard_caps:
-    max_agents:           8
-    max_steps_per_task:   50
-    max_replans:          3
-    max_task_retries:     2
+    # 单次 run 最大 agent 数。
+    # 超过会被硬上限截断。
+    max_agents: 8
+
+    # 单个 task 最大步骤数。
+    # 单位: step。
+    max_steps_per_task: 50
+
+    # 规划失败后的最大重规划次数。
+    max_replans: 3
+
+    # 单 task 失败后的最大重试次数。
+    max_task_retries: 2
+
+    # 单次 run 的最大执行时长。
+    # 单位: 秒。
     max_run_duration_sec: 3600
 
   default_options:
-    allow_write:    true
-    allow_parallel: true
-    max_agents:     4
-    writer_mode:    isolated_worktree
-    verifier_cmd:   null
+    # 默认是否允许写入工作区。
+    allow_write: true
 
-  # C10/D1：默认 true。LLM 不可用时 run FAILED，不退化为 fallback 占位。
-  # 单测和零依赖环境通过 sys_config.test.yaml 显式 false 走 fallback。
+    # 默认是否允许并行执行任务。
+    allow_parallel: true
+
+    # 默认并行 agent 数。
+    max_agents: 4
+
+    # 写入策略。
+    # 当前建议: isolated_worktree。
+    writer_mode: isolated_worktree
+
+    # 默认验证命令。
+    # null 表示由调用方或系统策略决定。
+    verifier_cmd: null
+
+  # 是否强制使用真实 LLM。
+  # true: LLM 不可用则 run 失败；false: 允许 fallback（常用于测试环境）。
   enable_real_llm: true

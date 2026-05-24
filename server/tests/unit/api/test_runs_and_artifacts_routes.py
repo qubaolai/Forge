@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from config.settings import reset_settings
+from forge.config.settings import reset_settings
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

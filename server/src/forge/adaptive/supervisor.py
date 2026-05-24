@@ -243,7 +243,7 @@ def build_orchestrator_factory(
 
     task_cfg = None
     try:
-        from config.settings import get_settings
+        from forge.config.settings import get_settings
 
         settings = get_settings()
         task_cfg = getattr(settings, "task_execution", None)

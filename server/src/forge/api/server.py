@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from config.settings import get_settings
+from forge.config.settings import get_settings
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

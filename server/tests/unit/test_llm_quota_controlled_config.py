@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from config.domains.llm import LLMConfig
+from forge.config.domains.llm import LLMConfig
 
 
 def test_provider_quota_controlled_flows_into_call_spec() -> None:

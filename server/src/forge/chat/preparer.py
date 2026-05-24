@@ -166,7 +166,7 @@ def _make_title(text: str, max_len: int = 25) -> str:
 async def _make_title_with_utility_llm(text: str, model_options, max_len: int = 25) -> str:
     """优先用工具模型生成标题，失败时回落到本地截断。"""
     try:
-        from config.settings import get_settings
+        from forge.config.settings import get_settings
         from forge.core.types.message import Message
         from forge.llm.gateway import build_utility_chain_from_settings
 

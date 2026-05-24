@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import aiofiles
-from config import paths
+from forge.config import paths
 
 from forge.infrastructure.jsonl import atomic_write_text
 
