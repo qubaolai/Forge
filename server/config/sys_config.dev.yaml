@@ -55,6 +55,8 @@ memory:
     every_n_turns: ${MEMORY_TRIGGER_EVERY_N:5}
 
 llm:
+  provider: ${LLM_PROVIDER:}
+  default_model: ${LLM_DEFAULT_MODEL:}
   max_retries: 3
   retry_backoff_seconds: 0.5
   budget:
@@ -62,6 +64,10 @@ llm:
     default_user_daily_limit_usd: ${LLM_BUDGET_DEFAULT_USER_USD:}
     alert_threshold: ${LLM_BUDGET_ALERT:0.8}
   providers: {}
+
+utility_llm:
+  provider: ${UTILITY_LLM_PROVIDER:}
+  model: ${UTILITY_LLM_MODEL:}
 
 ingest:
   documents_path: data/documents
@@ -128,7 +134,7 @@ observability:
     langfuse_secret_key: ${LANGFUSE_SECRET_KEY:}
     langfuse_host: ${LANGFUSE_HOST:https://cloud.langfuse.com}
 
-# Forge Adaptive Task Execution
+
 task_execution:
   # 纯聊天只开放无文件系统/命令副作用的工具；工程文件操作走 adaptive。
   chat_tool_allowlist:
@@ -148,9 +154,9 @@ task_execution:
     - knowledge_search
 
   model_profiles:
-    fast: ${FAST_MODEL}
-    smart: ${SMART_MODEL}
-    strong: ${STRONG_MODEL}
+    fast: ${FAST_MODEL:dashscope:qwen-plus}
+    smart: ${SMART_MODEL:dashscope:qwen-plus}
+    strong: ${STRONG_MODEL:dashscope:qwen3-max-preview}
   planner_model_profile: smart
   discovery_model_profile: fast
 

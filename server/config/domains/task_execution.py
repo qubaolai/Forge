@@ -8,13 +8,13 @@ from pydantic import BaseModel, Field
 
 
 class TaskExecutionModelProfiles(BaseModel):
-    """任务执行使用的模型档位映射。"""
+    """任务执行使用的模型档位映射，必须使用 provider:model 格式。"""
 
     model_config = {"extra": "forbid"}
 
-    fast: str = "claude-sonnet-4-6"
-    smart: str = "claude-sonnet-4-6"
-    strong: str = "claude-opus-4-7"
+    fast: str = "dashscope:qwen-plus"
+    smart: str = "dashscope:qwen-plus"
+    strong: str = "dashscope:qwen3-max-preview"
 
 
 class TaskExecutionHardCaps(BaseModel):

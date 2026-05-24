@@ -2,7 +2,7 @@
 
 Router 决定:在一组候选 (provider, model) 中选哪个作为 primary 给 FallbackChain.
 注意:
-    - Router 只决定 primary, fallback 链仍由 settings.llm.fallback_chain 静态配置.
+    - Router 只决定 primary，运行时 provider/model 不再配置 fallback。
     - Router 链按优先级串联 (CompositeRouter), 每个 Router.route 返回 None
       表示"我无意见, 交给下一个". 全部 None → CompositeRouter 走默认 (第一个候选).
     - 用户显式 pin (build_chain_from_settings 传 provider/model) 完全绕过 router.

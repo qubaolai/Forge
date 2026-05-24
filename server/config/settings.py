@@ -8,8 +8,7 @@
     # LLM (支持运行时按 provider + model 切换)
     provider, model, call_cfg = s.llm.resolve(provider="dashscope", model="qwen-plus")
 
-    # 工具模型 (标题生成 / 摘要等轻量任务, 三级回落)
-    impl, model, cfg = s.resolve_utility_llm()
+    # 工具模型由 forge.llm.gateway.build_utility_chain_from_settings 统一解析
 
     # 其他组件 (启动时定死 provider)
     embedder_cfg = s.embedding.active_config()
@@ -34,7 +33,7 @@ import yaml
 from config._env import expand_env, load_dotenv_if_present, load_env_files
 from config.domains.app import AppConfig, MiddlewareConfig
 from config.domains.db import CelerySettings, DBSettings, RedisSettings
-from config.domains.llm import LLMCallSpec, LLMConfig, UtilityLLMConfig
+from config.domains.llm import LLMConfig, UtilityLLMConfig
 from config.domains.memory import MemorySettings, MemorySummarizerSettings, MemoryTriggerSettings
 from config.domains.observability import ObservabilityConfig
 from config.domains.quota import UserQuotaSettings
@@ -104,23 +103,6 @@ class Settings:
         self.reranker = ComponentConfig(**config["reranker"])
         self.retrieval = RetrievalConfig(**config.get("retrieval", {}))
         self.task_execution = TaskExecutionConfig(**config.get("task_execution", {}))
-
-    def resolve_utility_llm(
-        self,
-        provider: str = "",
-        model: str = "",
-    ) -> LLMCallSpec:
-        """三级回落解析工具模型, 返回 LLMCallSpec.
-
-        优先级 (高 → 低):
-            1. 调用方传入的 provider / model  (任务级专属覆盖)
-            2. utility_llm.provider / model   (全局廉价模型)
-            3. llm.provider / default_model   (主模型兜底)
-        """
-        p = provider or self.utility_llm.provider or None
-        m = model or self.utility_llm.model or None
-        return self.llm.resolve(provider=p, model=m)
-
 
 # ======================================================================
 # 单例入口

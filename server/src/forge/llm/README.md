@@ -91,13 +91,11 @@ LLM (ABC, base.py)
 llm:
   provider: dashscope               # 默认 provider
   default_model: qwen-plus          # 默认 model
-  fallback_chain: ""                # "openai:gpt-4o-mini,deepseek:deepseek-chat" 形式
   max_retries: 3
   retry_backoff_seconds: 1.0
 
   providers:
     deepseek:
-      api_key: ${DEEPSEEK_API_KEY:}
       models:
         - name: deepseek-v4-pro
           display_name: DeepSeek V4 PRO

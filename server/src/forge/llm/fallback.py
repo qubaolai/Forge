@@ -39,7 +39,8 @@ from .caching.prompt_cache import extract_cached_tokens
 from .circuit_breaker import get_breaker_registry
 from .cost_tracker import estimate_cost, get_cost_tracker
 from .providers.base import LLM, ChatChunk, ChatMessage, ChatResult
-from .retry import call_with_retry
+from .client_pool import get_llm_pool
+from .retry import call_with_retry, is_rate_limit, parse_retry_after
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +54,20 @@ def _call_kwargs(spec: LLMCallSpec) -> dict[str, Any]:
         "temperature": spec.temperature,
         "max_tokens": spec.max_tokens,
         "top_p": spec.top_p,
+        "thinking": spec.thinking,
+        "reasoning_effort": spec.reasoning_effort,
+        "thinking_budget": spec.thinking_budget,
+        "top_k": spec.top_k,
     }
     return {k: v for k, v in kw.items() if v is not None or k == "model"}
+
+
+def _extra_options(spec: LLMCallSpec, runtime_options: dict[str, Any] | None) -> dict[str, Any] | None:
+    """合并 DB 模型参数和运行时参数，运行时参数优先。"""
+    merged = dict(spec.extra or {})
+    if runtime_options:
+        merged.update(runtime_options)
+    return merged or None
 
 
 class LLMFallbackChain:
@@ -169,6 +182,43 @@ class LLMFallbackChain:
             quota_controlled=spec.quota_controlled,
         )
 
+    @staticmethod
+    def _entry_group(spec: LLMCallSpec) -> tuple[str, str]:
+        """同一 provider/model 下的不同 key 属于同一个 key 级切换组。"""
+        return (spec.provider_name or spec.impl, spec.model)
+
+    def _mark_key_cooldown_if_rate_limited(
+        self,
+        spec: LLMCallSpec,
+        exc: BaseException,
+        *,
+        fallback_seconds: float = 30.0,
+    ) -> bool:
+        """检测 429 并将当前 key 放入冷却。"""
+        if not spec.api_key or not is_rate_limit(exc):
+            return False
+        seconds = parse_retry_after(exc) or fallback_seconds
+        get_llm_pool().mark_cooldown(spec.impl, spec.api_key, seconds)
+        logger.warning(
+            "Key 级限流处理完成: provider=%s impl=%s model=%s key=%s cooldown=%.0fs",
+            spec.provider_name or spec.impl,
+            spec.impl,
+            spec.model,
+            spec.api_key[:6] + "***",
+            seconds,
+        )
+        return True
+
+    def _on_retry_for_key(self, spec: LLMCallSpec):
+        """429 时停止当前 key 的重试，让链路切换到下一个可用 key。"""
+
+        def _callback(attempt: int, exc: BaseException, delay: float) -> bool | None:
+            if self._mark_key_cooldown_if_rate_limited(spec, exc, fallback_seconds=delay):
+                return False
+            return None
+
+        return _callback
+
     # ------------------------------------------------------------------
     # chat: 非流式
     # ------------------------------------------------------------------
@@ -181,7 +231,16 @@ class LLMFallbackChain:
         extra_options: dict[str, Any] | None = None,
     ) -> ChatResult:
         last_exc: BaseException | None = None
+        blocked_key_group: tuple[str, str] | None = None
         for idx, (client, spec) in enumerate(self._chain):
+            group = self._entry_group(spec)
+            if blocked_key_group == group:
+                logger.warning(
+                    "跳过同模型 Key 级切换: provider=%s model=%s reason=非限流错误",
+                    group[0],
+                    group[1],
+                )
+                continue
             breaker = self._breakers.get(spec.impl, spec.api_key, spec.model)
             if breaker.is_open():
                 logger.warning(
@@ -215,7 +274,7 @@ class LLMFallbackChain:
                 ) -> ChatResult:
                     return llm.chat(
                         messages,
-                        extra_options=extra_options,
+                        extra_options=_extra_options(spec, extra_options),
                         **call_kwargs,
                     )
 
@@ -223,6 +282,7 @@ class LLMFallbackChain:
                     _call_chat,
                     max_retries=self._max_retries,
                     backoff_seconds=self._retry_backoff,
+                    on_retry=self._on_retry_for_key(spec),
                 )
                 self._record_cost_for(client, spec, result.usage)
                 breaker.record_success()
@@ -244,6 +304,9 @@ class LLMFallbackChain:
                 return result
             except Exception as e:  # noqa: BLE001
                 last_exc = e
+                was_rate_limited = self._mark_key_cooldown_if_rate_limited(spec, e)
+                if not was_rate_limited:
+                    blocked_key_group = group
                 self._record_cost_for(client, spec, None, error=True)
                 breaker.record_failure()
                 self._emit_audit(
@@ -260,6 +323,12 @@ class LLMFallbackChain:
                     spec.model,
                     e,
                 )
+                if was_rate_limited:
+                    logger.warning(
+                        "Key 级切换：provider/model 不变，尝试下一个可用 key provider=%s model=%s",
+                        spec.provider_name or spec.impl,
+                        spec.model,
+                    )
         assert last_exc is not None
         logger.error("LLM fallback 链全部失败 (%d 个)", len(self._chain))
         raise last_exc
@@ -277,7 +346,16 @@ class LLMFallbackChain:
     ) -> Iterator[ChatChunk]:
         """流式: 首包前可切换, 一旦开始 yield 就锁定."""
         last_exc: BaseException | None = None
+        blocked_key_group: tuple[str, str] | None = None
         for idx, (client, spec) in enumerate(self._chain):
+            group = self._entry_group(spec)
+            if blocked_key_group == group:
+                logger.warning(
+                    "跳过同模型 Key 级切换: provider=%s model=%s reason=非限流错误",
+                    group[0],
+                    group[1],
+                )
+                continue
             breaker = self._breakers.get(spec.impl, spec.api_key, spec.model)
             if breaker.is_open():
                 logger.warning(
@@ -306,7 +384,7 @@ class LLMFallbackChain:
 
                 stream = client.chat_stream(
                     messages,
-                    extra_options=extra_options,
+                    extra_options=_extra_options(spec, extra_options),
                     **kw,
                 )
                 first = next(stream)
@@ -335,6 +413,7 @@ class LLMFallbackChain:
                 return
             except StopIteration:
                 last_exc = RuntimeError(f"{client.provider_name} 流式输出为空")
+                blocked_key_group = group
                 self._record_cost_for(client, spec, None, error=True)
                 breaker.record_failure()
                 self._emit_audit(
@@ -347,6 +426,9 @@ class LLMFallbackChain:
                 logger.warning("LLM stream 位置=%d 输出为空, 切换备用", idx)
             except Exception as e:  # noqa: BLE001
                 last_exc = e
+                was_rate_limited = self._mark_key_cooldown_if_rate_limited(spec, e)
+                if not was_rate_limited:
+                    blocked_key_group = group
                 self._record_cost_for(client, spec, None, error=True)
                 breaker.record_failure()
                 self._emit_audit(
@@ -362,6 +444,12 @@ class LLMFallbackChain:
                     client.provider_name,
                     e,
                 )
+                if was_rate_limited:
+                    logger.warning(
+                        "Key 级切换：provider/model 不变，尝试下一个可用 key provider=%s model=%s",
+                        spec.provider_name or spec.impl,
+                        spec.model,
+                    )
         assert last_exc is not None
         logger.error("LLM stream fallback 链全部失败")
         raise last_exc
@@ -380,7 +468,16 @@ class LLMFallbackChain:
         extra_options: dict[str, Any] | None = None,
     ) -> dict:
         last_exc: BaseException | None = None
+        blocked_key_group: tuple[str, str] | None = None
         for idx, (client, spec) in enumerate(self._chain):
+            group = self._entry_group(spec)
+            if blocked_key_group == group:
+                logger.warning(
+                    "跳过同模型 Key 级切换: provider=%s model=%s reason=非限流错误",
+                    group[0],
+                    group[1],
+                )
+                continue
             if not client.supports_tool_calling:
                 logger.debug(
                     "LLM 位置=%d provider=%s 不支持 tool calling, 跳过",
@@ -422,7 +519,7 @@ class LLMFallbackChain:
                         messages,
                         tools,
                         tool_choice=tool_choice,
-                        extra_options=extra_options,
+                        extra_options=_extra_options(spec, extra_options),
                         **call_kwargs,
                     )
 
@@ -430,6 +527,7 @@ class LLMFallbackChain:
                     _call_chat_with_tools,
                     max_retries=self._max_retries,
                     backoff_seconds=self._retry_backoff,
+                    on_retry=self._on_retry_for_key(spec),
                 )
                 self._record_cost_for(client, spec, resp.get("usage"))
                 breaker.record_success()
@@ -452,6 +550,9 @@ class LLMFallbackChain:
                 return resp
             except Exception as e:  # noqa: BLE001
                 last_exc = e
+                was_rate_limited = self._mark_key_cooldown_if_rate_limited(spec, e)
+                if not was_rate_limited:
+                    blocked_key_group = group
                 self._record_cost_for(client, spec, None, error=True)
                 breaker.record_failure()
                 self._emit_audit(
@@ -468,6 +569,12 @@ class LLMFallbackChain:
                     spec.model,
                     e,
                 )
+                if was_rate_limited:
+                    logger.warning(
+                        "Key 级切换：provider/model 不变，尝试下一个可用 key provider=%s model=%s",
+                        spec.provider_name or spec.impl,
+                        spec.model,
+                    )
         if last_exc is None:
             raise RuntimeError("Fallback 链中没有任何 provider 支持 tool calling")
         logger.error("LLM tool fallback 链全部失败")
@@ -487,7 +594,16 @@ class LLMFallbackChain:
         extra_options: dict[str, Any] | None = None,
     ) -> Iterator[dict]:
         last_exc: BaseException | None = None
+        blocked_key_group: tuple[str, str] | None = None
         for idx, (client, spec) in enumerate(self._chain):
+            group = self._entry_group(spec)
+            if blocked_key_group == group:
+                logger.warning(
+                    "跳过同模型 Key 级切换: provider=%s model=%s reason=非限流错误",
+                    group[0],
+                    group[1],
+                )
+                continue
             if not client.supports_tool_calling:
                 logger.debug(
                     "LLM 位置=%d provider=%s 不支持 tool calling, 跳过",
@@ -525,7 +641,7 @@ class LLMFallbackChain:
                     messages,
                     tools,
                     tool_choice=tool_choice,
-                    extra_options=extra_options,
+                    extra_options=_extra_options(spec, extra_options),
                     **kw,
                 )
                 first = next(stream)
@@ -557,6 +673,7 @@ class LLMFallbackChain:
                 return
             except StopIteration:
                 last_exc = RuntimeError(f"{client.provider_name} tool stream 输出为空")
+                blocked_key_group = group
                 self._record_cost_for(client, spec, None, error=True)
                 breaker.record_failure()
                 self._emit_audit(
@@ -569,6 +686,9 @@ class LLMFallbackChain:
                 logger.warning("LLM tool stream 位置=%d 输出为空, 切换备用", idx)
             except Exception as e:  # noqa: BLE001
                 last_exc = e
+                was_rate_limited = self._mark_key_cooldown_if_rate_limited(spec, e)
+                if not was_rate_limited:
+                    blocked_key_group = group
                 self._record_cost_for(client, spec, None, error=True)
                 breaker.record_failure()
                 self._emit_audit(
@@ -584,6 +704,12 @@ class LLMFallbackChain:
                     client.provider_name,
                     e,
                 )
+                if was_rate_limited:
+                    logger.warning(
+                        "Key 级切换：provider/model 不变，尝试下一个可用 key provider=%s model=%s",
+                        spec.provider_name or spec.impl,
+                        spec.model,
+                    )
         if last_exc is None:
             raise RuntimeError("Fallback 链中没有任何 provider 支持 tool calling")
         logger.error("LLM tool stream fallback 链全部失败")

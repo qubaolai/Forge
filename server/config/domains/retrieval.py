@@ -37,28 +37,11 @@ class ComponentConfig(BaseModel):
 
 
 class EmbeddingConfig(ComponentConfig):
-    """Embedding 组件配置, 在 ComponentConfig 之上增加 fallback_chain.
+    """Embedding 组件配置。
 
-    fallback_chain 为 provider 名称列表 (按顺序), 主 provider 不可用时
-    EmbedderFallbackChain 会依次切换. 列表中的 provider 必须在 providers
-    字段里有子配置, 且 dimension 必须与主 provider 一致 (向量库不兼容).
+    Embedding 不支持运行时 fallback；文档入库和召回必须使用同一个模型，
+    否则向量空间不一致会导致召回失真。
     """
-
-    fallback_chain: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def _check_fallback_present(self) -> EmbeddingConfig:
-        missing = [p for p in self.fallback_chain if p not in self.providers]
-        if missing:
-            raise ValueError(
-                f"embedding.fallback_chain 中的 provider 缺少子配置: {missing}, "
-                f"已配置: {sorted(self.providers.keys())}"
-            )
-        if self.provider in self.fallback_chain:
-            raise ValueError(
-                f"embedding.fallback_chain 不能包含主 provider {self.provider!r}"
-            )
-        return self
 
 
 # ======================================================================

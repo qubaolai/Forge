@@ -1,12 +1,10 @@
-"""LLM 层配置: provider 多模型多 key 切换 + 工具模型 + 调用解析."""
+"""LLM 层配置: 模型元数据 + 工具模型 + 调用参数解析."""
 from __future__ import annotations
 
-import random
-import threading
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 # ======================================================================
@@ -69,26 +67,18 @@ class ModelConfig(BaseModel):
 
 
 # ======================================================================
-# LLMProviderConfig — 多 api_key + 策略选择
+# LLMProviderConfig — provider/model 元数据
 # ======================================================================
-KeyStrategy = Literal["round_robin", "random", "first"]
-
-
 class LLMProviderConfig(BaseModel):
     """单个 LLM provider 的配置.
 
-    api_keys 支持多个: 用于流量分担 / 限流隔离 / 主备隔离.
-    base_url / timeout 是 client 级参数 (建 SDK client 时用),
-    与 api_key 一起决定 client 池化 key.
+    运行时 API Key 只允许从 ModelConfigCache/DB 读取；YAML 配置不再承载 key。
+    base_url / timeout 是 client 级参数 (建 SDK client 时用)。
 
     impl: 工厂注册名. 不填默认等于 yaml 里的 provider 名.
     用途: 同一份实现类可以在 yaml 里建多个配置 profile.
     """
-    model_config = {"extra": "allow"}
-
-    # ---- key 配置 ----
-    api_keys: list[str] = Field(default_factory=list)
-    key_strategy: KeyStrategy = "round_robin"
+    model_config = {"extra": "forbid"}
 
     # ---- client 级参数 ----
     impl: str | None = None
@@ -101,21 +91,8 @@ class LLMProviderConfig(BaseModel):
     models: list[ModelConfig] = Field(min_length=1)
     default_params: dict[str, Any] = Field(default_factory=dict)
 
-    _rr_counter: int = PrivateAttr(default=0)
-    _rr_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-
     @model_validator(mode="after")
     def _normalize(self) -> LLMProviderConfig:
-        # 去重 + 过滤空 key
-        seen: set[str] = set()
-        normalized: list[str] = []
-        for k in self.api_keys:
-            k = (k or "").strip()
-            if k and k not in seen:
-                seen.add(k)
-                normalized.append(k)
-        self.api_keys = normalized
-
         # model name 唯一性
         names = [m.name for m in self.models]
         if len(names) != len(set(names)):
@@ -133,20 +110,6 @@ class LLMProviderConfig(BaseModel):
             f"model={name!r} 不在 provider 配置中, "
             f"可选: {[m.name for m in self.models]}"
         )
-
-    def select_api_key(self) -> str:
-        """按策略选取一个 api_key. 池化层据此确定 client 实例."""
-        if not self.api_keys:
-            raise ValueError("provider 未配置任何 api_key, 无法 select_api_key")
-        if len(self.api_keys) == 1 or self.key_strategy == "first":
-            return self.api_keys[0]
-        if self.key_strategy == "random":
-            return random.choice(self.api_keys)
-        # round_robin (默认)
-        with self._rr_lock:
-            idx = self._rr_counter % len(self.api_keys)
-            self._rr_counter += 1
-            return self.api_keys[idx]
 
 
 # ======================================================================
@@ -170,9 +133,14 @@ class LLMCallSpec:
     impl: str
     api_key: str
     model: str
+    provider_name: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
     top_p: float | None = None
+    thinking: bool | None = None
+    reasoning_effort: str | None = None
+    thinking_budget: int | None = None
+    top_k: int | None = None
     base_url: str | None = None
     timeout: float = 30.0
     quota_controlled: bool = False
@@ -240,13 +208,12 @@ class BudgetSettings(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    """LLM 段配置: 多 provider, 每个 provider 下多个 model + 多 api_key."""
+    """LLM 段配置: 默认 provider/model、重试、预算和可选模型元数据."""
     model_config = {"extra": "forbid"}
 
     provider: str = ""
     default_model: str | None = None
     providers: dict[str, LLMProviderConfig] = Field(default_factory=dict)
-    fallback_chain: str = ""
     max_retries: int = 3
     retry_backoff_seconds: float = 1.0
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
@@ -263,19 +230,6 @@ class LLMConfig(BaseModel):
                 self.providers[self.provider].find_model(self.default_model)
         return self
 
-    def fallback_pairs(self) -> list[tuple[str, str]]:
-        """解析 fallback_chain 字符串为 (provider, model) 列表."""
-        if not self.fallback_chain.strip():
-            return []
-        pairs: list[tuple[str, str]] = []
-        for token in self.fallback_chain.split(","):
-            token = token.strip()
-            if not token or ":" not in token:
-                continue
-            prov, model = token.split(":", 1)
-            pairs.append((prov.strip(), model.strip()))
-        return pairs
-
     def resolve(
         self,
         provider: str | None = None,
@@ -288,7 +242,8 @@ class LLMConfig(BaseModel):
             2. model 级字段 (extra='allow' 透传 + 显式字段)
             3. 必填: impl / api_key / model / base_url / timeout
 
-        api_key 按 provider.key_strategy 在已配置的 api_keys 中选取.
+        仅解析 YAML 中的模型元数据，不选择 API Key。
+        运行时 API Key 必须由 ModelConfigCache 提供。
         """
         target_provider = provider or self.provider
         if target_provider not in self.providers:
@@ -327,11 +282,16 @@ class LLMConfig(BaseModel):
 
         return LLMCallSpec(
             impl=impl,
-            api_key=pcfg.select_api_key(),
+            api_key="",
             model=target_model,
+            provider_name=target_provider,
             temperature=merged.get("temperature"),
             max_tokens=merged.get("max_tokens"),
             top_p=merged.get("top_p"),
+            thinking=merged.get("thinking"),
+            reasoning_effort=merged.get("reasoning_effort"),
+            thinking_budget=merged.get("thinking_budget"),
+            top_k=merged.get("top_k"),
             base_url=pcfg.base_url,
             timeout=pcfg.timeout,
             quota_controlled=quota_controlled,
@@ -361,8 +321,8 @@ class LLMConfig(BaseModel):
 class UtilityLLMConfig(BaseModel):
     """工具模型配置 — 供标题生成、摘要、意图识别等轻量任务共用.
 
-    三级回落 (由 Settings.resolve_utility_llm 实现):
-        任务专属 provider/model → utility_llm → llm.default
+    运行时由 forge.llm.gateway.build_utility_chain_from_settings 解析:
+        任务专属 utility provider/model → 任务 provider/model → 主模型
     """
     model_config = {"extra": "forbid"}
 

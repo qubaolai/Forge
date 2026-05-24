@@ -6,7 +6,7 @@
     - 工厂的 create() 根据 provider 实例化对应类
 
 模型网关入口 (build_embedder_from_settings):
-    - 业务侧唯一入口. 启动期装配 1 次, 全生命周期复用 (含 fallback chain).
+    - 业务侧唯一入口. 启动期装配 1 次, 全生命周期复用。
     - 进程内单例: settings 不可变, 装配结果可直接 memo. 不需要复合 key 池.
     - 测试隔离: reset_embedder_cache() 清空, 配合 reset_settings() 用.
 
@@ -74,11 +74,7 @@ _build_lock = threading.Lock()
 
 
 def build_embedder_from_settings(settings: Settings) -> Embedder:
-    """从全局 settings 构造 Embedder (含 fallback chain), 进程内 memo.
-
-    返回的对象始终包一层 EmbedderFallbackChain (即使没配 fallback), 让
-    check_budget 等横切逻辑统一在链里处理. 二次调用直接返回缓存对象.
-    """
+    """从全局 settings 构造单一 Embedder，进程内 memo."""
     global _built
     if _built is not None:
         return _built
@@ -87,21 +83,8 @@ def build_embedder_from_settings(settings: Settings) -> Embedder:
         if _built is not None:
             return _built
 
-        from .fallback import EmbedderFallbackChain
-
         cfg = settings.embedding
-        primary = EmbedderFactory.create(cfg.provider, cfg.providers[cfg.provider])
-
-        fallback_names = getattr(cfg, "fallback_chain", []) or []
-        fallbacks: list[Embedder] = []
-        for name in fallback_names:
-            sub_cfg = cfg.providers.get(name)
-            if not sub_cfg:
-                # 已被 EmbeddingConfig validator 拦, 这里多兜一道
-                raise ValueError(f"embedding.fallback_chain 引用了未配置的 provider: {name!r}")
-            fallbacks.append(EmbedderFactory.create(name, sub_cfg))
-
-        _built = EmbedderFallbackChain(primary, fallbacks)
+        _built = EmbedderFactory.create(cfg.provider, cfg.providers[cfg.provider])
         return _built
 
 

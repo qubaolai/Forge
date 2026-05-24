@@ -88,7 +88,7 @@ class _Ctx:
             )
         )
 
-        # 3. LLM chain: build_chain_from_settings 返回的 chain 在 service.py 里被
+        # 3. LLM chain: build_utility_chain_from_settings 返回的 chain 在 service.py 里被
         #    透传给 Summarizer.__init__; 我们 patch 它返回一个带 primary_spec 的 mock
         if self.llm_init_raises:
             chain_factory = AsyncMock(side_effect=self.llm_init_raises)
@@ -99,6 +99,12 @@ class _Ctx:
         self.patches.append(
             patch(
                 "forge.llm.gateway.build_chain_from_settings",
+                chain_factory,
+            )
+        )
+        self.patches.append(
+            patch(
+                "forge.llm.gateway.build_utility_chain_from_settings",
                 chain_factory,
             )
         )

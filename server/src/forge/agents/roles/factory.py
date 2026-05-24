@@ -5,9 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from threading import Lock
 
-from config.settings import get_settings
-
-
 @dataclass(frozen=True)
 class AgentRole:
     name: str
@@ -232,10 +229,9 @@ def reset_custom_agent_roles() -> None:
 def resolve_runtime_model_id(role: AgentRole) -> str | None:
     """解析当前环境可用的角色模型.
 
-    role 配置里的 model_preference / fallback_model 可能是目标态名称 (例如 sonnet-4-6),
-    当前环境不一定已配置. 这里仅在可解析时返回, 否则返回 None 让调用方走默认模型.
+    当前 LLM 运行时只从 ModelConfigCache 解析 provider/model，角色模型若未显式
+    写成 provider:model，则返回 None 让调用方使用主流程传入的模型。
     """
-    settings = get_settings()
     candidates = [role.model_preference, role.fallback_model]
     seen: set[str] = set()
     for candidate in candidates:
@@ -244,17 +240,5 @@ def resolve_runtime_model_id(role: AgentRole) -> str | None:
             continue
         seen.add(c)
         if ":" in c:
-            provider, model = c.split(":", 1)
-            try:
-                settings.llm.resolve(provider.strip(), model.strip())
-                return c
-            except Exception:  # noqa: BLE001
-                continue
-        # 未指定 provider: 在已配置 provider 里找第一个可解析的.
-        for provider in settings.llm.list_providers():
-            try:
-                settings.llm.resolve(provider, c)
-                return f"{provider}:{c}"
-            except Exception:  # noqa: BLE001
-                continue
+            return c
     return None

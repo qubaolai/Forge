@@ -57,7 +57,7 @@ class SummaryService:
             ChatMessageRepository,
         )
         from forge.memory.summary.store import SummaryStore
-        from forge.llm.gateway import build_chain_from_settings
+        from forge.llm.gateway import build_utility_chain_from_settings
         from forge.memory.summary.summarizer import Summarizer
 
         init_engine()  # 幂等, worker 进程也安全
@@ -86,13 +86,18 @@ class SummaryService:
 
         covered_until = rows[-1].id  # load_recent 已按时间升序
 
-        # 2. 构造 Summarizer LLM 链 (走工具模型三级回落: 任务配置 → utility_llm → 主模型)
+        # 2. 构造 Summarizer LLM 链 (走工具模型三级回落: 任务 utility → 任务主模型 → 主模型)
         try:
             provider = settings.memory.summarizer.provider or None
             model = settings.memory.summarizer.model or None
-            chain = await build_chain_from_settings(settings, provider=provider, model=model)
+            chain = await build_utility_chain_from_settings(
+                settings,
+                utility_provider=provider,
+                utility_model=model,
+            )
             used_model = chain.primary_spec.model
         except Exception as exc:
+            logger.exception("Summarizer LLM 初始化失败")
             raise InfrastructureError(f"Summarizer LLM 初始化失败: {exc}") from exc
 
         summarizer = Summarizer(

@@ -7,8 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class MemorySummarizerSettings(BaseSettings):
     """摘要任务使用的 LLM. 走独立 provider/model, 不复用 chat 主模型.
 
-    provider/model 必须在 llm.providers 下能找到 (会被 Settings.resolve_utility_llm 解析).
-    留空则依次回落到 utility_llm → llm.default.
+    provider/model 会被工具模型入口按 DB 缓存校验。留空则回落到任务主模型/主模型。
     """
     model_config = SettingsConfigDict(extra="ignore")
 

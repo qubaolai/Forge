@@ -10,13 +10,14 @@
 
 构链:
     build_chain_from_settings(settings, provider=..., model=...) -> LLMFallbackChain
-    每次请求都会调一遍, 但 client 走池, fallback chain 是轻量包装.
+    每次请求都会从 ModelConfigCache 读取 key 并在池中做 key 级选择。
 """
 
 from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING
+from dataclasses import replace
 
 from .providers.base import LLM
 
@@ -70,89 +71,32 @@ async def build_chain_from_settings(
     routing_request: RoutingRequest | None = None,
     model_cache=None,
 ) -> LLMFallbackChain:
-    """根据 settings + DB 构建 LLM 调用链。
+    """根据 ModelConfigCache 构建主模型调用链。
 
-    当 settings.llm.providers 有配置时走 YAML 解析，
-    为空时直接从缓存或环境变量构造（DB 驱动模式）。
-    model_cache 不为 None 时，校验 provider:model 是否已启用。
+    主模型不做 provider/model fallback；链内只包含同一 provider/model 的 key 级
+    候选，且只有 429 限流错误才会切换到下一个 key。
     """
-    from .client_pool import get_llm_pool
     from .fallback import LLMFallbackChain
-    from .model_config_cache import ModelConfigCache
 
-    pool = get_llm_pool()
-    fallbacks: list = []
-    if model_cache is None:
-        model_cache = ModelConfigCache.get_global()
-    cache_ready = False
-    try:
-        cache_ready = await model_cache.is_ready()
-    except Exception:
-        cache_ready = False
+    if routing_request is not None:
+        logger.warning("LLM 路由请求已忽略: 当前主模型必须显式传入 provider/model")
 
-    # 校验模型启用状态
-    if provider and model and model_cache is not None and cache_ready:
-        try:
-            enabled = await model_cache.is_model_enabled(provider, model)
-            if not enabled:
-                raise ValueError(
-                    f"模型 {provider}:{model} 未启用或不存在，请联系管理员在模型管理中启用"
-                )
-        except (TypeError, AttributeError):
-            # model_cache 不是 async 或方法不存在时降级
-            pass
-
-    if settings.llm.providers:
-        # ── YAML 模式 ──
-        if provider is None and model is None and routing_request is not None:
-            decision = _route_primary(settings, routing_request)
-            if decision is not None:
-                provider, model = decision.provider, decision.model
-
-        try:
-            primary_spec = _resolve_from_db_or_yaml(
-                settings,
-                provider,
-                model,
-                model_cache if cache_ready else None,
-            )
-        except Exception:
-            if not provider or not model:
-                raise
-            primary_spec = _resolve_from_env(provider, model, settings)
-
-        primary_client = pool.get(
-            primary_spec.impl, primary_spec.api_key, primary_spec.client_options,
-        )
-        for prov, mdl in settings.llm.fallback_pairs():
-            try:
-                spec = settings.llm.resolve(prov, mdl)
-                client = pool.get(spec.impl, spec.api_key, spec.client_options)
-                fallbacks.append((client, spec))
-            except Exception:
-                logger.warning("fallback 装配失败, 跳过: %s:%s", prov, mdl)
-    else:
-        # ── 无 YAML / DB 模式: 从缓存或环境变量构造 ──
-        if not provider or not model:
-            raise ValueError("未配置 LLM provider 且未传入 provider/model 参数")
-        primary_spec = await _resolve_from_cache_or_env(
-            provider,
-            model,
-            settings,
-            model_cache if cache_ready else None,
-            pool,
-        )
-        primary_client = pool.get(
-            primary_spec.impl, primary_spec.api_key, primary_spec.client_options,
-        )
+    entries = await _build_entries_from_cache(
+        provider=provider,
+        model=model,
+        model_cache=model_cache,
+    )
+    primary_client, primary_spec = entries[0]
+    fallbacks = entries[1:]
 
     logger.info(
-        "LLM 选型 impl=%s model=%s temperature=%s max_tokens=%s fallbacks=%s",
-        primary_spec.impl, primary_spec.model,
-        primary_spec.temperature, primary_spec.max_tokens,
-        [f"{c.provider_name}:{s.model}" for c, s in fallbacks] or "[]",
+        "LLM 主模型选型完成: provider=%s impl=%s model=%s key=%s fallbacks=%d",
+        primary_spec.provider_name or primary_spec.impl,
+        primary_spec.impl,
+        primary_spec.model,
+        primary_spec.api_key[:6] + "***" if primary_spec.api_key else "-",
+        len(fallbacks),
     )
-
     return LLMFallbackChain(
         (primary_client, primary_spec),
         fallbacks,
@@ -161,148 +105,192 @@ async def build_chain_from_settings(
     )
 
 
-def _resolve_from_env(provider: str, model: str, settings) -> "LLMCallSpec":
-    """无 YAML 模式: 从池中选一个可用 key，构造 LLMCallSpec。"""
-    import os
+async def build_utility_chain_from_settings(
+    settings,
+    *,
+    utility_provider: str | None = None,
+    utility_model: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    model_cache=None,
+) -> LLMFallbackChain:
+    """构建工具模型调用链。
 
+    回落顺序:
+        任务传入 utility provider/model → 任务传入 provider/model → 主模型
+    """
+    from .fallback import LLMFallbackChain
+
+    candidates = _utility_candidates(settings, utility_provider, utility_model, provider, model)
+    entries = []
+    errors: list[str] = []
+    for candidate_provider, candidate_model, reason in candidates:
+        try:
+            candidate_entries = await _build_entries_from_cache(
+                provider=candidate_provider,
+                model=candidate_model,
+                model_cache=model_cache,
+            )
+            entries.extend(candidate_entries)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{reason}={candidate_provider}:{candidate_model} 失败: {exc}")
+            logger.warning(
+                "工具模型回落候选不可用: reason=%s provider=%s model=%s error=%s",
+                reason,
+                candidate_provider,
+                candidate_model,
+                exc,
+            )
+
+    if not entries:
+        logger.error("工具模型构建失败: %s", "；".join(errors) or "没有可用候选")
+        raise ValueError("工具模型构建失败，没有可用 provider/model")
+
+    primary_client, primary_spec = entries[0]
+    logger.info(
+        "工具模型选型完成: provider=%s impl=%s model=%s fallback_entries=%d",
+        primary_spec.provider_name or primary_spec.impl,
+        primary_spec.impl,
+        primary_spec.model,
+        max(0, len(entries) - 1),
+    )
+    return LLMFallbackChain(
+        (primary_client, primary_spec),
+        entries[1:],
+        max_retries=settings.llm.max_retries,
+        retry_backoff_seconds=settings.llm.retry_backoff_seconds,
+    )
+
+
+async def _build_entries_from_cache(
+    *,
+    provider: str | None,
+    model: str | None,
+    model_cache=None,
+) -> list[tuple[LLM, "LLMCallSpec"]]:
+    """从 ModelConfigCache 构建同一 provider/model 的 key 候选链。"""
     from config.domains.llm import LLMCallSpec
     from .client_pool import get_llm_pool
 
-    pool = get_llm_pool()
-    # 先尝试从池中选 key（支持多 Key + 冷却）
-    client = pool.get_by_impl(provider)
-    if client is not None:
-        return LLMCallSpec(
-            impl=provider,
-            api_key="",  # client 已持有 key
-            model=model,
-            temperature=0.7,
-            max_tokens=4096,
-        )
+    if not provider or not model:
+        raise ValueError("构建 LLM 调用链失败: provider/model 必须显式传入")
+    if model_cache is None:
+        from .model_config_cache import ModelConfigCache
 
-    # 池中无 key: 从环境变量取
-    env_key = f"{provider.upper()}_API_KEY"
-    api_key = os.environ.get(env_key, "")
-    if not api_key:
-        raise ValueError(f"环境变量 {env_key} 未设置，且池中无可用 key: provider={provider}")
-
-    return LLMCallSpec(
-        impl=provider,
-        api_key=api_key,
-        model=model,
-        temperature=0.7,
-        max_tokens=4096,
-    )
-
-
-def _route_primary(settings, request: RoutingRequest):
-    """枚举 settings 中所有 (provider, model) 作为候选, 让 router 选一个."""
-    from .router import get_default_router
-
-    available = []
-    for prov_name, pcfg in settings.llm.providers.items():
-        for mcfg in pcfg.models:
-            available.append((prov_name, mcfg))
-    if not available:
-        return None
-    return get_default_router().route(request, available)
-
-
-async def _resolve_from_db_or_yaml(
-    settings, provider: str | None, model: str | None, model_cache=None
-) -> "LLMCallSpec":
-    """优先从 YAML settings.llm.resolve() 或 DB 缓存解析 LLMCallSpec。
-
-    YAML 中能找到 provider:model 就直接用（向后兼容）；
-    找不到时从 model_cache 查 DB 配置构建 LLMCallSpec。
-    """
-    from config.domains.llm import LLMCallSpec
-
-    # 先尝试 YAML
+        model_cache = ModelConfigCache.get_global()
     try:
-        spec = settings.llm.resolve(provider, model)
-        if spec.model:
-            # 校验模型在数据库中已启用
-            if model_cache is not None and provider and model:
-                try:
-                    if not await model_cache.is_model_enabled(provider, model):
-                        raise ValueError(f"模型 {provider}:{model} 已被禁用")
-                except (TypeError, AttributeError):
-                    pass  # cache 不可用则跳过校验
-            return spec
-    except Exception:
-        pass
+        cache_ready = await model_cache.is_ready()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("ModelConfigCache 就绪检查失败")
+        raise ValueError("模型配置缓存不可用，无法构建 LLM 调用链") from exc
+    if not cache_ready:
+        logger.error("ModelConfigCache 未就绪，拒绝构建 LLM 调用链")
+        raise ValueError("模型配置缓存未就绪，请稍后重试")
 
-    # YAML 找不到，从 DB 缓存解析
-    if model_cache is not None and provider and model:
-        model_detail = await model_cache.get_model_detail(provider, model)
-        if model_detail:
-            provider_info = await model_cache.get_provider(provider) or {}
-            keys = await model_cache.get_keys(provider)
-            api_key = keys[0]["api_key"] if keys else ""
-            extra = model_detail.get("extra_params") or {}
-            return LLMCallSpec(
-                impl=provider_info.get("impl", provider),
-                api_key=api_key,
-                model=model,
-                temperature=extra.get("temperature", 0.7),
-                max_tokens=extra.get("max_tokens", model_detail.get("max_output_tokens", 4096)),
-                top_p=extra.get("top_p"),
-                thinking=extra.get("thinking"),
-                reasoning_effort=model_detail.get("thinking_default") or extra.get("reasoning_effort"),
-                thinking_budget=extra.get("thinking_budget"),
-                top_k=extra.get("top_k"),
-                base_url=provider_info.get("base_url"),
-                timeout=extra.get("timeout", 30),
-            )
+    enabled = await model_cache.is_model_enabled(provider, model)
+    if not enabled:
+        logger.error("模型未启用或不存在: provider=%s model=%s", provider, model)
+        raise ValueError(f"模型 {provider}:{model} 未启用或不存在")
 
-    raise ValueError(f"找不到模型配置: provider={provider} model={model}")
+    provider_info = await model_cache.get_provider(provider)
+    if not provider_info:
+        logger.error("供应商不存在或未启用: provider=%s", provider)
+        raise ValueError(f"供应商 {provider} 不存在或未启用")
 
+    model_detail = await model_cache.get_model_detail(provider, model)
+    if not model_detail:
+        logger.error("模型详情缺失: provider=%s model=%s", provider, model)
+        raise ValueError(f"模型详情缺失: {provider}:{model}")
 
-async def _resolve_from_cache_or_env(
-    provider: str, model: str, settings, model_cache=None, pool=None
-) -> "LLMCallSpec":
-    """DB 缓存或环境变量模式：从缓存或环境变量构造 LLMCallSpec。"""
-    from config.domains.llm import LLMCallSpec
+    keys = await model_cache.get_keys(provider)
+    if not keys:
+        logger.error("供应商无可用 API Key: provider=%s", provider)
+        raise ValueError(f"供应商 {provider} 当前没有可用 API Key")
 
-    # 优先从缓存解析
-    if model_cache is not None:
-        try:
-            model_detail = await model_cache.get_model_detail(provider, model)
-            if model_detail:
-                provider_info = await model_cache.get_provider(provider) or {}
-                keys = await model_cache.get_keys(provider)
-                api_key = keys[0]["api_key"] if keys else ""
-                extra = model_detail.get("extra_params") or {}
-                return LLMCallSpec(
-                    impl=provider_info.get("impl", provider),
-                    api_key=api_key,
-                    model=model,
-                    temperature=extra.get("temperature", 0.7),
-                    max_tokens=extra.get("max_tokens", model_detail.get("max_output_tokens", 4096)),
-                )
-        except (TypeError, AttributeError):
-            pass
-
-    # 兜底：环境变量
-    import os
-
-    env_key = f"{provider.upper()}_API_KEY"
-    api_key = os.environ.get(env_key, "")
-    if not api_key and pool is not None:
-        client = pool.get_by_impl(provider)
-        if client is not None:
-            api_key = ""
-        else:
-            raise ValueError(f"环境变量 {env_key} 未设置，且池中无可用 key: provider={provider}")
-
-    return LLMCallSpec(
-        impl=provider,
-        api_key=api_key,
+    extra = model_detail.get("extra_params") or {}
+    impl = provider_info.get("impl") or provider
+    base_spec = LLMCallSpec(
+        impl=impl,
+        api_key="",
         model=model,
-        temperature=0.7,
-        max_tokens=4096,
+        provider_name=provider,
+        temperature=extra.get("temperature", 0.7),
+        max_tokens=extra.get("max_tokens", model_detail.get("max_output_tokens", 4096)),
+        top_p=extra.get("top_p"),
+        thinking=extra.get("thinking"),
+        reasoning_effort=model_detail.get("thinking_default") or extra.get("reasoning_effort"),
+        thinking_budget=extra.get("thinking_budget"),
+        top_k=extra.get("top_k"),
+        base_url=provider_info.get("base_url"),
+        timeout=extra.get("timeout", 30),
+        extra={
+            k: v
+            for k, v in extra.items()
+            if k not in {
+                "temperature",
+                "max_tokens",
+                "top_p",
+                "thinking",
+                "reasoning_effort",
+                "thinking_budget",
+                "top_k",
+                "timeout",
+            }
+        },
     )
+
+    pool = get_llm_pool()
+    pool.reconcile_provider(impl, keys, base_spec.client_options)
+    candidates = pool.get_candidates_by_impl(impl, base_spec.client_options)
+    if not candidates:
+        logger.error("供应商当前无可用 Key: provider=%s impl=%s", provider, impl)
+        raise ValueError(f"供应商 {provider} 当前无可用 API Key，请稍后重试")
+
+    entries: list[tuple[LLM, LLMCallSpec]] = []
+    for client, api_key in candidates:
+        entries.append((client, replace(base_spec, api_key=api_key)))
+    return entries
+
+
+def _utility_candidates(
+    settings,
+    utility_provider: str | None,
+    utility_model: str | None,
+    provider: str | None,
+    model: str | None,
+) -> list[tuple[str, str, str]]:
+    """按约定顺序生成工具模型候选，并去重。"""
+    raw = [
+        (
+            utility_provider or settings.utility_llm.provider or "",
+            utility_model or settings.utility_llm.model or "",
+            "utility_llm",
+        ),
+        (provider or "", model or "", "task_model"),
+        (settings.llm.provider or "", settings.llm.default_model or "", "main_model"),
+    ]
+    result: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for candidate_provider, candidate_model, reason in raw:
+        if not candidate_provider or not candidate_model:
+            continue
+        key = (candidate_provider, candidate_model)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append((candidate_provider, candidate_model, reason))
+    return result
+
+
+def split_provider_model(value: str | None) -> tuple[str | None, str | None]:
+    """解析 provider:model。缺失 provider 时返回 (None, model)。"""
+    raw = (value or "").strip()
+    if not raw:
+        return None, None
+    if ":" not in raw:
+        return None, raw
+    provider, model = raw.split(":", 1)
+    return provider.strip() or None, model.strip() or None
 
 
 def _autoload() -> None:

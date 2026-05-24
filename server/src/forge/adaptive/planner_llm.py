@@ -164,13 +164,15 @@ def build_real_planner_callable(
 
         from config.settings import get_settings
 
-        from forge.llm.gateway import build_chain_from_settings
+        from forge.llm.gateway import build_chain_from_settings, split_provider_model
 
         # C10/D1: 真实路径下 LLM 不可用必须让 run FAILED，不再回退 fallback 假完成
         try:
             settings = get_settings()
-            target_model = _resolve_model_profile(settings, model_profile)
-            chain = await build_chain_from_settings(settings, model=target_model)
+            target_provider, target_model = _resolve_model_profile(settings, model_profile)
+            chain = await build_chain_from_settings(
+                settings, provider=target_provider, model=target_model
+            )
         except Exception as exc:
             logger.exception("Planner LLM chain 构造失败")
             raise PlannerError(f"Planner LLM chain 构造失败: {exc}") from exc
@@ -227,13 +229,20 @@ def build_real_planner_callable(
     return _plan
 
 
-def _resolve_model_profile(settings, model_profile: str) -> str | None:
-    """把 fast/smart/strong 档位解析成具体模型名。"""
+def _resolve_model_profile(settings, model_profile: str) -> tuple[str, str]:
+    """把 fast/smart/strong 档位解析成 provider:model。"""
+    from forge.llm.gateway import split_provider_model
+
     profiles = getattr(getattr(settings, "task_execution", None), "model_profiles", None)
     if profiles is None:
-        return None
+        raise PlannerError("task_execution.model_profiles 未配置")
     if isinstance(profiles, dict):
         value = profiles.get(model_profile)
     else:
         value = getattr(profiles, model_profile, None)
-    return str(value) if value else None
+    provider, model = split_provider_model(str(value) if value else None)
+    if not provider or not model:
+        raise PlannerError(
+            f"Planner 模型档位 {model_profile!r} 必须配置为 provider:model"
+        )
+    return provider, model

@@ -10,13 +10,11 @@ def test_provider_quota_controlled_flows_into_call_spec() -> None:
         providers={
             "server_openai": {
                 "impl": "openai",
-                "api_keys": ["sk-server"],
                 "quota_controlled": True,
                 "models": [{"name": "gpt-4o"}],
             },
             "user_openai": {
                 "impl": "openai",
-                "api_keys": ["sk-user"],
                 "models": [{"name": "gpt-4o"}],
             },
         },
@@ -32,7 +30,6 @@ def test_model_quota_controlled_overrides_provider_default() -> None:
         providers={
             "mixed": {
                 "impl": "openai",
-                "api_keys": ["sk-server"],
                 "quota_controlled": True,
                 "models": [
                     {"name": "server-model"},

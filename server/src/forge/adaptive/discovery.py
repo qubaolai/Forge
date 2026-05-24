@@ -82,21 +82,29 @@ def build_real_discovery_callable(
         from config.settings import get_settings
 
         from forge.agents.react.agent import ReActAgent
-        from forge.llm.gateway import build_chain_from_settings
+        from forge.llm.gateway import build_chain_from_settings, split_provider_model
         from forge.tools.registry import ToolRegistry
 
         settings = get_settings()  # 失败让上层抓
 
         # 选择模型 profile（fast 即可，探索任务不需要 strong）
         profiles = getattr(getattr(settings, "task_execution", None), "model_profiles", None)
+        target_provider: str | None = None
         target_model: str | None = None
         if profiles is not None:
-            target_model = (
+            raw_model = (
                 profiles.get(model_profile)
                 if isinstance(profiles, dict)
                 else getattr(profiles, model_profile, None)
             )
-        chain = await build_chain_from_settings(settings, provider=None, model=target_model)
+            target_provider, target_model = split_provider_model(str(raw_model) if raw_model else None)
+        if not target_provider or not target_model:
+            raise RuntimeError(
+                f"Discovery 模型档位 {model_profile!r} 必须配置为 provider:model"
+            )
+        chain = await build_chain_from_settings(
+            settings, provider=target_provider, model=target_model
+        )
 
         all_tools = ToolRegistry.get_all()
         allowed_names = set(DEFAULT_DISCOVERY_TOOLS)

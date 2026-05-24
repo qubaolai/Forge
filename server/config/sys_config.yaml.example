@@ -89,6 +89,8 @@ memory:
 # 对话时的供应商和模型以前端传递为准，gateway 会校验 DB 中 is_enabled=true。
 # 配置文件中仅保留重试策略和预算配额，不再维护供应商模型列表。
 llm:
+  provider: ${LLM_PROVIDER:}
+  default_model: ${LLM_DEFAULT_MODEL:}
   max_retries: ${LLM_MAX_RETRIES:3}
   retry_backoff_seconds: ${LLM_RETRY_BACKOFF:1.0}
 
@@ -105,6 +107,11 @@ llm:
   # 兼容性占位: providers 留空，实际供应商/模型全部从 DB 加载
   providers: {}
 
+# 工具模型: 标题生成、摘要等轻量任务优先使用；留空则回落到任务主模型/主模型。
+utility_llm:
+  provider: ${UTILITY_LLM_PROVIDER:}
+  model: ${UTILITY_LLM_MODEL:}
+
 # 入库相关
 ingest:
   documents_path: data/documents
@@ -113,11 +120,9 @@ ingest:
     chunk_size: 500
     chunk_overlap: 50
 
-# Embedding 模型 — 模型配置从 DB models 表 (model_type=embedding) 加载。
-# 以下为 DB 不可用时的 fallback，正常启动后由 ModelConfigCache 接管。
+# Embedding 模型 — 不支持运行时 fallback，入库和召回必须保持同一向量模型。
 embedding:
   provider: mock
-  fallback_chain: []
   providers:
     mock:
       dimension: 768
@@ -203,14 +208,11 @@ task_execution:
     - run_tests
     - knowledge_search
 
-  # C1/fix-2b: model_profiles 必须是 default_provider 实际拥有的 model name；
-  # 否则 build_chain_from_settings(model=...) 不传 provider 时会落到默认 provider
-  # 并触发 "model 不在 provider 配置中"。
-  # 修改 provider 时同步更新这三个值。
+  # model_profiles 必须使用 provider:model，运行时不再猜测 provider。
   model_profiles:
-    fast:   "${FAST_MODEL:qwen-plus}"
-    smart:  "${SMART_MODEL:qwen-plus}"
-    strong: "${STRONG_MODEL:qwen3-max-preview}"
+    fast:   "${FAST_MODEL:dashscope:qwen-plus}"
+    smart:  "${SMART_MODEL:dashscope:qwen-plus}"
+    strong: "${STRONG_MODEL:dashscope:qwen3-max-preview}"
   planner_model_profile: smart
   discovery_model_profile: fast
 

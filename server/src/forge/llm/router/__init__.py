@@ -1,6 +1,6 @@
 """LLM Router 包.
 
-只决定 primary; fallback chain 仍走 settings.llm.fallback_chain 静态配置.
+只决定 primary；运行时 provider/model 不再配置 fallback chain。
 """
 
 from .base import Candidate, Router, RoutingDecision, RoutingRequest

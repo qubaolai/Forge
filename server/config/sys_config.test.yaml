@@ -79,9 +79,15 @@ memory:
     every_n_turns: 999
 
 llm:
+  provider: ${LLM_PROVIDER:}
+  default_model: ${LLM_DEFAULT_MODEL:}
   max_retries: 1
   retry_backoff_seconds: 0.0
   providers: {}
+
+utility_llm:
+  provider: ${UTILITY_LLM_PROVIDER:}
+  model: ${UTILITY_LLM_MODEL:}
 
 ingest:
   documents_path: data/documents
@@ -170,11 +176,11 @@ task_execution:
     - run_tests
     - knowledge_search
 
-  # C1/fix-2b: 与 default_provider (dashscope) 真实模型保持一致
+  # model_profiles 必须使用 provider:model，运行时不再猜测 provider。
   model_profiles:
-    fast: ${FAST_MODEL:qwen-plus}
-    smart: ${SMART_MODEL:qwen-plus}
-    strong: ${STRONG_MODEL:qwen3-max-preview}
+    fast: ${FAST_MODEL:dashscope:qwen-plus}
+    smart: ${SMART_MODEL:dashscope:qwen-plus}
+    strong: ${STRONG_MODEL:dashscope:qwen3-max-preview}
   planner_model_profile: smart
   discovery_model_profile: fast
 

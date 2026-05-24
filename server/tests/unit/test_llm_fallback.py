@@ -360,3 +360,73 @@ def test_chain_chat_with_tools_skips_provider_without_support():
     resp = chain.chat_with_tools([], tools=[])
     assert "from ok" in resp["content"]
     assert no_tool._calls == 0
+
+
+def test_rate_limit_marks_cooldown_and_switches_same_model_key(monkeypatch):
+    """429 只触发同 provider/model 的 key 级切换。"""
+
+    class _Pool:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def mark_cooldown(self, impl: str, api_key: str, seconds: float) -> None:
+            self.calls.append((impl, api_key, seconds))
+
+    pool = _Pool()
+    monkeypatch.setattr("forge.llm.fallback.get_llm_pool", lambda: pool)
+
+    primary = _MockLLM("p", fail_first=100, raise_msg="429 rate limit retry-after: 10")
+    backup = _MockLLM("b")
+    primary_spec = LLMCallSpec(
+        impl="openai",
+        api_key="sk-primary",
+        model="gpt-4o",
+        provider_name="openai",
+    )
+    backup_spec = LLMCallSpec(
+        impl="openai",
+        api_key="sk-backup",
+        model="gpt-4o",
+        provider_name="openai",
+    )
+    chain = LLMFallbackChain(
+        (primary, primary_spec),
+        [(backup, backup_spec)],
+        max_retries=1,
+        retry_backoff_seconds=0.001,
+    )
+
+    result = chain.chat([ChatMessage(role="user", content="hi")])
+
+    assert "from b" in result.content
+    assert pool.calls
+    assert pool.calls[0] == ("openai", "sk-primary", 10.0)
+
+
+def test_non_rate_limit_does_not_switch_same_model_key():
+    """非 429 错误不切换同 provider/model 的其他 key。"""
+    primary = _MockLLM("p", fail_first=100, raise_msg="timeout")
+    backup = _MockLLM("b")
+    primary_spec = LLMCallSpec(
+        impl="openai",
+        api_key="sk-primary",
+        model="gpt-4o",
+        provider_name="openai",
+    )
+    backup_spec = LLMCallSpec(
+        impl="openai",
+        api_key="sk-backup",
+        model="gpt-4o",
+        provider_name="openai",
+    )
+    chain = LLMFallbackChain(
+        (primary, primary_spec),
+        [(backup, backup_spec)],
+        max_retries=0,
+        retry_backoff_seconds=0.001,
+    )
+
+    with pytest.raises(Exception, match="timeout"):
+        chain.chat([ChatMessage(role="user", content="hi")])
+
+    assert backup._calls == 0

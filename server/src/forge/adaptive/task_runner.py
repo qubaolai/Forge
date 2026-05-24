@@ -139,7 +139,7 @@ async def run_node_with_react(
     from config.settings import get_settings
 
     from forge.agents.react.agent import ReActAgent
-    from forge.llm.gateway import build_chain_from_settings
+    from forge.llm.gateway import build_chain_from_settings, split_provider_model
     from forge.tools.registry import ToolRegistry
 
     try:
@@ -148,18 +148,28 @@ async def run_node_with_react(
         raise TaskRunnerError(f"settings 加载失败: {exc}") from exc
 
     # 选 model
+    target_provider: str | None = None
     target_model: str | None = None
     profiles = getattr(getattr(settings, "task_execution", None), "model_profiles", None)
     if model_profile_resolver is not None:
-        target_model = model_profile_resolver(node.model_profile)
+        target_provider, target_model = split_provider_model(
+            model_profile_resolver(node.model_profile)
+        )
     elif profiles is not None:
-        target_model = (
+        raw_model = (
             profiles.get(node.model_profile)
             if isinstance(profiles, dict)
             else getattr(profiles, node.model_profile, None)
         )
+        target_provider, target_model = split_provider_model(str(raw_model) if raw_model else None)
+    if not target_provider or not target_model:
+        raise TaskRunnerError(
+            f"任务 {node.id} 的模型档位 {node.model_profile!r} 必须配置为 provider:model"
+        )
     try:
-        chain = await build_chain_from_settings(settings, model=target_model)
+        chain = await build_chain_from_settings(
+            settings, provider=target_provider, model=target_model
+        )
     except Exception as exc:  # noqa: BLE001
         raise TaskRunnerError(f"LLM chain 构造失败: {exc}") from exc
 

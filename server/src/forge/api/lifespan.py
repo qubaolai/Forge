@@ -126,9 +126,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         async with session_factory() as cache_db:
             await model_cache.reload_all(cache_db)
-        logger.info("模型缓存加载完成: ready=%s（仅 DB→缓存，不执行动态同步）", await model_cache.is_ready())
+        logger.info("模型缓存加载完成: ready=%s", await model_cache.is_ready())
     except Exception:
-        logger.exception("模型缓存加载失败（仅 DB→缓存）, LLM 将不可用")
+        logger.exception("模型缓存加载失败, LLM 将不可用")
 
     providers = await model_cache.get_providers_enabled() if await model_cache.is_ready() else []
     logger.info("模型目录就绪（来源: 数据库缓存）: providers=%s", [p["name"] for p in providers] if providers else "[]")

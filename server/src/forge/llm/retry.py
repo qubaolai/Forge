@@ -69,7 +69,7 @@ def call_with_retry(
     max_retries: int = 3,
     backoff_seconds: float = 1.0,
     max_backoff_seconds: float = 30.0,
-    on_retry: Callable[[int, BaseException, float], None] | None = None,
+    on_retry: Callable[[int, BaseException, float], bool | None] | None = None,
 ) -> T:
     last_exc: BaseException | None = None
     for attempt in range(max_retries + 1):
@@ -88,13 +88,19 @@ def call_with_retry(
                     backoff_seconds * (2 ** attempt) + random.uniform(0, 0.5),
                     max_backoff_seconds,
                 )
+            if on_retry is not None:
+                should_continue = on_retry(attempt + 1, e, delay)
+                if should_continue is False:
+                    logger.warning(
+                        "LLM 调用失败，本 key 不再重试 (attempt=%d/%d, rate_limited=%s): %s",
+                        attempt + 1, max_retries, is_rate_limit(e), e,
+                    )
+                    raise
             logger.warning(
                 "LLM 调用失败, %.1fs 后重试 (attempt=%d/%d, rate_limited=%s): %s",
                 delay, attempt + 1, max_retries,
                 retry_after is not None, e,
             )
-            if on_retry is not None:
-                on_retry(attempt + 1, e, delay)
             time.sleep(delay)
     assert last_exc is not None
     raise last_exc
