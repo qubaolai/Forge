@@ -6,7 +6,7 @@
 
 功能:
     1. 插入默认供应商 (dashscope / openai / deepseek / anthropic)
-    2. 插入已知模型及其能力元数据 (从 model_catalog._CAPABILITIES)
+    2. 插入已知模型及其能力元数据 (脚本内置静态配置)
     3. 插入 embedding / reranker 模型
     4. 幂等: 已存在的 supplier/model 跳过 (按 name 去重)
 
@@ -23,7 +23,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("seed_models")
 
-# 模型能力元数据（与 model_catalog._CAPABILITIES 保持同步）
+# 模型能力元数据（脚本内置静态配置）
 _CAPABILITIES: dict[str, dict] = {
     # Anthropic
     "claude-sonnet-4-6": {"context_window": 200000, "supports_tools": True, "supports_images": True, "thinking": {"type": "enabled"}},

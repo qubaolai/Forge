@@ -46,20 +46,13 @@ class ProviderToggleIn(BaseModel):
 
 # ---- 事件 ----
 class ConfigChangeEvent(BaseModel):
-    type: str  # provider_toggled / model_toggled / models_synced
+    type: str  # provider_toggled / model_toggled / model_default_changed
     provider: str
     model: str | None = None
     model_type: str | None = None
     enabled: bool | None = None
     count: int | None = None
     timestamp: str
-
-
-# ---- 同步 ----
-class SyncResultOut(BaseModel):
-    provider: str
-    models_synced: int
-    models_staled: int
 
 
 # ---- 通用响应 ----

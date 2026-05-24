@@ -22,7 +22,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import logging
 import os
@@ -119,39 +118,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.redis_client = redis_client
 
     from forge.llm.model_config_cache import ModelConfigCache
-    from forge.llm.model_sync_service import ModelSyncService
 
     model_cache = ModelConfigCache.get_global(redis_client)
-    model_sync = ModelSyncService(model_cache)
     from forge.infrastructure.database.database import get_session_factory
 
     session_factory = get_session_factory()
     try:
         async with session_factory() as cache_db:
             await model_cache.reload_all(cache_db)
-        logger.info("ModelConfigCache 加载完成: ready=%s", await model_cache.is_ready())
+        logger.info("模型缓存加载完成: ready=%s（仅 DB→缓存，不执行动态同步）", await model_cache.is_ready())
     except Exception:
-        logger.exception("ModelConfigCache 加载失败, LLM 将不可用")
+        logger.exception("模型缓存加载失败（仅 DB→缓存）, LLM 将不可用")
 
     providers = await model_cache.get_providers_enabled() if await model_cache.is_ready() else []
+    logger.info("模型目录就绪（来源: 数据库缓存）: providers=%s", [p["name"] for p in providers] if providers else "[]")
 
-    # 3.1 模型目录同步: 调供应商 API 拉模型列表 → 写 DB → 刷 Redis
-    #    ★ 必须在 LLM 预热之前执行，确保 models 表有数据
-    try:
-        async with session_factory() as sync_db:
-            sync_results = await model_sync.sync_all_enabled(sync_db)
-        providers = await model_cache.get_providers_enabled() if await model_cache.is_ready() else []
-        logger.info(
-            "模型目录同步完成 providers=%d details=%s",
-            len(sync_results),
-            [r.to_dict() for r in sync_results],
-        )
-    except Exception:
-        logger.exception("模型目录整体同步失败")
-    logger.info("模型目录就绪: providers=%s", [p["name"] for p in providers] if providers else "[]")
-
-    # 3.2 LLM 预热: 从 ModelConfigCache 读取启用的供应商和 Key
-    #    ★ 必须在模型同步之后执行，确保缓存中已有 keys 和 models
+    # 3.1 LLM 预热: 从 ModelConfigCache 读取启用的供应商和 Key
     from forge.llm.client_pool import get_llm_pool
 
     llm_pool = get_llm_pool()
@@ -220,25 +202,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:  # noqa: BLE001
         logger.exception("CostTracker budget 配置失败, 预算检查降级为 no-op")
 
-    # 3.3 启动后台模型同步任务（每 N 分钟从供应商 API 同步模型列表）
-    _sync_interval_min = int(os.environ.get("MODEL_SYNC_INTERVAL_MIN", "60"))
     app.state.model_cache = model_cache
-    app.state.model_sync_service = model_sync
-
-    async def _background_sync() -> None:
-        await asyncio.sleep(300)  # 启动后 5 分钟首次同步
-        while True:
-            try:
-                from forge.infrastructure.database.database import get_session_factory
-                async with get_session_factory()() as sync_db:
-                    results = await model_sync.sync_all_enabled(sync_db)
-                logger.info("后台模型同步完成: providers=%d", len(results))
-            except Exception:
-                logger.debug("后台模型同步异常", exc_info=True)
-            await asyncio.sleep(_sync_interval_min * 60)
-
-    app.state._sync_task = asyncio.create_task(_background_sync())
-    logger.info("后台模型同步任务已启动 interval_min=%d", _sync_interval_min)
 
     # 4. RAG 组件 (软: 失败跳过, 除非 STRICT_RAG=true)
     await _setup_rag_components(app, settings, model_cache)
@@ -256,16 +220,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         # ---------- 关闭 ----------
         logger.info("服务关闭中...")
-
-        # 停止后台模型同步任务
-        sync_task = getattr(app.state, "_sync_task", None)
-        if sync_task:
-            sync_task.cancel()
-            try:
-                await sync_task
-            except asyncio.CancelledError:
-                pass
-            logger.info("后台模型同步任务已停止")
 
         if hasattr(app.state, "llm_pool"):
             try:

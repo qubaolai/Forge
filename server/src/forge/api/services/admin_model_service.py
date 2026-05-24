@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 
 from forge.infrastructure.event_bus import get_event_bus
 from forge.llm.model_config_cache import ModelConfigCache
-from forge.llm.model_sync_service import ModelSyncService
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -190,28 +189,3 @@ class AdminModelService:
             "timestamp": datetime.utcnow().isoformat(),
         })
         return {"model_id": model_id, "is_default": True}
-
-    # ------------------------------------------------------------------
-    # 模型同步
-    # ------------------------------------------------------------------
-
-    async def sync_provider_models(self, provider_name: str) -> dict:
-        """手动触发某供应商的模型同步 → DB + Redis + 通知前端。
-
-        Returns:
-            {"provider": str, "models_synced": int, "models_staled": int}
-        """
-        from datetime import datetime
-
-        result = await ModelSyncService(self._cache).sync_provider(self.db, provider_name)
-
-        # 事件通知
-        await get_event_bus().publish(EVENT_MODEL_CONFIG_CHANGED, {
-            "type": "models_synced",
-            "provider": provider_name,
-            "count": result.models_synced,
-            "created": result.models_created,
-            "timestamp": datetime.utcnow().isoformat(),
-        })
-
-        return result.to_dict()

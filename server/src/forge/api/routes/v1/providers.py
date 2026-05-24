@@ -6,14 +6,13 @@
 管理接口（需 AdminUser）:
     GET  /providers/admin        全量供应商列表（含模型详情、Key 数量）
     PUT  /providers/{name}       启用/禁用供应商
-    POST /providers/{name}/sync  手动触发模型同步
 """
 
 from fastapi import APIRouter, Depends
 
 from forge.api.dependencies import AdminUser, DbSession, get_model_cache
 from forge.api.schemas.admin import ProviderToggleIn
-from forge.core.exceptions import BadRequest, NotFound
+from forge.core.exceptions import NotFound
 from forge.core.response import success
 
 router = APIRouter()
@@ -73,19 +72,4 @@ async def toggle_provider(
         result = await svc.toggle_provider(provider_name, body.enabled)
     except ValueError as e:
         raise NotFound(str(e), code=40460)
-    return success(result)
-
-
-@router.post("/providers/{provider_name}/sync")
-async def sync_provider_models(provider_name: str, admin: AdminUser, db: DbSession, model_cache=Depends(get_model_cache)):
-    """手动触发供应商模型同步（调用供应商 API 拉取模型列表）。"""
-    from forge.api.services.admin_model_service import AdminModelService
-    from forge.llm.model_config_cache import ModelConfigCache
-
-    cache = model_cache if isinstance(model_cache, ModelConfigCache) else ModelConfigCache.get_global()
-    svc = AdminModelService(db, cache)
-    try:
-        result = await svc.sync_provider_models(provider_name)
-    except ValueError as e:
-        raise BadRequest(str(e), code=40060)
     return success(result)
