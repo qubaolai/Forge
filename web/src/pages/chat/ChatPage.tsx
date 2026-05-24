@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { sessionsApi, agentsApi, systemApi, ModelInfo } from '@/api';
+import { sessionsApi, agentsApi, systemApi, ModelGroup } from '@/api';
 import { ChatMessage, Citation } from '@/types';
 import { useChatStream } from '@/hooks/useChatStream';
 import { MessageList } from '@/components/chat/MessageList';
@@ -48,25 +48,45 @@ export default function ChatPage() {
   // 模型选择
   const [selectedProvider, setSelectedProvider] = useState('anthropic');
   const [selectedModel, setSelectedModel] = useState('claude-sonnet-4-6');
-  const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
+  const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
 
-  // 加载可用模型列表
-  const loadModelsForProvider = useCallback(async (provider: string) => {
+  // 加载分组模型列表（按供应商）
+  const loadModelGroups = useCallback(async () => {
     try {
-      const res = await systemApi.models(provider);
-      const models = res.models || [];
-      setAvailableModels(models);
-      if (models.length > 0) {
-        setSelectedModel(models[0].name);
+      const res = await systemApi.models({ model_type: 'text' });
+      const groups = res.groups || [];
+      setModelGroups(groups);
+
+      // 保持当前选择；若当前模型已不存在则回退到第一项
+      const hasSelected = groups.some(
+        (group) =>
+          group.provider === selectedProvider &&
+          group.models.some((model) => model.name === selectedModel),
+      );
+      if (hasSelected) return;
+
+      const firstGroup = groups.find((group) => group.models.length > 0);
+      if (firstGroup && firstGroup.models[0]) {
+        setSelectedProvider(firstGroup.provider);
+        setSelectedModel(firstGroup.models[0].name);
       }
     } catch {
-      setAvailableModels([]);
+      setModelGroups([]);
     }
-  }, []);
+  }, [selectedProvider, selectedModel]);
 
   useEffect(() => {
-    loadModelsForProvider(selectedProvider);
-  }, [selectedProvider, loadModelsForProvider]);
+    loadModelGroups();
+  }, [loadModelGroups]);
+
+  const currentModelMeta = useMemo(() => {
+    for (const group of modelGroups) {
+      if (group.provider !== selectedProvider) continue;
+      const matched = group.models.find((m) => m.name === selectedModel);
+      if (matched) return matched;
+    }
+    return null;
+  }, [modelGroups, selectedProvider, selectedModel]);
 
   const { send, abort, resume, reset, streaming, current } = useChatStream({
     onComplete: () => {
@@ -162,7 +182,7 @@ export default function ChatPage() {
 
   function buildModelOptions(): ModelOptions {
     const opts: ModelOptions = { provider: selectedProvider, model: selectedModel };
-    const meta = availableModels.find((m) => m.name === selectedModel)?.thinking;
+    const meta = currentModelMeta?.thinking;
     if (meta?.type === 'reasoning_effort') {
       opts.reasoning_effort = reasoning;
     } else if (meta?.type === 'enabled' && thinkingEnabled) {
@@ -278,9 +298,11 @@ export default function ChatPage() {
           onReasoningChange={setReasoning}
           selectedProvider={selectedProvider}
           selectedModel={selectedModel}
-          availableModels={availableModels}
-          onProviderChange={setSelectedProvider}
-          onModelChange={setSelectedModel}
+          modelGroups={modelGroups}
+          onModelChange={(provider, model) => {
+            setSelectedProvider(provider);
+            setSelectedModel(model);
+          }}
           thinkingEnabled={thinkingEnabled}
           onThinkingChange={setThinkingEnabled}
         />

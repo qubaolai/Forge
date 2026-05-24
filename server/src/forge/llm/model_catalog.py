@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 from dataclasses import dataclass
 from typing import Literal, Protocol
+from urllib.parse import urlparse
 
 import httpx
 
@@ -60,6 +62,7 @@ class ProviderModelFetcher(Protocol):
 
 _FETCHERS: dict[str, ProviderModelFetcher] = {}
 _CAPABILITIES: dict[str, ModelCapability] = {}
+_OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/models").rstrip("/")
 
 
 def register_model_fetcher(provider_name: str, fetcher: ProviderModelFetcher) -> None:
@@ -97,6 +100,193 @@ class _OpenAICompatibleFetcher:
             data = resp.json()
         items = data.get("data", [])
         return [item["id"] for item in items if "id" in item]
+
+
+class LocalProviderPlaceholderError(RuntimeError):
+    """本地 Provider 占位同步异常（仅跳过，不落库）。"""
+
+    def __init__(self, provider_name: str, reason: str = "local_placeholder") -> None:
+        super().__init__(f"{provider_name}: 本地 Provider 占位逻辑，暂不执行模型同步")
+        self.provider_name = provider_name
+        self.reason = reason
+
+
+class ModelIntersectionEmptyError(RuntimeError):
+    """OpenRouter 与 Provider 交集为空。"""
+
+    def __init__(self, provider_name: str) -> None:
+        super().__init__(f"{provider_name}: OpenRouter 与 Provider 返回模型交集为空")
+        self.provider_name = provider_name
+
+
+def _normalize_model_name(name: str) -> str:
+    return (name or "").strip().lower()
+
+
+def _model_match_keys(model_name: str) -> set[str]:
+    normalized = _normalize_model_name(model_name)
+    if not normalized:
+        return set()
+    keys = {normalized}
+    if "/" in normalized:
+        # OpenRouter 常见 model id 形如 provider/model，此处仅补一个稳定拆分键。
+        keys.add(normalized.split("/", 1)[1])
+    return keys
+
+
+def _openrouter_auth_header() -> dict[str, str]:
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("缺少 OPENROUTER_API_KEY，严格模式下无法执行云 Provider 同步")
+    return {"Authorization": f"Bearer {api_key}"}
+
+
+def _to_int(value: object, default: int) -> int:
+    try:
+        iv = int(value)  # type: ignore[arg-type]
+        return iv if iv > 0 else default
+    except Exception:
+        return default
+
+
+def _extract_openrouter_max_output(item: dict) -> int:
+    top = item.get("top_provider") or {}
+    if isinstance(top, dict):
+        for key in ("max_completion_tokens", "max_output_tokens"):
+            if key in top:
+                return _to_int(top.get(key), 4096)
+    return _to_int(item.get("max_output_tokens"), 4096)
+
+
+def _supports_tools_from_openrouter(item: dict) -> bool:
+    params = item.get("supported_parameters") or []
+    if not isinstance(params, list):
+        return True
+    normalized = {_normalize_model_name(str(p)) for p in params}
+    tool_keys = {"tools", "tool_choice", "function_call", "functions"}
+    return bool(normalized & tool_keys)
+
+
+def _supports_images_from_openrouter(item: dict) -> bool:
+    arch = item.get("architecture") or {}
+    if not isinstance(arch, dict):
+        return False
+    modalities = arch.get("input_modalities") or []
+    if not isinstance(modalities, list):
+        return False
+    normalized = {_normalize_model_name(str(m)) for m in modalities}
+    return "image" in normalized
+
+
+def _parse_openrouter_model(item: dict) -> ModelInfo | None:
+    model_id = str(item.get("id") or "").strip()
+    if not model_id:
+        return None
+    return ModelInfo(
+        name=model_id,
+        provider="openrouter",
+        display_name=str(item.get("name") or model_id),
+        context_window=_to_int(item.get("context_length"), 128000),
+        max_output_tokens=_extract_openrouter_max_output(item),
+        supports_tools=_supports_tools_from_openrouter(item),
+        supports_images=_supports_images_from_openrouter(item),
+        thinking=None,
+        model_type="text",
+        extra_params={"source": "openrouter"},
+    )
+
+
+async def _fetch_openrouter_models() -> list[ModelInfo]:
+    url = f"{_OPENROUTER_BASE_URL}"
+    # headers = _openrouter_auth_header()
+    logger.info("开始请求 OpenRouter 模型目录 url=%s", url)
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            # resp = await client.get(url, headers=headers)
+            resp = await client.get(url)
+            resp.raise_for_status()
+            payload = resp.json()
+    except Exception:
+        logger.exception("请求 OpenRouter 模型目录失败 url=%s", url)
+        raise
+    rows = payload.get("data", []) if isinstance(payload, dict) else []
+    models: list[ModelInfo] = []
+    for row in rows:
+        print(row)
+        if not isinstance(row, dict):
+            continue
+        parsed = _parse_openrouter_model(row)
+        if parsed is not None:
+            models.append(parsed)
+    logger.info("OpenRouter 模型目录请求成功 count=%d", len(models))
+    return models
+
+
+def _build_openrouter_index(rows: list[ModelInfo]) -> dict[str, ModelInfo]:
+    indexed: dict[str, ModelInfo] = {}
+    for row in rows:
+        for key in _model_match_keys(row.name):
+            indexed.setdefault(key, row)
+    return indexed
+
+
+def _clone_from_openrouter(openrouter_model: ModelInfo, provider_name: str, provider_model_id: str) -> ModelInfo:
+    cap = _CAPABILITIES.get(provider_model_id)
+    context_window = openrouter_model.context_window
+    max_output_tokens = openrouter_model.max_output_tokens
+    supports_tools = openrouter_model.supports_tools
+    supports_images = openrouter_model.supports_images
+    thinking = openrouter_model.thinking
+
+    # OpenRouter 为主数据源，仅在缺字段时使用本地能力作为兜底。
+    if cap is not None:
+        if context_window <= 0:
+            context_window = cap.context_window
+        if max_output_tokens <= 0:
+            max_output_tokens = cap.max_output_tokens
+        if thinking is None:
+            thinking = cap.thinking
+
+    extra = dict(openrouter_model.extra_params or {})
+    extra["openrouter_id"] = openrouter_model.name
+    return ModelInfo(
+        name=provider_model_id,
+        provider=provider_name,
+        display_name=openrouter_model.display_name or provider_model_id,
+        context_window=context_window,
+        max_output_tokens=max_output_tokens,
+        supports_tools=supports_tools,
+        supports_images=supports_images,
+        thinking=thinking,
+        model_type=openrouter_model.model_type or "text",
+        extra_params=extra,
+    )
+
+
+def _is_local_provider(ctx: ProviderFetchContext) -> bool:
+    provider_name = _normalize_model_name(ctx.provider_name)
+    impl = _normalize_model_name(ctx.impl or "")
+    if "ollama" in provider_name or "ollama" in impl:
+        return True
+
+    if not ctx.base_url:
+        return False
+
+    try:
+        parsed = urlparse(ctx.base_url)
+    except Exception:
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return False
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+        return bool(ip.is_private or ip.is_loopback)
+    except ValueError:
+        pass
+    return host.endswith(".local")
 
 
 class ModelCatalog:
@@ -157,33 +347,63 @@ def _capability_to_model_info(provider_name: str, model_id: str) -> ModelInfo:
 
 
 async def _fetch_models(provider: dict) -> list[ModelInfo]:
-    """兼容旧调用入口：按 provider 名调对应 fetcher，再附加能力元数据。"""
+    """按「OpenRouter 元信息 + Provider 可用模型」同步模型信息。"""
     provider_name = provider["name"].strip().lower()
+    ctx = _build_fetch_context(provider)
+    logger.info(
+        "开始同步模型 provider=%s impl=%s base_url=%s",
+        provider_name,
+        ctx.impl or provider_name,
+        ctx.base_url or "默认",
+    )
+    if _is_local_provider(ctx):
+        logger.info("命中本地 Provider 占位分支 provider=%s", provider_name)
+        raise LocalProviderPlaceholderError(provider_name)
+
     fetcher = _FETCHERS.get(provider_name)
     if fetcher is None:
+        logger.error("供应商未注册模型列表抓取器 provider=%s", provider_name)
         raise ValueError(f"不支持的供应商: {provider_name}")
 
-    ctx = _build_fetch_context(provider)
-    model_ids = await fetcher.fetch(ctx)
-    return [_capability_to_model_info(provider_name, model_id) for model_id in model_ids]
+    try:
+        model_ids = await fetcher.fetch(ctx)
+        logger.info("Provider 模型列表获取成功 provider=%s count=%d", provider_name, len(model_ids))
+    except Exception:
+        logger.exception("Provider 模型列表获取失败 provider=%s", provider_name)
+        raise
+
+    try:
+        openrouter_models = await _fetch_openrouter_models()
+    except Exception:
+        logger.exception("OpenRouter 模型列表获取失败 provider=%s", provider_name)
+        raise
+    openrouter_index = _build_openrouter_index(openrouter_models)
+
+    merged: list[ModelInfo] = []
+    seen: set[str] = set()
+    for model_id in model_ids:
+        key = _normalize_model_name(model_id)
+        if not key or key in seen:
+            continue
+        openrouter_model = openrouter_index.get(key)
+        if openrouter_model is None:
+            continue
+        merged.append(_clone_from_openrouter(openrouter_model, provider_name, model_id))
+        seen.add(key)
+
+    if not merged:
+        logger.error("模型交集为空 provider=%s provider_count=%d openrouter_count=%d", provider_name, len(model_ids), len(openrouter_models))
+        raise ModelIntersectionEmptyError(provider_name)
+
+    logger.info("模型交集过滤完成 provider=%s count=%d", provider_name, len(merged))
+    return merged
 
 
 def _register_builtin_fetchers() -> None:
-    register_model_fetcher(
-        "anthropic",
-        _FixedListFetcher(
-            [
-                "claude-sonnet-4-6",
-                "claude-sonnet-4-5",
-                "claude-haiku-4-5",
-                "claude-opus-4-7",
-            ]
-        ),
-    )
     register_model_fetcher("openai", _OpenAICompatibleFetcher("https://api.openai.com"))
     register_model_fetcher("deepseek", _OpenAICompatibleFetcher("https://api.deepseek.com"))
     register_model_fetcher(
-        "dashscope",
+        "qwen",
         _OpenAICompatibleFetcher("https://dashscope.aliyuncs.com/compatible-mode"),
     )
 
@@ -295,4 +515,3 @@ def init_model_catalog() -> ModelCatalog:
 
 _register_builtin_fetchers()
 _register_builtin_capabilities()
-

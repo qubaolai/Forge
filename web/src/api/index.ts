@@ -110,19 +110,31 @@ export const auditApi = {
 };
 
 export interface ModelInfo {
+  provider: string;
+  model_id: string;
   name: string;
   display_name: string;
+  model_type: string;
   context_window: number;
   supports_tools: boolean;
   supports_images: boolean;
   thinking: { type: string; options?: string[]; default?: string } | null;
 }
 
+export interface ModelGroup {
+  provider: string;
+  models: ModelInfo[];
+}
+
+export interface GroupedModelsResponse {
+  groups: ModelGroup[];
+  providers?: string[];
+  models?: ModelInfo[];
+  provider?: string;
+  model_type?: string;
+}
+
 export const systemApi = {
-  models: (provider?: string) =>
-    apiClient.get<{
-      providers?: string[];
-      models?: ModelInfo[];
-      provider?: string;
-    }>('/models', { params: provider ? { provider } : undefined }),
+  models: (params?: { provider?: string; model_type?: string }) =>
+    apiClient.get<GroupedModelsResponse>('/models', { params }),
 };

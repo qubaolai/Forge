@@ -1,6 +1,6 @@
 import { useRef, useState, KeyboardEvent } from 'react';
 import { Send, Square, Brain } from 'lucide-react';
-import type { ModelInfo } from '@/api';
+import type { ModelGroup } from '@/api';
 
 export type ReasoningEffort = 'high' | 'max';
 
@@ -15,9 +15,8 @@ interface Props {
   // 模型选择
   selectedProvider: string;
   selectedModel: string;
-  availableModels: ModelInfo[];
-  onProviderChange: (value: string) => void;
-  onModelChange: (value: string) => void;
+  modelGroups: ModelGroup[];
+  onModelChange: (provider: string, model: string) => void;
   thinkingEnabled: boolean;
   onThinkingChange: (enabled: boolean) => void;
 }
@@ -37,8 +36,7 @@ export function ChatInput({
   onReasoningChange,
   selectedProvider,
   selectedModel,
-  availableModels,
-  onProviderChange,
+  modelGroups,
   onModelChange,
   thinkingEnabled,
   onThinkingChange,
@@ -69,10 +67,13 @@ export function ChatInput({
   }
 
   // 从选中模型元数据中获取思考能力
-  const currentModel = availableModels.find((m) => m.name === selectedModel);
+  const currentModel = modelGroups
+    .find((group) => group.provider === selectedProvider)
+    ?.models.find((m) => m.name === selectedModel);
   const thinkingMeta = currentModel?.thinking;
   const showReasoningEffort = thinkingMeta?.type === 'reasoning_effort' && onReasoningChange;
   const showThinkingToggle = thinkingMeta?.type === 'enabled';
+  const selectedValue = `${selectedProvider}::${selectedModel}`;
 
   return (
     <div className="border-t bg-white px-6 py-4">
@@ -116,24 +117,24 @@ export function ChatInput({
         <div className="mt-2 flex items-center justify-between px-1 text-[12px] text-gray-400">
           <div className="flex items-center gap-2">
             <select
-              value={selectedProvider}
-              onChange={(e) => onProviderChange(e.target.value)}
-              className="bg-transparent border rounded px-1.5 py-0.5 text-gray-500 cursor-pointer"
-            >
-              <option value="anthropic">Anthropic</option>
-              <option value="openai">OpenAI</option>
-              <option value="deepseek">DeepSeek</option>
-              <option value="dashscope">DashScope</option>
-            </select>
-            <select
-              value={selectedModel}
-              onChange={(e) => onModelChange(e.target.value)}
+              value={selectedValue}
+              onChange={(e) => {
+                const [provider, model] = e.target.value.split('::');
+                if (provider && model) {
+                  onModelChange(provider, model);
+                }
+              }}
               className="bg-transparent border rounded px-1.5 py-0.5 text-gray-500 cursor-pointer min-w-[120px]"
             >
-              {availableModels.map((m) => (
-                <option key={m.name} value={m.name}>
-                  {m.display_name || m.name}
-                </option>
+              {modelGroups.length === 0 && <option value="">暂无可用模型</option>}
+              {modelGroups.map((group) => (
+                <optgroup key={group.provider} label={group.provider}>
+                  {group.models.map((m) => (
+                    <option key={`${group.provider}:${m.name}`} value={`${group.provider}::${m.name}`}>
+                      {m.display_name || m.name}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
             {showThinkingToggle && (

@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from forge.core.crypto import resolve_key
-from forge.llm.model_catalog import ModelInfo, _fetch_models
+from forge.llm.model_catalog import (
+    LocalProviderPlaceholderError,
+    ModelInfo,
+    ModelIntersectionEmptyError,
+    _fetch_models,
+)
 from forge.llm.model_config_cache import ModelConfigCache
 
 if TYPE_CHECKING:
@@ -22,14 +27,18 @@ class ProviderSyncResult:
     models_synced: int
     models_created: int
     models_staled: int
+    skipped_reason: str | None = None
 
     def to_dict(self) -> dict:
-        return {
+        payload = {
             "provider": self.provider,
             "models_synced": self.models_synced,
             "models_created": self.models_created,
             "models_staled": self.models_staled,
         }
+        if self.skipped_reason:
+            payload["skipped_reason"] = self.skipped_reason
+        return payload
 
 
 class ModelSyncService:
@@ -56,18 +65,15 @@ class ModelSyncService:
             raise ValueError(f"供应商不存在: {provider_name!r}")
         if not provider.is_enabled:
             raise ValueError(f"供应商已禁用，不能同步: {provider_name!r}")
+        logger.info("开始执行模型同步 provider=%s", provider.name)
 
         keys = await provider_repo.list_enabled_keys(provider.id)
-        if not keys:
-            raise ValueError(f"供应商 {provider_name!r} 没有可用的 API Key")
-
         api_key = ""
         for key_row in keys:
             api_key = resolve_key(key_row.key_ciphertext)
             if api_key:
                 break
-        if not api_key:
-            raise ValueError(f"供应商 {provider_name!r} 没有可解密的 API Key")
+        logger.info("Provider Key 读取完成 provider=%s key_count=%d has_usable_key=%s", provider.name, len(keys), bool(api_key))
 
         provider_config = {
             "name": provider.name,
@@ -76,7 +82,29 @@ class ModelSyncService:
             "base_url": provider.base_url,
             "db_id": provider.id,
         }
-        fetched = await _fetch_models(provider_config)
+        try:
+            fetched = await _fetch_models(provider_config)
+        except LocalProviderPlaceholderError as exc:
+            logger.warning("本地 Provider 同步占位跳过 provider=%s reason=%s", provider.name, exc.reason)
+            return ProviderSyncResult(
+                provider=provider.name,
+                models_synced=0,
+                models_created=0,
+                models_staled=0,
+                skipped_reason=exc.reason,
+            )
+        except ModelIntersectionEmptyError:
+            logger.warning("模型同步跳过: provider=%s OpenRouter 与 Provider 交集为空", provider.name)
+            return ProviderSyncResult(
+                provider=provider.name,
+                models_synced=0,
+                models_created=0,
+                models_staled=0,
+                skipped_reason="intersection_empty",
+            )
+        except Exception:
+            logger.exception("模型拉取失败 provider=%s", provider.name)
+            raise
 
         total = 0
         created = 0
