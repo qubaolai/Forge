@@ -12,8 +12,8 @@ from __future__ import annotations
 import logging
 import random
 import re
-import time
-from collections.abc import Callable
+import asyncio
+from collections.abc import Callable, Awaitable
 from dataclasses import dataclass
 from typing import TypeVar
 
@@ -63,8 +63,8 @@ class RetryResult:
     retry_after_seconds: float | None = None
 
 
-def call_with_retry(
-    func: Callable[[], T],
+async def call_with_retry(
+    func: Callable[[], Awaitable[T]],
     *,
     max_retries: int = 3,
     backoff_seconds: float = 1.0,
@@ -74,12 +74,11 @@ def call_with_retry(
     last_exc: BaseException | None = None
     for attempt in range(max_retries + 1):
         try:
-            return func()
+            return await func()
         except Exception as e:
             last_exc = e
             if attempt >= max_retries or not is_retryable(e):
                 raise
-            # 429 优先使用 Retry-After, 否则指数退避
             retry_after = parse_retry_after(e)
             if retry_after is not None:
                 delay = min(retry_after + random.uniform(0, 1), max_backoff_seconds)
@@ -91,16 +90,7 @@ def call_with_retry(
             if on_retry is not None:
                 should_continue = on_retry(attempt + 1, e, delay)
                 if should_continue is False:
-                    logger.warning(
-                        "LLM 调用失败，本 key 不再重试 (attempt=%d/%d, rate_limited=%s): %s",
-                        attempt + 1, max_retries, is_rate_limit(e), e,
-                    )
                     raise
-            logger.warning(
-                "LLM 调用失败, %.1fs 后重试 (attempt=%d/%d, rate_limited=%s): %s",
-                delay, attempt + 1, max_retries,
-                retry_after is not None, e,
-            )
-            time.sleep(delay)
+            await asyncio.sleep(delay)
     assert last_exc is not None
     raise last_exc

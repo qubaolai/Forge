@@ -23,6 +23,8 @@ from forge.infrastructure.database.database import get_session_factory
 from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
 from forge.infrastructure.database.repositories.chat_session_repo import ChatSessionRepository
 from forge.observability.tracing.tracer import span
+from forge.api.schemas.chat import ModelOptionsIn
+from forge.llm.providers.base import ChatMessage
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +54,7 @@ class TurnPreparer:
         message: str,
         agent_id_hint: str | None,
         trace_id: str,
-        model_options: dict | None = None,
+        model_options: ModelOptionsIn | None = None,
     ) -> TurnContext:
         """跑完所有 DB 准备工作, 返回 TurnContext."""
         factory = get_session_factory()
@@ -167,7 +169,6 @@ async def _make_title_with_utility_llm(text: str, model_options, max_len: int = 
     """优先用工具模型生成标题，失败时回落到本地截断。"""
     try:
         from forge.config.settings import get_settings
-        from forge.core.types.message import Message
         from forge.llm.gateway import build_utility_chain_from_settings
 
         settings = get_settings()
@@ -183,27 +184,26 @@ async def _make_title_with_utility_llm(text: str, model_options, max_len: int = 
             model=model,
         )
 
-        def _call_title_llm() -> str:
-            result = chain.chat(
+        async def _call_title_llm() -> str:
+            result = await chain.chat(
                 [
-                    Message(
+                    ChatMessage(
                         role="system",
                         content=(
                             "你是会话标题生成器。请根据用户首条消息生成一个中文短标题，"
                             "不超过 20 个字，不要加引号，不要解释。"
                         ),
                     ),
-                    Message(role="user", content=text),
+                    ChatMessage(role="user", content=text),
                 ],
                 temperature=0.2,
                 max_tokens=32,
             )
             return (result.content or "").strip()
-
-        title = await asyncio.wait_for(asyncio.to_thread(_call_title_llm), timeout=3.0)
+        title = await asyncio.wait_for(_call_title_llm(), timeout=3.0)
         title = title.strip().strip("\"'“”‘’")
         if title:
             return _make_title(title, max_len=max_len)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("工具模型生成会话标题失败，回落到本地标题生成")
     return _make_title(text, max_len=max_len)

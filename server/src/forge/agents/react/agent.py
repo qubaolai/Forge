@@ -73,39 +73,10 @@ class StepDecision:
 
 BeforeStepHook = Callable[[StepContext], Awaitable[StepDecision]]
 
-
-def _run_awaitable_blocking(factory: Callable[[], Awaitable[Message]]) -> Message:
-    """在同步入口阻塞等待异步工具执行，兼容已有 run() 调用方。
-
-    正常情况下 run() 会被放到 worker thread 里执行，可以直接 asyncio.run。
-    如果误在已有 event loop 的线程内调用 run()，则新开短线程承载事件循环，
-    避免嵌套 asyncio.run() 失败。
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(factory())
-
-    box: dict[str, Message | BaseException] = {}
-
-    def _runner() -> None:
-        try:
-            box["value"] = asyncio.run(factory())
-        except BaseException as exc:  # noqa: BLE001
-            box["error"] = exc
-
-    thread = threading.Thread(target=_runner, name="react-tool-sync-bridge", daemon=True)
-    thread.start()
-    thread.join()
-    if "error" in box:
-        raise box["error"]  # type: ignore[misc]
-    return box["value"]  # type: ignore[return-value]
-
-
 class ToolCallingLLM(Protocol):
     """ReAct 只依赖已绑定模型配置的 tool-calling facade."""
 
-    def chat_with_tools(
+    async def chat_with_tools(
         self,
         messages: list[Message],
         tools: list[dict],
@@ -125,7 +96,7 @@ class ToolCallingLLM(Protocol):
         max_tokens: int | None = None,
         tool_choice: str = "auto",
         extra_options: dict[str, Any] | None = None,
-    ) -> Iterator[dict[str, Any]]: ...
+    ) -> AsyncIterator[dict[str, Any]]: ...
 
 
 def _default_system_prompt() -> str:
@@ -184,7 +155,7 @@ class ReActAgent(BaseAgent):
             max_steps,
         )
 
-    def run(
+    async def run(
         self,
         user_input: str,
         *,
@@ -201,7 +172,7 @@ class ReActAgent(BaseAgent):
             for step in range(self._max_steps):
                 steps = step + 1
                 with span("agent.react.step", step=steps) as s:
-                    resp = self._call_llm(messages)
+                    resp = await self._call_llm(messages)
                     self._merge_usage(total_usage, resp.get("usage") or {})
                     s.set("tool_calls", len(resp["tool_calls"]))
 
@@ -225,7 +196,7 @@ class ReActAgent(BaseAgent):
                             role="assistant",
                             content=resp["content"],
                             tool_calls=resp["tool_calls"],
-                            reasoning_content=resp.get("reasoning_content"),
+                            extra_content=resp.get("reasoning_content"),
                         )
                     )
 
@@ -233,7 +204,7 @@ class ReActAgent(BaseAgent):
                     for tc in resp["tool_calls"]:
                         with span("agent.react.tool", tool=tc.name) as ts:
                             try:
-                                tool_msg = self._execute_tool_blocking(tc)
+                                tool_msg = await self._executor.aexecute(tc, role=self._role)
                                 ts.set("ok", True)
                             except Exception as e:  # noqa: BLE001
                                 ts.set_error(e)
@@ -249,9 +220,9 @@ class ReActAgent(BaseAgent):
         outer.set("final", False)
         raise AgentMaxStepsError(self._max_steps)
 
-    def _execute_tool_blocking(self, tc) -> Message:
-        """同步 run() 入口也统一走 aexecute()，避免异步工具被误调 run()."""
-        return _run_awaitable_blocking(lambda: self._executor.aexecute(tc, role=self._role))
+    # def _execute_tool_blocking(self, tc) -> Message:
+    #     """同步 run() 入口也统一走 aexecute()，避免异步工具被误调 run()."""
+    #     return _run_awaitable_blocking(lambda: self._executor.aexecute(tc, role=self._role))
 
     async def stream(
         self,
@@ -357,18 +328,13 @@ class ReActAgent(BaseAgent):
                             # 不能调工具. 用于 StepSafetyNet 的最后一步强制收尾.
                             _tool_choice = "none" if force_text_only else "auto"
 
-                            def _start_stream(
-                                tool_choice: str = _tool_choice,
-                            ) -> Iterator[dict[str, Any]]:
-                                return self._llm.chat_with_tools_stream(
-                                    messages,
-                                    self._tool_schemas,
-                                    extra_options=model_options,
-                                    tool_choice=tool_choice,
-                                )
-
-                            chunk_iter = await asyncio.to_thread(_start_stream)
-                        except Exception as e:  # noqa: BLE001
+                            chunk_iter = self._llm.chat_with_tools_stream(
+                                messages,
+                                self._tool_schemas,
+                                extra_options=model_options,
+                                tool_choice=_tool_choice,
+                            )
+                        except Exception as e:
                             logger.exception("chat_with_tools_stream 失败")
                             llm_span.set_error(e)
                             yield self._make_error_event(
@@ -379,7 +345,7 @@ class ReActAgent(BaseAgent):
                         reasoning_phase_open = True
 
                         try:
-                            async for chunk in self._iter_async(chunk_iter):
+                            async for chunk in chunk_iter:
                                 if abort_event and abort_event.is_set():
                                     finish_reason = "aborted"
                                     break
@@ -491,7 +457,7 @@ class ReActAgent(BaseAgent):
                             role="assistant",
                             content=step_content,
                             tool_calls=step_tool_calls,
-                            reasoning_content=step_reasoning or None,
+                            extra_content=step_reasoning or None,
                         )
                     )
 
@@ -680,12 +646,12 @@ class ReActAgent(BaseAgent):
     # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
-    def _call_llm(self, messages: list[Message]) -> dict:
+    async def _call_llm(self, messages: list[Message]) -> dict:
         """调用 LLM 拿 tool_calls + content.
 
         优先走整条 fallback 链 (带 retry + 成本记账); 拿不到链才退化到单 LLM.
         """
-        return self._llm.chat_with_tools(messages, self._tool_schemas)
+        return await self._llm.chat_with_tools(messages, self._tool_schemas)
 
     @staticmethod
     def _merge_usage(total: dict[str, int], delta: dict) -> None:

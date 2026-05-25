@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, AsyncIterator
 
 from forge.config.domains.llm import LLMCallSpec
 
@@ -222,7 +222,7 @@ class LLMFallbackChain:
     # ------------------------------------------------------------------
     # chat: 非流式
     # ------------------------------------------------------------------
-    def chat(
+    async def chat(
         self,
         messages: list[ChatMessage],
         *,
@@ -268,17 +268,17 @@ class LLMFallbackChain:
                     kw["max_tokens"] = max_tokens
 
                 # 默认参数绑定: 防止闭包捕获循环变量
-                def _call_chat(
+                async def _call_chat(
                     llm: LLM = client,
                     call_kwargs: dict[str, Any] = kw,
                 ) -> ChatResult:
-                    return llm.chat(
+                    return await llm.chat(
                         messages,
                         extra_options=_extra_options(spec, extra_options),
                         **call_kwargs,
                     )
 
-                result = call_with_retry(
+                result = await call_with_retry(
                     _call_chat,
                     max_retries=self._max_retries,
                     backoff_seconds=self._retry_backoff,
@@ -336,14 +336,14 @@ class LLMFallbackChain:
     # ------------------------------------------------------------------
     # chat_stream: 流式
     # ------------------------------------------------------------------
-    def chat_stream(
+    async def chat_stream(
         self,
         messages: list[ChatMessage],
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
         extra_options: dict[str, Any] | None = None,
-    ) -> Iterator[ChatChunk]:
+    ) -> AsyncIterator[ChatChunk]:
         """流式: 首包前可切换, 一旦开始 yield 就锁定."""
         last_exc: BaseException | None = None
         blocked_key_group: tuple[str, str] | None = None
@@ -382,7 +382,7 @@ class LLMFallbackChain:
                 if max_tokens is not None:
                     kw["max_tokens"] = max_tokens
 
-                stream = client.chat_stream(
+                stream = await client.chat_stream(
                     messages,
                     extra_options=_extra_options(spec, extra_options),
                     **kw,
@@ -457,7 +457,7 @@ class LLMFallbackChain:
     # ------------------------------------------------------------------
     # chat_with_tools: 非流式 tool calling
     # ------------------------------------------------------------------
-    def chat_with_tools(
+    async def chat_with_tools(
         self,
         messages: list,
         tools: list[dict],
@@ -511,11 +511,11 @@ class LLMFallbackChain:
                 if max_tokens is not None:
                     kw["max_tokens"] = max_tokens
 
-                def _call_chat_with_tools(
+                async def _call_chat_with_tools(
                     llm: LLM = client,
                     call_kwargs: dict[str, Any] = kw,
                 ) -> dict:
-                    return llm.chat_with_tools(
+                    return await llm.chat_with_tools(
                         messages,
                         tools,
                         tool_choice=tool_choice,
@@ -523,7 +523,7 @@ class LLMFallbackChain:
                         **call_kwargs,
                     )
 
-                resp = call_with_retry(
+                resp = await call_with_retry(
                     _call_chat_with_tools,
                     max_retries=self._max_retries,
                     backoff_seconds=self._retry_backoff,
@@ -583,7 +583,7 @@ class LLMFallbackChain:
     # ------------------------------------------------------------------
     # chat_with_tools_stream: 流式 tool calling
     # ------------------------------------------------------------------
-    def chat_with_tools_stream(
+    async def chat_with_tools_stream(
         self,
         messages: list,
         tools: list[dict],
@@ -592,7 +592,7 @@ class LLMFallbackChain:
         max_tokens: int | None = None,
         tool_choice: str = "auto",
         extra_options: dict[str, Any] | None = None,
-    ) -> Iterator[dict]:
+    ) -> AsyncIterator[dict]:
         last_exc: BaseException | None = None
         blocked_key_group: tuple[str, str] | None = None
         for idx, (client, spec) in enumerate(self._chain):
@@ -644,17 +644,17 @@ class LLMFallbackChain:
                     extra_options=_extra_options(spec, extra_options),
                     **kw,
                 )
-                first = next(stream)
+                first = anext(stream)
                 if idx > 0:
                     logger.info(
                         "LLM tool stream fallback 成功: 位置=%d provider=%s",
                         idx,
                         client.provider_name,
                     )
-                yield first
+                yield await first
                 final_usage: dict | None = None
                 final_reason: str | None = None
-                for chunk in stream:
+                async for chunk in stream:
                     if chunk.get("usage"):
                         final_usage = chunk["usage"]
                     if chunk.get("finish_reason"):
@@ -671,7 +671,7 @@ class LLMFallbackChain:
                     finish_reason=final_reason or "stop",
                 )
                 return
-            except StopIteration:
+            except StopAsyncIteration:
                 last_exc = RuntimeError(f"{client.provider_name} tool stream 输出为空")
                 blocked_key_group = group
                 self._record_cost_for(client, spec, None, error=True)

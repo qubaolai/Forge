@@ -9,10 +9,8 @@
     1. TurnPreparer.prepare           -> TurnContext
     2. yield 生命周期事件               -> session_created / session_renamed / message_start
     3. ContextAssembler.assemble       -> AssembledContext + system_prompt
-    4. build LLM chain                 -> build_chain_from_settings
-    5. 按 agent_mode 选 Runner 类      -> runner._RUNNER_REGISTRY
-    6. 跑 runner.run, 透传中间事件      -> delta / tool_call / tool_result / reasoning
-    7. TurnFinalizer.finalize          -> 写 DB + 发 done/error + publish turn.completed
+    4. 按agent_mode选Runner类 和 build LLM chain -> runner._RUNNER_REGISTRY 和 build_chain_from_settings
+    5. TurnFinalizer.finalize          -> 写 DB + 发 done/error + publish turn.completed
 """
 
 from __future__ import annotations
@@ -21,6 +19,7 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
+from dataclasses import replace
 
 from forge.config.settings import get_settings
 
@@ -238,7 +237,8 @@ class TurnOrchestrator:
                 else prev_state.prev_content
             )
             if prev_tail:
-                ctx = ctx.replace(
+                ctx = replace(
+                    ctx,
                     current_user_message=(
                         f"{ctx.current_user_message}\n\n"
                         f"(以下是你中断前输出的最后部分, 请从此之后继续, 不要重复)\n"
@@ -371,7 +371,7 @@ def _inject_partial_into_messages(
         role="assistant",
         content=prev_state.prev_content or "",
         tool_calls=_dicts_to_tool_calls(completed_calls),
-        reasoning_content=prev_state.prev_reasoning_content,
+        extra_content=prev_state.prev_reasoning_content,
     )
 
     return base_messages[:-1] + [partial_asst, *tool_msgs] + [base_messages[-1]]

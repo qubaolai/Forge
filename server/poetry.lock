@@ -35,24 +35,6 @@ test-trackers = ["comet-ml", "dvclive", "matplotlib", "swanlab[dashboard]", "ten
 testing = ["bitsandbytes", "datasets", "diffusers", "evaluate", "parameterized", "pytest (>=7.2.0)", "pytest-order", "pytest-subtests", "pytest-xdist", "scikit-learn", "scipy", "timm", "torchdata (>=0.8.0)", "torchpippy (>=0.2.0)", "tqdm", "transformers"]
 
 [[package]]
-name = "ai-model-registry"
-version = "0.1.1"
-description = "Single source of truth for AI model availability"
-optional = false
-python-versions = ">=3.8"
-groups = ["main"]
-files = [
-    {file = "ai_model_registry-0.1.1-py3-none-any.whl", hash = "sha256:c2b037dd22033993ecef5241e5b0c199bc9946da4ad198a669189546e3e19d3b"},
-    {file = "ai_model_registry-0.1.1.tar.gz", hash = "sha256:ca8aa2d160264de68628e82a0bd6a4443b5aa8bc50455903e38e37ad5be15582"},
-]
-
-[package.dependencies]
-fastapi = ">=0.100.0"
-pydantic = ">=2.0.0"
-requests = ">=2.25.0"
-uvicorn = ">=0.22.0"
-
-[[package]]
 name = "aiofiles"
 version = "24.1.0"
 description = "File support for asyncio."
@@ -8438,4 +8420,4 @@ rag = ["chromadb", "dashscope", "docling", "jieba", "sentence-transformers"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "ea178680eb7b4d456d979dab51a753d942f794b939b2cfa1dd0a003992049305"
+content-hash = "f45f7cdf1a6ec48bf732cbfcfe22af748feb88f9f3f72bc602e8a0478c44c51b"

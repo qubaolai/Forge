@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 from dataclasses import replace
+from forge.config.domains.llm import LLMCallSpec
 
 from .providers.base import LLM
 
@@ -117,7 +118,7 @@ async def build_utility_chain_from_settings(
     """构建工具模型调用链。
 
     回落顺序:
-        任务传入 utility provider/model → 任务传入 provider/model → 主模型
+        配置文件utility provider/model → 任务传入 provider/model → 默认模型
     """
     from .fallback import LLMFallbackChain
 
@@ -267,7 +268,7 @@ def _utility_candidates(
             "utility_llm",
         ),
         (provider or "", model or "", "task_model"),
-        (settings.llm.provider or "", settings.llm.default_model or "", "main_model"),
+        (settings.llm.provider or "", settings.llm.default_model or "", "default_model"),
     ]
     result: list[tuple[str, str, str]] = []
     seen: set[tuple[str, str]] = set()

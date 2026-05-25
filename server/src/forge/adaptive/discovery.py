@@ -76,8 +76,6 @@ def build_real_discovery_callable(
     async def _discover(goal: str, workspace_path: str) -> str:
         """C10/D1: 真实路径失败必须 raise，由 orchestrator 转 FAILED；
         不再返回空字符串让上层走 fallback 假完成。"""
-        # 局部 import：避免 settings/LLM 在单测 collection 阶段被强制求值
-        import asyncio
 
         from forge.config.settings import get_settings
 
@@ -129,7 +127,7 @@ def build_real_discovery_callable(
         )
         # ReActAgent.run() 是同步的（内部用 to_thread 调 LLM），用 to_thread 转 async
         # C10/D1: 不再捕获异常返回空字符串，让上层 FAILED
-        result = await asyncio.to_thread(agent.run, user_input)
+        result = await agent.run(user_input)
         summary = (result.output or "").strip()
         if not summary:
             raise RuntimeError("Discovery Agent 返回空 summary")

@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator
-from typing import Any, cast
+from typing import Any, AsyncIterator, cast
 
 from openai import NOT_GIVEN, APIStatusError, APITimeoutError, OpenAI
 
@@ -134,7 +134,7 @@ class OpenAICompatibleLLM(LLM):
     # ------------------------------------------------------------------
     # chat_stream: 内容增量
     # ------------------------------------------------------------------
-    def chat_stream(
+    async def chat_stream(
         self,
         messages: list,
         *,
@@ -145,7 +145,7 @@ class OpenAICompatibleLLM(LLM):
         reasoning_effort: str | None = None,
         extra_options: dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> Iterator[Any]:
+    ) -> AsyncIterator[Any]:
         from .base import ChatChunk
 
         payload = self._messages_payload(messages)
@@ -188,7 +188,7 @@ class OpenAICompatibleLLM(LLM):
     # ------------------------------------------------------------------
     # chat_with_tools: 非流式, 含 tool_calls
     # ------------------------------------------------------------------
-    def chat_with_tools(
+    async def chat_with_tools(
         self,
         messages: list,
         tools: list[dict],
@@ -235,7 +235,7 @@ class OpenAICompatibleLLM(LLM):
     # ------------------------------------------------------------------
     # chat_with_tools_stream: 真流式 + tool_call 累积
     # ------------------------------------------------------------------
-    def chat_with_tools_stream(
+    async def chat_with_tools_stream(
         self,
         messages: list,
         tools: list[dict],
@@ -248,7 +248,7 @@ class OpenAICompatibleLLM(LLM):
         tool_choice: str = "auto",
         extra_options: dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> Iterator[dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """真流式 tool calling.
 
         OpenAI 协议: tool call 在多个 chunk 里分片到达, name 一开始给定,
@@ -409,11 +409,11 @@ class DeepSeekLLM(OpenAICompatibleLLM):
         """发请求前把 Message.reasoning_content 塞回 payload (assistant 消息)."""
         payload = super()._messages_payload(messages)
         for orig, d in zip(messages, payload, strict=False):
-            if isinstance(orig, Message) and orig.reasoning_content:
-                d["reasoning_content"] = orig.reasoning_content
+            if isinstance(orig, Message) and orig.extra_content:
+                d["reasoning_content"] = orig.extra_content
         return payload
 
-    def chat_with_tools_stream(
+    async def chat_with_tools_stream(
         self,
         messages: list,
         tools: list[dict],
@@ -427,7 +427,7 @@ class DeepSeekLLM(OpenAICompatibleLLM):
         tool_choice: str = "auto",
         extra_options: dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> Iterator[dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """DeepSeek thinking 模式的流式 tool calling.
 
         chunk dict 在父类基础上多一个 reasoning_delta 字段, 携带思考链增量.

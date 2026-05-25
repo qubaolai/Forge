@@ -72,14 +72,16 @@ class RedisClient:
             await self._redis.ping()
             self._available = True
             logger.info("Redis 连接就绪: %s", self._redis_url)
-        except ModuleNotFoundError:
+        except ModuleNotFoundError as e:
             self._available = False
             self._redis = None
             logger.warning("redis-py 未安装，缓存不可用。安装: poetry add redis")
+            raise e
         except Exception as e:
             self._available = False
             self._redis = None
             logger.warning("Redis 连接失败 url=%s err=%s", self._redis_url, e)
+            raise e
 
         return self._redis
 

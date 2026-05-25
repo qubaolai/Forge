@@ -18,7 +18,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, AsyncIterator
 
 
 @dataclass
@@ -118,7 +118,7 @@ class LLM(ABC):
     # ------------------------------------------------------------------
     # chat: 非流式 (默认走 chat_stream 聚合)
     # ------------------------------------------------------------------
-    def chat(
+    async def chat(
         self,
         messages: list[ChatMessage],
         *,
@@ -130,7 +130,7 @@ class LLM(ABC):
     ) -> ChatResult:
         """非流式 chat. 默认实现: 调 chat_stream 后聚合."""
         chunks = list(
-            self.chat_stream(
+            await self.chat_stream(
                 messages,
                 model=model,
                 temperature=temperature,
@@ -147,7 +147,7 @@ class LLM(ABC):
     # chat_stream: 流式 (子类必实现)
     # ------------------------------------------------------------------
     @abstractmethod
-    def chat_stream(
+    async def chat_stream(
         self,
         messages: list[ChatMessage],
         *,
@@ -161,7 +161,7 @@ class LLM(ABC):
     # ------------------------------------------------------------------
     # Tool calling: 非所有 provider 实现 (默认抛 NotImplementedError)
     # ------------------------------------------------------------------
-    def chat_with_tools(
+    async def chat_with_tools(
         self,
         messages: list,
         tools: list[dict],
@@ -179,7 +179,7 @@ class LLM(ABC):
         """
         raise NotImplementedError(f"{type(self).__name__} 未实现 chat_with_tools.")
 
-    def chat_with_tools_stream(
+    async def chat_with_tools_stream(
         self,
         messages: list,
         tools: list[dict],
@@ -190,7 +190,7 @@ class LLM(ABC):
         tool_choice: str = "auto",
         extra_options: dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> Iterator[dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """带 tool calling 的流式 chat.
 
         默认实现退回非流式 chat_with_tools, 保证调用面可用.
@@ -205,7 +205,7 @@ class LLM(ABC):
                 "model": str | None,
             }
         """
-        resp = self.chat_with_tools(
+        resp = await self.chat_with_tools(
             messages,
             tools,
             model=model,

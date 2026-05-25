@@ -9,3 +9,4 @@ from .code import git_ops, grep, shell  # noqa: F401
 from .file import edit_file, glob_search, list_directory, read_file, write_file  # noqa: F401
 from .http import http_request  # noqa: F401
 from .knowledge import knowledge_search  # noqa: F401
+from .time import time_tool

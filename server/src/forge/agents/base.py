@@ -41,9 +41,9 @@ class AgentEvent:
 
 class BaseAgent(ABC):
     @abstractmethod
-    def run(self, user_input: str, *, history: list[Message] | None = None) -> AgentResult: ...
+    async def run(self, user_input: str, *, history: list[Message] | None = None) -> AgentResult: ...
 
-    def stream(
+    async def stream(
         self,
         user_input: str,
         *,

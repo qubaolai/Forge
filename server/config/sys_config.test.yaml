@@ -163,6 +163,7 @@ task_execution:
   # 纯聊天只开放无文件系统/命令副作用的工具；工程文件操作走 adaptive。
   chat_tool_allowlist:
     - knowledge_search
+    - time_tool
   tool_allowlist:
     - read_file
     - write_file
@@ -175,6 +176,7 @@ task_execution:
     - http_request
     - run_tests
     - knowledge_search
+    - time_tool
 
   # model_profiles 必须使用 provider:model，运行时不再猜测 provider。
   model_profiles:

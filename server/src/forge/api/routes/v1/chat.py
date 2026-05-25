@@ -15,7 +15,6 @@
     {"type": "done",            "usage": {...}, "finish_reason": "stop"|"length"|"tool_calls"|"aborted"}
     {"type": "error",           "message": "...", "code": "..."}
 
-任务执行请走 POST /api/v1/runs（Adaptive 7 步流程）。
 """
 
 from __future__ import annotations
