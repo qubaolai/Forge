@@ -7,9 +7,10 @@ chat 模式默认会用 HybridFilter, 这里是降级路径.
 from __future__ import annotations
 
 from forge.context_mgmt.types import ContextMode, HistoryMessage
+from forge.context_mgmt.protocols import HistoryFilter
 
 
-class RecentFilter:
+class RecentFilter(HistoryFilter):
     """无过滤, 原样返回. 等价于现有 CompositeContextBuilder 的行为."""
 
     @property

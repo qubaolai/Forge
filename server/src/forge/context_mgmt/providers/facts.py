@@ -10,11 +10,12 @@ import logging
 from forge.context_mgmt.protocols import ContentProviderError, TokenMeter
 from forge.context_mgmt.types import ContentChunk, ContextRequest
 from forge.memory.base import FactRecallRequest, MemoryStore, MemoryStoreError
+from forge.context_mgmt.protocols import ContentProvider
 
 logger = logging.getLogger(__name__)
 
 
-class FactsProvider:
+class FactsProvider(ContentProvider):
     """长期事实提供者."""
 
     def __init__(self, memory_store: MemoryStore, token_meter: TokenMeter) -> None:

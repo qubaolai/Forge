@@ -330,7 +330,7 @@ async def _setup_rag_components(app, settings, model_cache=None) -> None:
                 config = em.get("extra_params") or {}
                 provider_name = em.get("name")
                 # 从 provider name 推断 provider impl（优先用 model 配置里的信息）
-                provider = (em.get("extra_params") or {}).get("provider") or "dashscope"
+                provider = em.get("provider") or ""
                 logger.info(
                     "Embedder 从 DB 加载: provider=%s model=%s extra_params=%s",
                     provider, provider_name, list(config.keys()),

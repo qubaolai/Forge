@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from abc import ABC
 
 from forge.context_mgmt.types import (
     CompactionResult,
@@ -35,7 +35,7 @@ from forge.core.types.message import Message
 # ---------------------------------------------------------------------------
 # 1. TokenMeter: 统一的 token 计量接口.
 # ---------------------------------------------------------------------------
-class TokenMeter(Protocol):
+class TokenMeter(ABC):
     """线程 / 协程安全 (无可变状态)."""
 
     def count_text(self, text: str) -> int: ...
@@ -48,7 +48,7 @@ class TokenMeter(Protocol):
 # ---------------------------------------------------------------------------
 # 2. BudgetPolicy: 从 ContextRequest 计算 WindowBudget.
 # ---------------------------------------------------------------------------
-class BudgetPolicy(Protocol):
+class BudgetPolicy(ABC):
     """无状态. 同一实例可并发使用."""
 
     def allocate(self, request: ContextRequest) -> WindowBudget: ...
@@ -57,8 +57,7 @@ class BudgetPolicy(Protocol):
 # ---------------------------------------------------------------------------
 # 3. ContentProvider: 异步提供一类上下文素材.
 # ---------------------------------------------------------------------------
-@runtime_checkable
-class ContentProvider(Protocol):
+class ContentProvider(ABC):
     """每个 Provider 负责一类上下文素材.
 
     返回 ContentChunk 列表 —— 每个 chunk 携带 estimated_tokens,
@@ -98,7 +97,7 @@ class ContentProviderError(Exception):
 # ---------------------------------------------------------------------------
 # 4. HistoryFilter: 决定哪些历史消息纳入上下文.
 # ---------------------------------------------------------------------------
-class HistoryFilter(Protocol):
+class HistoryFilter(ABC):
     """按相关性过滤历史消息.
 
     实现:
@@ -120,7 +119,7 @@ class HistoryFilter(Protocol):
 # ---------------------------------------------------------------------------
 # 5. ToolResultPolicy: 决定工具调用结果如何出现在历史中.
 # ---------------------------------------------------------------------------
-class ToolResultPolicy(Protocol):
+class ToolResultPolicy(ABC):
     """处理跨轮加载回来的 tool_result content.
 
     实现:
@@ -147,7 +146,7 @@ class ToolResultPolicy(Protocol):
 # ---------------------------------------------------------------------------
 # 6. CompactionTrigger: 压缩触发条件 (与执行解耦).
 # ---------------------------------------------------------------------------
-class CompactionTrigger(Protocol):
+class CompactionTrigger(ABC):
     """判断是否应触发压缩, 与执行逻辑无关."""
 
     def should_compact(self, snapshot: ContextSnapshot) -> bool: ...
@@ -159,7 +158,7 @@ class CompactionTrigger(Protocol):
 # ---------------------------------------------------------------------------
 # 7. CompactionStrategy: 压缩执行 (与触发解耦).
 # ---------------------------------------------------------------------------
-class CompactionStrategy(Protocol):
+class CompactionStrategy(ABC):
     """执行一次压缩.
 
     失败语义:

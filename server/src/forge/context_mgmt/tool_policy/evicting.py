@@ -5,10 +5,10 @@
 
 from __future__ import annotations
 
-from forge.context_mgmt.protocols import TokenMeter
+from forge.context_mgmt.protocols import TokenMeter, ToolResultPolicy
 
 
-class EvictingPolicy:
+class EvictingPolicy(ToolResultPolicy):
     """直接替换为占位符, 完全剔除 tool 结果内容."""
 
     @property

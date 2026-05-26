@@ -12,11 +12,11 @@ from __future__ import annotations
 
 import json
 
-from forge.context_mgmt.protocols import TokenMeter
+from forge.context_mgmt.protocols import TokenMeter, ContentProvider
 from forge.context_mgmt.types import ContentChunk, ContextRequest
 
 
-class WorkflowStepProvider:
+class WorkflowStepProvider(ContentProvider):
     """工作流步骤上下文提供者."""
 
     def __init__(self, token_meter: TokenMeter) -> None:

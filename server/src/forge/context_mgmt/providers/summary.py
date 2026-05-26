@@ -7,14 +7,14 @@ from __future__ import annotations
 
 import logging
 
-from forge.context_mgmt.protocols import ContentProviderError, TokenMeter
+from forge.context_mgmt.protocols import ContentProviderError, TokenMeter, ContentProvider
 from forge.context_mgmt.types import ContentChunk, ContextRequest
 from forge.memory.base import MemoryStore, MemoryStoreError
 
 logger = logging.getLogger(__name__)
 
 
-class SummaryProvider:
+class SummaryProvider(ContentProvider):
     """摘要提供者."""
 
     def __init__(self, memory_store: MemoryStore, token_meter: TokenMeter) -> None:

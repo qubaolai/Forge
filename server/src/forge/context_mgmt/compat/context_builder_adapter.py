@@ -20,6 +20,7 @@ from forge.context_mgmt.builder.factory import build_context_builder
 from forge.context_mgmt.filters.recent import RecentFilter
 from forge.context_mgmt.meter.token_meter import DefaultTokenMeter
 from forge.context_mgmt.tool_policy.verbatim import VerbatimPolicy
+from forge.context_mgmt.protocols import BudgetPolicy
 from forge.context_mgmt.types import (
     ContextMode,
     ContextRequest,
@@ -31,7 +32,7 @@ from forge.llm.token_counter import TokenCounter
 from forge.memory.base import MemoryStore
 
 
-class LegacyBudgetPolicy:
+class LegacyBudgetPolicy(BudgetPolicy):
     """与旧 BudgetConfig(system_share=0.20, history_share=0.50) 等价的比例.
 
     旧版没有独立的 tool_result 分区, 这里给 0 (compat 路径下 history 已包含全部).

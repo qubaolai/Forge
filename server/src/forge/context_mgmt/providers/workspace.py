@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import json
 
-from forge.context_mgmt.protocols import TokenMeter
+from forge.context_mgmt.protocols import TokenMeter, ContentProvider
 from forge.context_mgmt.types import ContentChunk, ContextRequest
 
 
-class WorkspaceProvider:
+class WorkspaceProvider(ContentProvider):
     """无 IO, 从 request 直接组装层叠上下文文本."""
 
     def __init__(self, token_meter: TokenMeter) -> None:

@@ -258,6 +258,7 @@ class ModelConfigCache:
                 continue
             data = json.loads(data_str)
             if data.get("is_enabled"):
+                data["provider"] = provider_name
                 result.append(data)
         result.sort(key=lambda item: item.get("priority", 0), reverse=True)
         return result

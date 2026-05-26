@@ -9,9 +9,10 @@
 from __future__ import annotations
 
 from forge.context_mgmt.types import ContextMode, ContextRequest, WindowBudget
+from forge.context_mgmt.protocols import BudgetPolicy
 
 
-class DefaultBudgetPolicy:
+class DefaultBudgetPolicy(BudgetPolicy):
     """按 mode 给固定比例的预算分配策略."""
 
     # mode -> (system, dialogue, tool_result) 比例

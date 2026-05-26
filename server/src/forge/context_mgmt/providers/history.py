@@ -19,6 +19,7 @@ from forge.context_mgmt.protocols import (
     HistoryFilter,
     TokenMeter,
     ToolResultPolicy,
+    ContentProvider
 )
 from forge.context_mgmt.types import (
     ContentChunk,
@@ -31,7 +32,7 @@ from forge.infrastructure.storage import MessageStore
 logger = logging.getLogger(__name__)
 
 
-class HistoryProvider:
+class HistoryProvider(ContentProvider):
     """历史消息提供者.
 
     Note:
@@ -92,7 +93,7 @@ class HistoryProvider:
     ) -> list[HistoryMessage]:
         """ChatMessageView -> HistoryMessage 列表.
 
-        阶段 1 行为: 仅保留 role in (user, assistant) 且 content 非空,
+        仅保留 role in (user, assistant) 且 content 非空,
         与现有 CompositeContextBuilder._orm_to_messages 等价.
         """
         out: list[HistoryMessage] = []

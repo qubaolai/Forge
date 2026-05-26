@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import logging
 
-from forge.context_mgmt.protocols import TokenMeter
+from forge.context_mgmt.protocols import TokenMeter, ToolResultPolicy
 from forge.context_mgmt.tool_policy.truncating import TruncatingPolicy
 
 logger = logging.getLogger(__name__)
 
 
-class SummarizingPolicy:
+class SummarizingPolicy(ToolResultPolicy):
     """大 tool 结果 → LLM 摘要, 小结果保持原样.
 
     Note:

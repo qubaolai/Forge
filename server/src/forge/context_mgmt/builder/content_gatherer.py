@@ -47,7 +47,7 @@ class ContentGatherer:
             if isinstance(result, ContentProviderError):
                 # 软失败: Provider 显式声明可降级
                 degraded.append(result.reason_code or f"{provider.name}_fetch_failed")
-            elif isinstance(result, Exception):
+            elif isinstance(result, BaseException):
                 # 硬失败: 未包装异常意味着 Provider 认为不可降级 (典型: HistoryProvider)
                 # 直接向上抛, 让 DefaultContextBuilder 失败
                 raise result

@@ -7,10 +7,10 @@
 
 from __future__ import annotations
 
-from forge.context_mgmt.protocols import TokenMeter
+from forge.context_mgmt.protocols import TokenMeter, ToolResultPolicy
 
 
-class TruncatingPolicy:
+class TruncatingPolicy(ToolResultPolicy):
     """token 数超阈值时截断尾部, 保留前 N token."""
 
     def __init__(self, max_tokens: int = 500) -> None:

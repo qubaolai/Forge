@@ -6,10 +6,10 @@ chat 默认会切换到 TruncatingPolicy.
 
 from __future__ import annotations
 
-from forge.context_mgmt.protocols import TokenMeter
+from forge.context_mgmt.protocols import TokenMeter, ToolResultPolicy
 
 
-class VerbatimPolicy:
+class VerbatimPolicy(ToolResultPolicy):
     @property
     def name(self) -> str:
         return "verbatim"

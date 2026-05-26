@@ -19,11 +19,12 @@ from collections import OrderedDict
 
 from forge.context_mgmt.filters.semantic import SemanticFilter
 from forge.context_mgmt.types import ContextMode, HistoryMessage
+from forge.context_mgmt.protocols import HistoryFilter
 
 logger = logging.getLogger(__name__)
 
 
-class HybridFilter:
+class HybridFilter(HistoryFilter):
     """近期锚点 + 语义过滤."""
 
     def __init__(

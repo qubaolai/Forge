@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from forge.context_mgmt.types import ContextMode, HistoryMessage
+from forge.context_mgmt.protocols import HistoryFilter
 
 
-class NullFilter:
+class NullFilter(HistoryFilter):
     @property
     def name(self) -> str:
         return "null"

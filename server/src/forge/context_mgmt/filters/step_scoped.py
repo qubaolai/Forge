@@ -8,9 +8,9 @@
 from __future__ import annotations
 
 from forge.context_mgmt.types import ContextMode, HistoryMessage
+from forge.context_mgmt.protocols import HistoryFilter
 
-
-class StepScopedFilter:
+class StepScopedFilter(HistoryFilter):
     """按 step 隔离历史消息 (workflow 模式默认).
 
     阶段 4 当前实现: 占位 (返回空列表, 即 workflow 步骤无对话历史).
