@@ -11,7 +11,7 @@ from forge.core.types.message import Message
 from forge.llm.token_counter import TokenCounter, get_token_counter
 
 
-class DefaultTokenMeter:
+class DefaultTokenMeter(TokenMeter):
     """默认 TokenMeter 实现, 委托 llm.token_counter.TokenCounter."""
 
     def __init__(self, counter: TokenCounter | None = None) -> None:

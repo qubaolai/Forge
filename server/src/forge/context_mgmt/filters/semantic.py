@@ -14,14 +14,15 @@
 from __future__ import annotations
 
 import logging
-from typing import Protocol
+from abc import ABC
 
 from forge.context_mgmt.types import ContextMode, HistoryMessage
+from forge.retrieval.embedders.base import Embedder
 
 logger = logging.getLogger(__name__)
 
 
-class RelevanceScorer(Protocol):
+class RelevanceScorer(ABC):
     """计算 query 与每条 history 消息的相似度."""
 
     async def score(
@@ -33,13 +34,41 @@ class RelevanceScorer(Protocol):
         ...
 
 
-class NullScorer:
+class NullScorer(RelevanceScorer):
     """始终返回 1.0, 等价于不过滤 (阶段 4 默认, 后续替换为 EmbeddingScorer)."""
 
     async def score(
         self, query: str, messages: list[HistoryMessage]
     ) -> list[float]:
         return [1.0] * len(messages)
+    
+class EmbeddingScorer(RelevanceScorer):
+    """ 向量计算消息列表, 返回每个消息的得分 """
+
+    def __init__(self, embedder: Embedder) -> None:
+        self._embedder = embedder
+
+    async def score(
+        self, query: str, messages: list[HistoryMessage]
+    ) -> list[float]:
+        query_vec = self._embedder.embed_query(query)[0]
+        docs = [m.message.content for m in messages]
+
+        import numpy as np
+        def _cosine_similarity(a, b):
+            a = np.array(a)
+            b = np.array(b)
+
+            return np.dot(a, b) / (
+                np.linalg.norm(a) * np.linalg.norm(b)
+            )
+        
+        doc_vecs = self._embedder.embed_documents(docs)
+        scores = []
+        for vec in doc_vecs:
+            score = _cosine_similarity(query_vec, vec)
+            scores.append(score)
+        return scores
 
 
 class SemanticFilter:
