@@ -321,7 +321,7 @@ def get_llm_pool() -> LLMClientPool:
     with _init_lock:
         if _llm_pool is not None:
             return _llm_pool
-        from .gateway import build_llm_client
+        from .registry import build_llm_client
         _llm_pool = LLMClientPool(build_llm_client)
         return _llm_pool
 
