@@ -22,7 +22,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
-from forge.config.domains.llm import LLMCallSpec
+from forge.config.domains.llm import LLMCallSpec, TimeoutConfig
 
 from ..client_pool import get_llm_pool
 from ..cost_tracker import get_cost_tracker
@@ -42,6 +42,7 @@ from ..resilience.retry import (
     is_rate_limit,
     parse_retry_after,
 )
+from ..streaming import FirstTokenTimeoutError, stream_with_first_token_timeout, with_total_timeout
 from .auditor import DispatchAuditor, get_dispatch_auditor
 
 logger = logging.getLogger(__name__)
@@ -138,6 +139,7 @@ class LLMDispatcher:
         retry_policy: RetryPolicy | None = None,
         bulkhead: ProviderBulkhead | None = None,
         auditor: DispatchAuditor | None = None,
+        timeout_config: TimeoutConfig | None = None,
     ) -> None:
         self._chain: list[ChainEntry] = [primary, *(fallbacks or [])]
         self._max_retries = max_retries
@@ -147,6 +149,8 @@ class LLMDispatcher:
         self._breakers = breaker_strategy or get_breaker_strategy()
         self._bulkhead = bulkhead or get_bulkhead()
         self._auditor = auditor or get_dispatch_auditor()
+        self._timeout = timeout_config or TimeoutConfig()
+        self._last_fallback_position: int = 0
 
     @property
     def primary(self) -> LLM:
@@ -159,6 +163,11 @@ class LLMDispatcher:
     @property
     def supports_tool_calling(self) -> bool:
         return any(c.supports_tool_calling for c, _ in self._chain)
+
+    @property
+    def last_fallback_position(self) -> int:
+        """最后一次成功调用所用的 fallback 位次 (0=主模型, ≥1=备用)."""
+        return self._last_fallback_position
 
     # ------------------------------------------------------------------
     # 共享辅助方法 (消除 4x 重复)
@@ -221,6 +230,7 @@ class LLMDispatcher:
         phase: str = "chat",
     ) -> None:
         """记录成功: 成本 + 熔断 + 审计."""
+        self._last_fallback_position = idx
         self._record_cost_for(client, spec, usage)
         self._breakers.record_success((spec.impl, spec.api_key, spec.model))
         self._emit_audit(
@@ -450,12 +460,15 @@ class LLMDispatcher:
                     return await call_fn(client, spec)
 
                 async with self._bulkhead.guard(client.provider_name):
-                    result = await call_with_retry(
-                        _wrapped,
-                        max_retries=self._max_retries,
-                        backoff_seconds=self._retry_backoff,
-                        on_retry=self._on_retry_for_key(spec),
-                        policy=self._retry_policy,
+                    result = await with_total_timeout(
+                        call_with_retry(
+                            _wrapped,
+                            max_retries=self._max_retries,
+                            backoff_seconds=self._retry_backoff,
+                            on_retry=self._on_retry_for_key(spec),
+                            policy=self._retry_policy,
+                        ),
+                        self._timeout.total_timeout_s,
                     )
                 self._record_success(
                     client,
@@ -523,6 +536,10 @@ class LLMDispatcher:
                     stream = open_stream_fn(client, spec)
                     if hasattr(stream, "__await__"):
                         stream = await stream  # provider 可能返回 coroutine
+                    # 应用首 Token 超时: 超时抛 FirstTokenTimeoutError 触发 fallback
+                    stream = stream_with_first_token_timeout(
+                        stream, self._timeout.first_token_timeout_s
+                    )
                     first, iter_state = await _stream_first(stream)
                     if idx > 0:
                         logger.info(
@@ -562,6 +579,17 @@ class LLMDispatcher:
                 self._emit_audit(client, spec, idx, started_at=started_at, error="empty_stream")
                 blocked_key_group = _entry_group(spec)
                 logger.warning("LLM %s 位置=%d 输出为空, 切换备用", phase, idx)
+            except FirstTokenTimeoutError as e:
+                # 首 Token 超时: 不重试, 直接 fallback 到下一个 entry
+                last_exc = e
+                self._record_cost_for(client, spec, None, error=True)
+                self._breakers.record_failure((spec.impl, spec.api_key, spec.model))
+                self._emit_audit(client, spec, idx, started_at=started_at, error="first_token_timeout")
+                blocked_key_group = _entry_group(spec)
+                logger.warning(
+                    "LLM %s 位置=%d 首 Token 超时 (%.1fs), 切换备用 provider=%s",
+                    phase, idx, self._timeout.first_token_timeout_s, client.provider_name,
+                )
             except Exception as e:  # noqa: BLE001
                 last_exc = e
                 was_rate_limited = self._record_failure(

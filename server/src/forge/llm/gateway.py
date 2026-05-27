@@ -161,6 +161,7 @@ class LLMGateway:
             finish_reason="stop",
             raw=result.raw,
             latency_ms=latency_ms,
+            fallback_position=dispatcher.last_fallback_position,
         )
         return await self._pipeline.run_post(req, resp)
 
@@ -201,6 +202,7 @@ class LLMGateway:
             tool_calls=result.get("tool_calls"),
             raw=result,
             latency_ms=latency_ms,
+            fallback_position=dispatcher.last_fallback_position,
         )
         return await self._pipeline.run_post(req, resp)
 
@@ -254,6 +256,7 @@ class LLMGateway:
                     usage=final_usage or {},
                     finish_reason=finish_reason,
                     latency_ms=latency_ms,
+                    fallback_position=dispatcher.last_fallback_position,
                 )
                 try:
                     await self._pipeline.run_post(req, resp)
@@ -307,6 +310,7 @@ class LLMGateway:
                     usage=final_usage or {},
                     finish_reason=final_reason or "stop",
                     latency_ms=latency_ms,
+                    fallback_position=dispatcher.last_fallback_position,
                 )
                 try:
                     await self._pipeline.run_post(req, resp)

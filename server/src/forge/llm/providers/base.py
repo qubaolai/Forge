@@ -129,16 +129,22 @@ class LLM(ABC):
         **kwargs: Any,
     ) -> ChatResult:
         """非流式 chat. 默认实现: 调 chat_stream 后聚合."""
-        chunks = list(
-            await self.chat_stream(
-                messages,
-                model=model,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                extra_options=extra_options,
-                **kwargs,
-            )
+        chunks: list[ChatChunk] = []
+        stream = self.chat_stream(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            extra_options=extra_options,
+            **kwargs,
         )
+        # chat_stream 可能是 async generator 或 sync generator, 兼容两种形态
+        if hasattr(stream, "__aiter__"):
+            async for chunk in stream:  # type: ignore[union-attr]
+                chunks.append(chunk)
+        else:
+            for chunk in stream:  # type: ignore[union-attr]
+                chunks.append(chunk)
         content = "".join(c.delta for c in chunks)
         usage = next((c.usage for c in reversed(chunks) if c.usage), {})
         return ChatResult(content=content, model=model, usage=usage or {})
@@ -156,7 +162,7 @@ class LLM(ABC):
         max_tokens: int | None = None,
         extra_options: dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> Iterator[ChatChunk]: ...
+    ) -> AsyncIterator[ChatChunk]: ...
 
     # ------------------------------------------------------------------
     # Tool calling: 非所有 provider 实现 (默认抛 NotImplementedError)

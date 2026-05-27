@@ -353,7 +353,7 @@ class OpenAICompatibleLLM(LLM):
         return result
 
 
-# @register_llm("openai")
+@register_llm("openai")
 class OpenAILLM(OpenAICompatibleLLM):
     """OpenAI 官方 API."""
 

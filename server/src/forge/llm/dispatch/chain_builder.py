@@ -57,6 +57,7 @@ async def build_dispatch_chain(
         fallbacks,
         max_retries=settings.llm.max_retries,
         retry_backoff_seconds=settings.llm.retry_backoff_seconds,
+        timeout_config=settings.llm.timeout,
     )
 
 
@@ -114,6 +115,7 @@ async def build_utility_dispatch_chain(
         entries[1:],
         max_retries=settings.llm.max_retries,
         retry_backoff_seconds=settings.llm.retry_backoff_seconds,
+        timeout_config=settings.llm.timeout,
     )
 
 
