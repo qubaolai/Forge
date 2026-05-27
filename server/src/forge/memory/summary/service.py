@@ -14,7 +14,6 @@ InfrastructureError vs None 的语义:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Literal, cast
 
@@ -57,7 +56,7 @@ class SummaryService:
             ChatMessageRepository,
         )
         from forge.memory.summary.store import SummaryStore
-        from forge.llm.gateway import build_utility_chain_from_settings
+        from forge.llm import get_llm_gateway
         from forge.memory.summary.summarizer import Summarizer
 
         init_engine()  # 幂等, worker 进程也安全
@@ -86,26 +85,25 @@ class SummaryService:
 
         covered_until = rows[-1].id  # load_recent 已按时间升序
 
-        # 2. 构造 Summarizer LLM 链 (走工具模型三级回落: 任务 utility → 任务主模型 → 主模型)
+        # 2. 构造 Summarizer (走 LLMGateway utility 档位, task_type="utility")
         try:
             provider = settings.memory.summarizer.provider or None
             model = settings.memory.summarizer.model or None
-            chain = await build_utility_chain_from_settings(
-                settings,
-                utility_provider=provider,
-                utility_model=model,
-            )
-            used_model = chain.primary_spec.model
+            gateway = get_llm_gateway(settings)
         except Exception as exc:
             logger.exception("Summarizer LLM 初始化失败")
             raise InfrastructureError(f"Summarizer LLM 初始化失败: {exc}") from exc
 
         summarizer = Summarizer(
-            chain, max_summary_tokens=settings.memory.summarizer.max_summary_tokens
+            gateway,
+            max_summary_tokens=settings.memory.summarizer.max_summary_tokens,
+            preferred_provider=provider,
+            preferred_model=model,
         )
+        used_model = model or "<utility-routed>"
 
-        # 3. 生成
-        summary_text = await asyncio.to_thread(summarizer.summarize, messages)
+        # 3. 生成 (async, 直接 await)
+        summary_text = await summarizer.summarize(messages)
         if not summary_text:
             logger.info("摘要跳过 session=%s LLM 返回空", session_id)
             return None

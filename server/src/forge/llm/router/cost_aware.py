@@ -60,7 +60,7 @@ class CostAwareRouter(Router):
             limit = tracker.budget.limit_for(request.user_id)
             if limit is not None and limit > 0:
                 try:
-                    used = tracker.user_daily_usd(request.user_id)
+                    used = tracker._user_total(request.user_id)  # noqa: SLF001
                 except Exception:  # noqa: BLE001
                     logger.debug("查询用户日用量失败, 忽略预算压力", exc_info=True)
                     used = 0.0

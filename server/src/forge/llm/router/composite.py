@@ -1,6 +1,12 @@
 """CompositeRouter: 按优先级串联多个 Router, 第一个非 None 决策即采用.
 
-本期只挂 [RuleBasedRouter]. LatencyAware / CostAware 在 Phase 2.5 再插入.
+默认链 (Phase 5):
+    [RuleBasedRouter, CostAwareRouter, LatencyAwareRouter]
+
+    - RuleBasedRouter: 硬约束筛选 + preferred_provider/model pin 短路
+    - CostAwareRouter: 预算压力 / 大输入时强制 cheap tier
+    - LatencyAwareRouter: 基于 EMA 延迟选最优 (软优先级降权)
+    - 全部 None 时兜底用 available 第一个候选
 """
 
 from __future__ import annotations
@@ -42,10 +48,21 @@ _default: CompositeRouter | None = None
 
 
 def get_default_router() -> CompositeRouter:
-    """全局默认 CompositeRouter 单例. 仅含 RuleBasedRouter (Phase 2 范围)."""
+    """全局默认 CompositeRouter 单例.
+
+    Phase 5: [RuleBased → CostAware → LatencyAware]
+    """
     global _default
     if _default is None:
+        from .cost_aware import CostAwareRouter
+        from .latency_aware import get_latency_router
         from .rule_based import RuleBasedRouter
 
-        _default = CompositeRouter([RuleBasedRouter()])
+        _default = CompositeRouter(
+            [
+                RuleBasedRouter(),
+                CostAwareRouter(),
+                get_latency_router(),
+            ]
+        )
     return _default

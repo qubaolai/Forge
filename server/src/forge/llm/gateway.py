@@ -2,13 +2,14 @@
 
 调用路径:
     LLMRequest
-      → PrePipeline (validator → budget → 后续 Phase 加入 rate_limit/dedup/cache)
+      → PrePipeline (validator → rate_limit → budget → dedup → cache)
       → LLMDispatcher (router → chain 遍历 → 熔断 → 重试 → fallback)
       → Provider
-      → PostPipeline (audit; 后续 Phase 加入 cache_write)
+      → PostPipeline (cache_write → dedup_complete → audit)
       → LLMResponse
 
-旧函数 (build_chain_from_settings / register_llm 等) 作为重导出保留向后兼容.
+业务层只持有 LLMGateway. 对 ReActAgent / Summarizer 等代理风格调用方,
+通过 llm.binding.GatewayLLMAdapter 暴露兼容的 chat / chat_with_tools 接口.
 """
 
 from __future__ import annotations
@@ -31,70 +32,24 @@ from .pipeline import (
     PipelineRunner,
     PostMiddleware,
     PreMiddleware,
+    get_idempotency_store,
 )
 from .providers.base import ChatChunk
-from .registry import (
-    build_llm_client,
-    list_providers,
-    register_llm,
-    split_provider_model,
-)
 from .request import CostEstimate, LLMRequest, LLMResponse
+from .router import (
+    Router,
+    RoutingRequest,
+    get_default_router,
+)
 
 if TYPE_CHECKING:
     from .dispatch.dispatcher import LLMDispatcher
-    from .router import RoutingRequest
 
 logger = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------
-# 旧接口重导出 (向后兼容)
-# ----------------------------------------------------------------------
-async def build_chain_from_settings(
-    settings,
-    *,
-    provider: str | None = None,
-    model: str | None = None,
-    routing_request: "RoutingRequest | None" = None,
-    model_cache=None,
-):
-    """向后兼容: 走新 dispatch.chain_builder.build_dispatch_chain.
-
-    routing_request 暂时忽略 (Phase 5 智能路由接入).
-    """
-    if routing_request is not None:
-        logger.warning("LLM 路由请求已忽略: 当前主模型必须显式传入 provider/model")
-    return await build_dispatch_chain(
-        settings,
-        provider=provider,
-        model=model,
-        model_cache=model_cache,
-    )
-
-
-async def build_utility_chain_from_settings(
-    settings,
-    *,
-    utility_provider: str | None = None,
-    utility_model: str | None = None,
-    provider: str | None = None,
-    model: str | None = None,
-    model_cache=None,
-):
-    """向后兼容: 走新 dispatch.chain_builder.build_utility_dispatch_chain."""
-    return await build_utility_dispatch_chain(
-        settings,
-        utility_provider=utility_provider,
-        utility_model=utility_model,
-        provider=provider,
-        model=model,
-        model_cache=model_cache,
-    )
-
-
-# ----------------------------------------------------------------------
-# LLMGateway: 新对外入口
+# LLMGateway: 业务层唯一对外入口
 # ----------------------------------------------------------------------
 class LLMGateway:
     """LLM 网关统一对外接口.
@@ -108,10 +63,12 @@ class LLMGateway:
         model_cache=None,
         *,
         pipeline: PipelineRunner | None = None,
+        router: Router | None = None,
     ) -> None:
         self._settings = settings
         self._model_cache = model_cache
         self._pipeline = pipeline or self._default_pipeline()
+        self._router = router or get_default_router()
 
     # ------------------------------------------------------------------
     # 工厂
@@ -161,6 +118,17 @@ class LLMGateway:
         return self._pipeline
 
     # ------------------------------------------------------------------
+    # 共享: 非流式异常清理 (dedup 失败回滚)
+    # ------------------------------------------------------------------
+    async def _dedup_failure_cleanup(self, req: LLMRequest) -> None:
+        if not req.idempotency_key:
+            return
+        try:
+            await get_idempotency_store().finish_failure(req.idempotency_key)
+        except Exception:  # noqa: BLE001
+            logger.debug("dedup finish_failure 失败 (已忽略)", exc_info=True)
+
+    # ------------------------------------------------------------------
     # 非流式 chat
     # ------------------------------------------------------------------
     async def complete(self, req: LLMRequest) -> LLMResponse:
@@ -172,14 +140,18 @@ class LLMGateway:
         if req.tools:
             return await self._complete_with_tools_after_pre(req)
 
-        dispatcher = await self._build_dispatcher_for(req)
-        started_at = time.perf_counter()
-        result = await dispatcher.chat(
-            req.messages,
-            temperature=req.temperature,
-            max_tokens=req.max_tokens,
-            extra_options=req.extra_options,
-        )
+        try:
+            dispatcher = await self._build_dispatcher_for(req)
+            started_at = time.perf_counter()
+            result = await dispatcher.chat(
+                req.messages,
+                temperature=req.temperature,
+                max_tokens=req.max_tokens,
+                extra_options=req.extra_options,
+            )
+        except BaseException:
+            await self._dedup_failure_cleanup(req)
+            raise
         latency_ms = (time.perf_counter() - started_at) * 1000.0
         resp = LLMResponse(
             content=result.content,
@@ -204,16 +176,20 @@ class LLMGateway:
         return await self._complete_with_tools_after_pre(req)
 
     async def _complete_with_tools_after_pre(self, req: LLMRequest) -> LLMResponse:
-        dispatcher = await self._build_dispatcher_for(req)
-        started_at = time.perf_counter()
-        result = await dispatcher.chat_with_tools(
-            req.messages,
-            req.tools or [],
-            temperature=req.temperature,
-            max_tokens=req.max_tokens,
-            tool_choice=req.tool_choice,
-            extra_options=req.extra_options,
-        )
+        try:
+            dispatcher = await self._build_dispatcher_for(req)
+            started_at = time.perf_counter()
+            result = await dispatcher.chat_with_tools(
+                req.messages,
+                req.tools or [],
+                temperature=req.temperature,
+                max_tokens=req.max_tokens,
+                tool_choice=req.tool_choice,
+                extra_options=req.extra_options,
+            )
+        except BaseException:
+            await self._dedup_failure_cleanup(req)
+            raise
         latency_ms = (time.perf_counter() - started_at) * 1000.0
         resp = LLMResponse(
             content=result.get("content", ""),
@@ -236,13 +212,20 @@ class LLMGateway:
             raise ValueError("流式 tool calling 请使用 stream_with_tools")
         short_circuit = await self._pipeline.run_pre(req)
         if short_circuit is not None:
-            # 缓存命中: 把响应转换为单一最终 chunk 输出
+            # 缓存命中: 把整段 content 按 chunk 切片回放
+            from .streaming import replay_as_chunks
+
             await self._pipeline.run_post(req, short_circuit)
-            yield ChatChunk(delta=short_circuit.content, finish_reason="stop")
+            for chunk in replay_as_chunks(short_circuit.content, usage=short_circuit.usage):
+                yield chunk
             return
+
         dispatcher = await self._build_dispatcher_for(req)
         started_at = time.perf_counter()
         final_usage: dict | None = None
+        aggregated: list[str] = []  # 聚合 deltas 给 Post pipeline 缓存
+        finish_reason: str | None = "stop"
+        had_error = False
         try:
             async for chunk in dispatcher.chat_stream(
                 req.messages,
@@ -252,21 +235,30 @@ class LLMGateway:
             ):
                 if chunk.usage:
                     final_usage = chunk.usage
+                if chunk.delta:
+                    aggregated.append(chunk.delta)
+                if chunk.finish_reason:
+                    finish_reason = chunk.finish_reason
                 yield chunk
+        except BaseException:
+            had_error = True
+            await self._dedup_failure_cleanup(req)
+            raise
         finally:
-            latency_ms = (time.perf_counter() - started_at) * 1000.0
-            resp = LLMResponse(
-                content="",  # 流式不缓存聚合 content (Phase 4 流式缓存 P3)
-                model=dispatcher.primary_spec.model,
-                provider=dispatcher.primary.provider_name,
-                usage=final_usage or {},
-                finish_reason="stop",
-                latency_ms=latency_ms,
-            )
-            try:
-                await self._pipeline.run_post(req, resp)
-            except Exception:  # noqa: BLE001
-                logger.exception("流式 Post pipeline 异常 (已忽略)")
+            if not had_error:
+                latency_ms = (time.perf_counter() - started_at) * 1000.0
+                resp = LLMResponse(
+                    content="".join(aggregated),
+                    model=dispatcher.primary_spec.model,
+                    provider=dispatcher.primary.provider_name,
+                    usage=final_usage or {},
+                    finish_reason=finish_reason,
+                    latency_ms=latency_ms,
+                )
+                try:
+                    await self._pipeline.run_post(req, resp)
+                except Exception:  # noqa: BLE001
+                    logger.exception("流式 Post pipeline 异常 (已忽略)")
 
     async def stream_with_tools(self, req: LLMRequest) -> AsyncIterator[dict[str, Any]]:
         if not req.tools:
@@ -286,6 +278,7 @@ class LLMGateway:
         started_at = time.perf_counter()
         final_usage: dict | None = None
         final_reason: str | None = None
+        had_error = False
         try:
             async for chunk in dispatcher.chat_with_tools_stream(
                 req.messages,
@@ -300,20 +293,25 @@ class LLMGateway:
                 if chunk.get("finish_reason"):
                     final_reason = chunk["finish_reason"]
                 yield chunk
+        except BaseException:
+            had_error = True
+            await self._dedup_failure_cleanup(req)
+            raise
         finally:
-            latency_ms = (time.perf_counter() - started_at) * 1000.0
-            resp = LLMResponse(
-                content="",
-                model=dispatcher.primary_spec.model,
-                provider=dispatcher.primary.provider_name,
-                usage=final_usage or {},
-                finish_reason=final_reason or "stop",
-                latency_ms=latency_ms,
-            )
-            try:
-                await self._pipeline.run_post(req, resp)
-            except Exception:  # noqa: BLE001
-                logger.exception("流式 Post pipeline 异常 (已忽略)")
+            if not had_error:
+                latency_ms = (time.perf_counter() - started_at) * 1000.0
+                resp = LLMResponse(
+                    content="",
+                    model=dispatcher.primary_spec.model,
+                    provider=dispatcher.primary.provider_name,
+                    usage=final_usage or {},
+                    finish_reason=final_reason or "stop",
+                    latency_ms=latency_ms,
+                )
+                try:
+                    await self._pipeline.run_post(req, resp)
+                except Exception:  # noqa: BLE001
+                    logger.exception("流式 Post pipeline 异常 (已忽略)")
 
     # ------------------------------------------------------------------
     # 成本估算 (不调用 LLM)
@@ -344,29 +342,118 @@ class LLMGateway:
         )
 
     # ------------------------------------------------------------------
-    # 内部: 构造 dispatcher
+    # 内部: 路由决策 + 构造 dispatcher
     # ------------------------------------------------------------------
-    async def _build_dispatcher_for(self, req: LLMRequest) -> "LLMDispatcher":
-        """根据 LLMRequest 选择 provider/model, 构造 LLMDispatcher.
+    async def _resolve_provider_model(
+        self, req: LLMRequest
+    ) -> tuple[str | None, str | None, str]:
+        """解析最终 (provider, model). 返回 (provider, model, reason).
 
-        Phase 2: preferred_provider/model 显式 pin; task_type=utility 走 utility chain;
-        其他情况走 settings.llm 默认值. Phase 5 引入智能 Router.
+        优先级:
+            1. 用户 pin (preferred_*) 双值齐全 → 直接采用, 完全跳过 Router
+            2. Router 决策 (CompositeRouter, 含 RuleBased/CostAware/LatencyAware)
+            3. Router 无候选 → settings.llm 默认 (兜底)
         """
-        provider = req.preferred_provider
-        model = req.preferred_model
+        if req.preferred_provider and req.preferred_model:
+            return req.preferred_provider, req.preferred_model, "user_pin"
 
+        available = await self._build_available_candidates()
+        if not available:
+            # 没有候选可路由, 回 settings 默认 / 用户 pin 半值
+            return (
+                req.preferred_provider or (self._settings.llm.provider or None),
+                req.preferred_model or (self._settings.llm.default_model or None),
+                "no_available",
+            )
+
+        routing_req = RoutingRequest(
+            task_type=req.task_type,
+            estimated_input_tokens=req.estimated_input_tokens,
+            requires_tools=req.requires_tools or bool(req.tools),
+            requires_vision=req.requires_vision,
+            requires_thinking=req.requires_thinking,
+            user_id=req.user_id,
+            preferred_provider=req.preferred_provider,
+            preferred_model=req.preferred_model,
+        )
+        try:
+            decision = self._router.route(routing_req, available)
+        except Exception:  # noqa: BLE001
+            logger.exception("Router 决策异常, 降级 settings.llm 默认")
+            decision = None
+
+        if decision is None:
+            return (
+                self._settings.llm.provider or None,
+                self._settings.llm.default_model or None,
+                "router_none",
+            )
+        return decision.provider, decision.model, decision.reason
+
+    async def _build_available_candidates(self) -> list:
+        """从 ModelConfigCache 读出全部 enabled (provider, model) 转 Candidate.
+
+        失败 / cache 未就绪时返回空列表 (上层会回退到 settings 默认).
+        """
+        try:
+            model_cache = self._model_cache
+            if model_cache is None:
+                from .model_config_cache import ModelConfigCache
+                model_cache = ModelConfigCache.get_global()
+            if not await model_cache.is_ready():
+                return []
+            providers = await model_cache.get_providers_enabled()
+        except Exception:  # noqa: BLE001
+            logger.debug("model_cache 不可用, 跳过 Router 候选构造", exc_info=True)
+            return []
+
+        from forge.config.domains.llm import ModelCapabilities, ModelConfig
+
+        candidates: list = []
+        for p in providers:
+            provider_name = p.get("name") or ""
+            if not provider_name:
+                continue
+            try:
+                models = await model_cache.get_models(provider_name, enabled_only=True)
+            except Exception:  # noqa: BLE001
+                continue
+            for m in models:
+                cap_data = m.get("capabilities") or {}
+                try:
+                    capabilities = ModelCapabilities(**cap_data)
+                except Exception:  # noqa: BLE001
+                    capabilities = ModelCapabilities()
+                mc = ModelConfig(
+                    name=m.get("name") or "",
+                    display_name=m.get("display_name"),
+                    capabilities=capabilities,
+                )
+                if mc.name:
+                    candidates.append((provider_name, mc))
+        return candidates
+
+    async def _build_dispatcher_for(self, req: LLMRequest) -> "LLMDispatcher":
+        """根据 LLMRequest 选择 provider/model, 构造 LLMDispatcher."""
         if req.task_type == "utility":
+            # Utility 走 3 级回落链, 不经 Router
             return await build_utility_dispatch_chain(
                 self._settings,
-                provider=provider,
-                model=model,
+                provider=req.preferred_provider,
+                model=req.preferred_model,
                 model_cache=self._model_cache,
             )
 
+        provider, model, reason = await self._resolve_provider_model(req)
+        if reason not in ("user_pin", "no_available"):
+            logger.info(
+                "LLM 路由决策: provider=%s model=%s reason=%s task_type=%s",
+                provider, model, reason, req.task_type,
+            )
         return await build_dispatch_chain(
             self._settings,
-            provider=provider or self._settings.llm.provider or None,
-            model=model or self._settings.llm.default_model or None,
+            provider=provider,
+            model=model,
             model_cache=self._model_cache,
         )
 
@@ -398,12 +485,6 @@ def reset_llm_gateway() -> None:
 
 __all__ = [
     "LLMGateway",
-    "build_chain_from_settings",
-    "build_llm_client",
-    "build_utility_chain_from_settings",
     "get_llm_gateway",
-    "list_providers",
-    "register_llm",
     "reset_llm_gateway",
-    "split_provider_model",
 ]

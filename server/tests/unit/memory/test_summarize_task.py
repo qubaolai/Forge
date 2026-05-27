@@ -88,35 +88,38 @@ class _Ctx:
             )
         )
 
-        # 3. LLM chain: build_utility_chain_from_settings 返回的 chain 在 service.py 里被
-        #    透传给 Summarizer.__init__; 我们 patch 它返回一个带 primary_spec 的 mock
+        # 3. LLMGateway: service.py 走 get_llm_gateway(settings) 拿到的 gateway 再传给 Summarizer.
+        #    我们 patch get_llm_gateway 返回一个 mock gateway (gateway.complete 不会被本测试调,
+        #    因为 Summarizer 也被 patch). llm_init_raises 时让 get_llm_gateway 直接抛.
         if self.llm_init_raises:
-            chain_factory = AsyncMock(side_effect=self.llm_init_raises)
+            gateway_factory = MagicMock(side_effect=self.llm_init_raises)
         else:
-            mock_chain = MagicMock()
-            mock_chain.primary_spec = MagicMock(model="gpt-4o-mini")
-            chain_factory = AsyncMock(return_value=mock_chain)
+            mock_gateway = MagicMock()
+            gateway_factory = MagicMock(return_value=mock_gateway)
         self.patches.append(
-            patch(
-                "forge.llm.gateway.build_chain_from_settings",
-                chain_factory,
-            )
-        )
-        self.patches.append(
-            patch(
-                "forge.llm.gateway.build_utility_chain_from_settings",
-                chain_factory,
-            )
+            patch("forge.llm.get_llm_gateway", gateway_factory)
         )
 
-        # 4. Summarizer (patch summarize 方法返回固定值)
+        # 4. Summarizer (patch async summarize 方法返回固定值)
         outer = self
 
         class _FakeSummarizer:
-            def __init__(self, chain, *, max_summary_tokens: int = 1500) -> None:
-                outer.summarizer_calls.append({"chain": chain, "max_tokens": max_summary_tokens})
+            def __init__(
+                self,
+                gateway,
+                *,
+                max_summary_tokens: int = 1500,
+                preferred_provider: str | None = None,
+                preferred_model: str | None = None,
+            ) -> None:
+                outer.summarizer_calls.append({
+                    "gateway": gateway,
+                    "max_tokens": max_summary_tokens,
+                    "preferred_provider": preferred_provider,
+                    "preferred_model": preferred_model,
+                })
 
-            def summarize(self, messages):
+            async def summarize(self, messages):
                 outer.summarizer_calls.append({"messages": messages})
                 return outer.llm_summary
 

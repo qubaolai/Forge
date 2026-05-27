@@ -34,55 +34,44 @@ class ProviderBulkhead:
 
     def __init__(self, max_concurrent_per_provider: int = 20) -> None:
         self._max = max_concurrent_per_provider
-        self._semaphores: dict[str, asyncio.Semaphore] = {}
+        # 自己维护 in_flight 计数, 避免依赖 asyncio.Semaphore._value 私有属性
+        self._in_flight: dict[str, int] = {}
         self._lock = asyncio.Lock()
 
     @property
     def enabled(self) -> bool:
         return self._max > 0
 
-    async def _get(self, provider: str) -> asyncio.Semaphore:
-        sem = self._semaphores.get(provider)
-        if sem is not None:
-            return sem
-        async with self._lock:
-            sem = self._semaphores.get(provider)
-            if sem is not None:
-                return sem
-            sem = asyncio.Semaphore(self._max)
-            self._semaphores[provider] = sem
-            return sem
-
     @asynccontextmanager
     async def guard(self, provider: str) -> AsyncIterator[None]:
-        """并发槽 RAII. 超出立即抛 BulkheadRejectError."""
+        """并发槽 RAII (非阻塞 try-acquire): 超出立即抛 BulkheadRejectError."""
         if not self.enabled:
             yield
             return
-        sem = await self._get(provider)
-        if not sem.locked() or sem._value > 0:  # noqa: SLF001
-            # _value 是 asyncio.Semaphore 当前可用计数
-            pass
-        # 非阻塞获取: 没有可用槽就立即拒绝
-        if sem._value <= 0:  # noqa: SLF001
-            raise BulkheadRejectError(
-                f"provider={provider} 已达最大并发 {self._max}"
-            )
-        await sem.acquire()
+        acquired = False
+        async with self._lock:
+            cur = self._in_flight.get(provider, 0)
+            if cur >= self._max:
+                raise BulkheadRejectError(
+                    f"provider={provider} 已达最大并发 {self._max}"
+                )
+            self._in_flight[provider] = cur + 1
+            acquired = True
         try:
             yield
         finally:
-            sem.release()
+            if acquired:
+                async with self._lock:
+                    self._in_flight[provider] = max(
+                        0, self._in_flight.get(provider, 1) - 1
+                    )
 
     def in_flight(self, provider: str) -> int:
-        sem = self._semaphores.get(provider)
-        if sem is None:
-            return 0
-        return max(0, self._max - sem._value)  # noqa: SLF001
+        return self._in_flight.get(provider, 0)
 
     def reset(self) -> None:
-        """测试用: 清空所有信号量."""
-        self._semaphores.clear()
+        """测试用: 清空所有计数."""
+        self._in_flight.clear()
 
 
 # 全局单例

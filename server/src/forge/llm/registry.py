@@ -71,15 +71,28 @@ def split_provider_model(value: str | None) -> tuple[str | None, str | None]:
 def _autoload() -> None:
     """import 内置实现, 触发自注册.
 
-    每个 provider 单独 try/except: 某个 SDK 没装时, 该 provider 不可用,
+    每个 provider 单独 try/except: 外部 SDK 没装时, 该 provider 不可用,
     但不影响其他 provider 和整体 import.
+
+    错误分级:
+        - 外部 SDK 缺失 (`No module named '<sdk>'`) → DEBUG, 该 provider 不可用属合理
+        - 内部模块 ImportError (循环导入 / forge.* 路径错误) → ERROR, 必须修复
+        - 其他异常 → WARNING
     """
     log = logging.getLogger(__name__)
     for mod_name in ("openai", "anthropic", "google", "mock"):
         try:
             __import__(f"forge.llm.providers.{mod_name}")
         except ImportError as e:
-            log.debug("LLM provider %s 未加载 (依赖缺失): %s", mod_name, e)
+            msg = str(e)
+            # 判断是否内部代码错误 (循环导入 / 改名后忘改 import 等)
+            if "forge." in msg or "circular import" in msg or "partially initialized" in msg:
+                log.error(
+                    "LLM provider %s 内部 ImportError (循环导入或路径错误): %s",
+                    mod_name, e,
+                )
+            else:
+                log.debug("LLM provider %s 未加载 (依赖缺失): %s", mod_name, e)
         except Exception as e:  # noqa: BLE001
             log.warning("LLM provider %s 加载失败: %s", mod_name, e)
 

@@ -166,10 +166,13 @@ def _make_title(text: str, max_len: int = 25) -> str:
 
 
 async def _make_title_with_utility_llm(text: str, model_options, max_len: int = 25) -> str:
-    """优先用工具模型生成标题，失败时回落到本地截断。"""
+    """优先用 utility 档位模型生成标题，失败时回落到本地截断。
+
+    走 LLMGateway 的 utility 路径 (task_type="utility"), 享受完整 Pre/Post pipeline.
+    """
     try:
         from forge.config.settings import get_settings
-        from forge.llm.gateway import build_utility_chain_from_settings
+        from forge.llm import LLMRequest, get_llm_gateway
 
         settings = get_settings()
         provider = getattr(model_options, "provider", None)
@@ -178,15 +181,11 @@ async def _make_title_with_utility_llm(text: str, model_options, max_len: int = 
             provider = model_options.get("provider")
             model = model_options.get("model")
 
-        chain = await build_utility_chain_from_settings(
-            settings,
-            provider=provider,
-            model=model,
-        )
+        gateway = get_llm_gateway(settings)
 
         async def _call_title_llm() -> str:
-            result = await chain.chat(
-                [
+            req = LLMRequest(
+                messages=[
                     ChatMessage(
                         role="system",
                         content=(
@@ -198,8 +197,15 @@ async def _make_title_with_utility_llm(text: str, model_options, max_len: int = 
                 ],
                 temperature=0.2,
                 max_tokens=32,
+                task_type="utility",
+                model_profile="fast",
+                preferred_provider=provider,
+                preferred_model=model,
+                cache_enabled=True,
             )
-            return (result.content or "").strip()
+            resp = await gateway.complete(req)
+            return (resp.content or "").strip()
+
         title = await asyncio.wait_for(_call_title_llm(), timeout=3.0)
         title = title.strip().strip("\"'“”‘’")
         if title:

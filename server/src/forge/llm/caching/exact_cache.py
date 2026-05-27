@@ -1,16 +1,19 @@
 """精确匹配缓存.
 
-Phase 4: 进程内 LRU (容量 256), Redis backend 留 Phase 6.
+Phase 4: 进程内 LRU (容量 256, 默认).
+Phase 6: Redis backend (多实例共享, 由 lifespan 注入).
 
 缓存条件:
     - req.cache_enabled == True
     - req.temperature == 0 (确定性输出, 缓存有意义)
     - 仅非流式 (complete / complete_with_tools)
-    - 工具调用 (req.tools 非空) 默认不缓存 (Phase 4 跳过, 后续可放开)
+    - 工具调用 (req.tools 非空) 默认不缓存
 
 Key 生成:
-    sha256(provider:model:canonical_json(messages))
+    sha256(provider:model:max_tokens:canonical_json(messages))
     → "forge:llm:exact:{digest}"
+
+    注意: max_tokens 参与 key 计算, 防止两次仅 max_tokens 不同的请求拿到截断的响应.
 """
 
 from __future__ import annotations
@@ -34,15 +37,28 @@ logger = logging.getLogger(__name__)
 _KEY_PREFIX = "forge:llm:exact:"
 
 
-def make_cache_key(provider: str, model: str, messages: Iterable[ChatMessage]) -> str:
-    """计算缓存 key. 仅依赖 (provider, model, role+content), 忽略 raw 字段."""
+def make_cache_key(
+    provider: str,
+    model: str,
+    messages: Iterable[ChatMessage],
+    *,
+    max_tokens: int | None = None,
+) -> str:
+    """计算缓存 key.
+
+    参与 hash 的字段:
+        - provider / model: 不同模型输出不同 → 不能共用 cache
+        - max_tokens: 截断长度不同 → 不能共用 cache (老实现遗漏, 会拿到截断响应)
+        - messages 的 role + content: 忽略 raw 等附加字段
+    """
     canonical = json.dumps(
         [{"role": m.role, "content": m.content or ""} for m in messages],
         sort_keys=True,
         ensure_ascii=False,
         separators=(",", ":"),
     )
-    digest = sha256(f"{provider}:{model}:{canonical}".encode()).hexdigest()
+    mt_part = str(max_tokens) if max_tokens is not None else "-"
+    digest = sha256(f"{provider}:{model}:{mt_part}:{canonical}".encode()).hexdigest()
     return f"{_KEY_PREFIX}{digest}"
 
 
@@ -103,6 +119,71 @@ class InProcessLRUCache:
         return len(self._store)
 
 
+class RedisExactCache:
+    """Redis-backed 精确缓存. Phase 6 多实例共享.
+
+    Key 形态:
+        forge:llm:exact:{sha256_digest}  ── string, 值 = JSON of LLMResponse 关键字段
+
+    Redis 不可用时由 RedisClient 自动降级 (get/set 返回 None/False);
+    上层 ExactCacheMiddleware 会忽略错误, 不影响业务.
+    """
+
+    def __init__(self, redis_client) -> None:
+        self._redis = redis_client
+
+    @staticmethod
+    def _serialize(resp: LLMResponse) -> str:
+        import json
+        return json.dumps(
+            {
+                "content": resp.content,
+                "model": resp.model,
+                "provider": resp.provider,
+                "usage": resp.usage,
+                "finish_reason": resp.finish_reason,
+                "tool_calls": resp.tool_calls,
+                "cache_hit": False,  # 命中时由 middleware 重置为 True
+                "cache_type": None,
+                "cost_usd": resp.cost_usd,
+                "latency_ms": resp.latency_ms,
+                "fallback_position": resp.fallback_position,
+            },
+            ensure_ascii=False,
+        )
+
+    @staticmethod
+    def _deserialize(raw: str) -> LLMResponse | None:
+        import json
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return LLMResponse(**data)
+
+    async def get(self, key: str) -> LLMResponse | None:
+        try:
+            raw = await self._redis.get(key)
+        except Exception:  # noqa: BLE001
+            logger.debug("Redis 精确缓存读取失败 (降级)", exc_info=True)
+            return None
+        if raw is None:
+            return None
+        return self._deserialize(raw)
+
+    async def set(self, key: str, resp: LLMResponse, ttl_seconds: int = 3600) -> None:
+        try:
+            await self._redis.set(key, self._serialize(resp), ttl=ttl_seconds)
+        except Exception:  # noqa: BLE001
+            logger.debug("Redis 精确缓存写入失败 (降级)", exc_info=True)
+
+    async def delete(self, key: str) -> None:
+        try:
+            await self._redis.delete(key)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 # 全局单例
 _cache_backend: ExactCacheBackend | None = None
 _init_lock = threading.Lock()
@@ -127,6 +208,7 @@ def set_exact_cache(backend: ExactCacheBackend) -> None:
 __all__ = [
     "ExactCacheBackend",
     "InProcessLRUCache",
+    "RedisExactCache",
     "get_exact_cache",
     "make_cache_key",
     "set_exact_cache",

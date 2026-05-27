@@ -23,15 +23,9 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from forge.config.domains.llm import LLMCallSpec
-from forge.guardrails.compliance.audit_logger import (
-    LLMCallAuditRecord,
-    get_audit_logger,
-)
-from forge.observability.metrics import llm_metrics
 
-from ..caching.prompt_cache import extract_cached_tokens
 from ..client_pool import get_llm_pool
-from ..cost_tracker import estimate_cost, get_cost_tracker
+from ..cost_tracker import get_cost_tracker
 from ..providers.base import LLM, ChatChunk, ChatMessage, ChatResult
 from ..resilience.bulkhead import (
     BulkheadRejectError,
@@ -48,10 +42,53 @@ from ..resilience.retry import (
     is_rate_limit,
     parse_retry_after,
 )
+from .auditor import DispatchAuditor, get_dispatch_auditor
 
 logger = logging.getLogger(__name__)
 
 ChainEntry = tuple[LLM, LLMCallSpec]
+
+
+class _EmptyStream(Exception):
+    """流首包前即结束: 视为 provider 输出为空, 触发 fallback."""
+
+
+async def _stream_first(stream: Any) -> tuple[Any, Any]:
+    """从异步或同步迭代器取首个 chunk, 同时返回已激活的迭代器.
+
+    - 空流抛 _EmptyStream
+    - 返回 (first_chunk, iterator) 由 _stream_iter 继续消费剩余 chunk
+    """
+    if hasattr(stream, "__aiter__"):
+        aiter_ = stream.__aiter__()
+        try:
+            first = await aiter_.__anext__()
+        except StopAsyncIteration as e:
+            raise _EmptyStream() from e
+        return first, ("async", aiter_)
+    if hasattr(stream, "__iter__"):
+        it = iter(stream)
+        try:
+            first = next(it)
+        except StopIteration as e:
+            raise _EmptyStream() from e
+        return first, ("sync", it)
+    raise TypeError(f"流式 stream 既非 async 也非 sync iterable: {type(stream).__name__}")
+
+
+async def _stream_iter(_unused: Any, iter_state: tuple[str, Any]) -> AsyncIterator[Any]:
+    """统一以 async iterator 形式继续消费 _stream_first 返回的迭代器."""
+    kind, it = iter_state
+    if kind == "async":
+        while True:
+            try:
+                chunk = await it.__anext__()
+            except StopAsyncIteration:
+                return
+            yield chunk
+    else:
+        for chunk in it:
+            yield chunk
 
 
 def _call_kwargs(spec: LLMCallSpec) -> dict[str, Any]:
@@ -100,6 +137,7 @@ class LLMDispatcher:
         breaker_strategy: CircuitBreakerStrategy | None = None,
         retry_policy: RetryPolicy | None = None,
         bulkhead: ProviderBulkhead | None = None,
+        auditor: DispatchAuditor | None = None,
     ) -> None:
         self._chain: list[ChainEntry] = [primary, *(fallbacks or [])]
         self._max_retries = max_retries
@@ -108,7 +146,7 @@ class LLMDispatcher:
         self._cost = get_cost_tracker()
         self._breakers = breaker_strategy or get_breaker_strategy()
         self._bulkhead = bulkhead or get_bulkhead()
-        self._audit = get_audit_logger()
+        self._auditor = auditor or get_dispatch_auditor()
 
     @property
     def primary(self) -> LLM:
@@ -251,55 +289,17 @@ class LLMDispatcher:
         error: str | None = None,
         breaker_skipped: bool = False,
     ) -> None:
-        """统一发审计日志 + Prometheus 指标, 失败 / 成功 / 跳过都走这里."""
-        latency_ms = (time.perf_counter() - started_at) * 1000.0
-        prompt = self._extract_usage(usage, ("prompt_tokens", "input_tokens"))
-        completion = self._extract_usage(usage, ("completion_tokens", "output_tokens"))
-        cost = estimate_cost(spec.model, prompt, completion)
-        provider = client.provider_name
-        cached_tokens = extract_cached_tokens(usage, provider)
-
-        self._audit.log(
-            LLMCallAuditRecord(
-                provider=provider,
-                model=spec.model,
-                prompt_tokens=prompt,
-                completion_tokens=completion,
-                estimated_cost_usd=cost,
-                latency_ms=latency_ms,
-                api_key_fingerprint=client.api_key_fingerprint,
-                fallback_position=idx,
-                finish_reason=finish_reason,
-                circuit_breaker_skipped=breaker_skipped,
-                error=error,
-                cached_tokens=cached_tokens,
-                cache_hit=cached_tokens > 0,
-                cache_type="prompt_native" if cached_tokens > 0 else None,
-            )
+        """委派给 DispatchAuditor (从 Phase 1 内嵌实现拆出)."""
+        self._auditor.emit(
+            client,
+            spec,
+            idx,
+            started_at=started_at,
+            usage=usage,
+            finish_reason=finish_reason,
+            error=error,
+            breaker_skipped=breaker_skipped,
         )
-
-        status = "circuit_open" if breaker_skipped else ("error" if error else "success")
-        llm_metrics.record_request(provider, spec.model, status)
-        if not breaker_skipped:
-            llm_metrics.record_latency(provider, spec.model, latency_ms / 1000.0)
-        if prompt or completion:
-            llm_metrics.record_tokens(provider, spec.model, prompt, completion)
-        if cost > 0:
-            from forge.core.request_context import current_user_id
-
-            llm_metrics.record_cost(provider, spec.model, current_user_id(), cost)
-        if cached_tokens > 0:
-            llm_metrics.record_cache_tokens(provider, spec.model, cached_tokens)
-
-    @staticmethod
-    def _extract_usage(usage: dict | None, keys: tuple[str, ...]) -> int:
-        if not usage:
-            return 0
-        for k in keys:
-            v = usage.get(k)
-            if isinstance(v, int | float):
-                return int(v)
-        return 0
 
     def _check_budget_for(self, spec: LLMCallSpec) -> None:
         self._cost.check_budget(quota_controlled=spec.quota_controlled)
@@ -491,6 +491,90 @@ class LLMDispatcher:
         raise last_exc
 
     # ------------------------------------------------------------------
+    # 流式调度共享辅助 (消除 chat_stream / chat_with_tools_stream 重复)
+    # ------------------------------------------------------------------
+    async def _dispatch_stream(
+        self,
+        open_stream_fn: Callable[[LLM, LLMCallSpec], Any],
+        *,
+        extract_usage: Callable[[Any], dict | None],
+        extract_finish_reason: Callable[[Any], str | None] = lambda _: None,
+        require_tool_support: bool = False,
+        phase: str = "stream",
+        empty_chain_error: str | None = None,
+    ) -> AsyncIterator[Any]:
+        """统一流式调度: 链遍历 + bulkhead + 首包前 fallback + 一旦 yield 即锁定.
+
+        open_stream_fn(client, spec) → 返回 stream iterator (异步或同步), 后续统一按
+        AsyncIterator / Iterator 双形态消费.
+        """
+        last_exc: BaseException | None = None
+        blocked_key_group: tuple[str, str] | None = None
+        for idx, (client, spec) in enumerate(self._chain):
+            if not self._check_entry_can_proceed(
+                client, spec, idx, blocked_key_group,
+                require_tool_support=require_tool_support, phase=phase,
+            ):
+                continue
+            self._check_budget_for(spec)
+            started_at = time.perf_counter()
+            try:
+                async with self._bulkhead.guard(client.provider_name):
+                    stream = open_stream_fn(client, spec)
+                    if hasattr(stream, "__await__"):
+                        stream = await stream  # provider 可能返回 coroutine
+                    first, iter_state = await _stream_first(stream)
+                    if idx > 0:
+                        logger.info(
+                            "LLM %s fallback 成功: 位置=%d provider=%s",
+                            phase, idx, client.provider_name,
+                        )
+                    yield first
+                    final_usage: dict | None = None
+                    final_reason: str | None = None
+                    async for chunk in _stream_iter(stream, iter_state):
+                        u = extract_usage(chunk)
+                        if u:
+                            final_usage = u
+                        fr = extract_finish_reason(chunk)
+                        if fr:
+                            final_reason = fr
+                        yield chunk
+                self._record_success(
+                    client, spec, idx, final_usage, started_at,
+                    finish_reason=final_reason or "stop", phase=phase,
+                )
+                return
+            except BulkheadRejectError as e:
+                last_exc = e
+                self._emit_audit(
+                    client, spec, idx, started_at=started_at, error="bulkhead_reject"
+                )
+                logger.warning(
+                    "舱壁拒绝 (流式), 切下一个 provider: %s %s/%s",
+                    phase, client.provider_name, spec.model,
+                )
+                blocked_key_group = _entry_group(spec)
+            except _EmptyStream:
+                last_exc = RuntimeError(f"{client.provider_name} {phase} 输出为空")
+                self._record_cost_for(client, spec, None, error=True)
+                self._breakers.record_failure((spec.impl, spec.api_key, spec.model))
+                self._emit_audit(client, spec, idx, started_at=started_at, error="empty_stream")
+                blocked_key_group = _entry_group(spec)
+                logger.warning("LLM %s 位置=%d 输出为空, 切换备用", phase, idx)
+            except Exception as e:  # noqa: BLE001
+                last_exc = e
+                was_rate_limited = self._record_failure(
+                    client, spec, idx, e, started_at, phase=phase
+                )
+                if not was_rate_limited:
+                    blocked_key_group = _entry_group(spec)
+        if last_exc is None:
+            raise RuntimeError(empty_chain_error or f"Fallback 链中没有可用的 {phase} provider")
+        logger.error("LLM %s fallback 链全部失败", phase)
+        raise last_exc
+
+    # ------------------------------------------------------------------
     # chat_stream: 流式
     # ------------------------------------------------------------------
     async def chat_stream(
@@ -502,72 +586,26 @@ class LLMDispatcher:
         extra_options: dict[str, Any] | None = None,
     ) -> AsyncIterator[ChatChunk]:
         """流式: 首包前可切换, 一旦开始 yield 就锁定."""
-        last_exc: BaseException | None = None
-        blocked_key_group: tuple[str, str] | None = None
-        for idx, (client, spec) in enumerate(self._chain):
-            if not self._check_entry_can_proceed(
-                client, spec, idx, blocked_key_group, phase="stream"
-            ):
-                continue
-            self._check_budget_for(spec)
-            started_at = time.perf_counter()
-            try:
-                kw = _call_kwargs(spec)
-                if temperature is not None:
-                    kw["temperature"] = temperature
-                if max_tokens is not None:
-                    kw["max_tokens"] = max_tokens
 
-                stream = await client.chat_stream(
-                    messages,
-                    extra_options=_extra_options(spec, extra_options),
-                    **kw,
-                )
-                first = next(stream)
-                if idx > 0:
-                    logger.info(
-                        "LLM stream fallback 成功: 位置=%d provider=%s",
-                        idx,
-                        client.provider_name,
-                    )
-                yield first
-                final_usage: dict | None = None
-                for chunk in stream:
-                    if chunk.usage:
-                        final_usage = chunk.usage
-                    yield chunk
-                self._record_success(
-                    client,
-                    spec,
-                    idx,
-                    final_usage,
-                    started_at,
-                    phase="stream",
-                )
-                return
-            except StopIteration:
-                last_exc = RuntimeError(f"{client.provider_name} 流式输出为空")
-                self._record_cost_for(client, spec, None, error=True)
-                self._breakers.record_failure((spec.impl, spec.api_key, spec.model))
-                self._emit_audit(
-                    client,
-                    spec,
-                    idx,
-                    started_at=started_at,
-                    error="empty_stream",
-                )
-                blocked_key_group = _entry_group(spec)
-                logger.warning("LLM stream 位置=%d 输出为空, 切换备用", idx)
-            except Exception as e:  # noqa: BLE001
-                last_exc = e
-                was_rate_limited = self._record_failure(
-                    client, spec, idx, e, started_at, phase="stream"
-                )
-                if not was_rate_limited:
-                    blocked_key_group = _entry_group(spec)
-        assert last_exc is not None
-        logger.error("LLM stream fallback 链全部失败")
-        raise last_exc
+        def open_stream(client: LLM, spec: LLMCallSpec):
+            kw = _call_kwargs(spec)
+            if temperature is not None:
+                kw["temperature"] = temperature
+            if max_tokens is not None:
+                kw["max_tokens"] = max_tokens
+            return client.chat_stream(
+                messages,
+                extra_options=_extra_options(spec, extra_options),
+                **kw,
+            )
+
+        async for chunk in self._dispatch_stream(
+            open_stream,
+            extract_usage=lambda c: c.usage,
+            extract_finish_reason=lambda c: c.finish_reason,
+            phase="stream",
+        ):
+            yield chunk
 
     # ------------------------------------------------------------------
     # chat_with_tools_stream: 流式 tool calling
@@ -582,84 +620,29 @@ class LLMDispatcher:
         tool_choice: str = "auto",
         extra_options: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict]:
-        last_exc: BaseException | None = None
-        blocked_key_group: tuple[str, str] | None = None
-        for idx, (client, spec) in enumerate(self._chain):
-            if not self._check_entry_can_proceed(
-                client,
-                spec,
-                idx,
-                blocked_key_group,
-                require_tool_support=True,
-                phase="tool_stream",
-            ):
-                continue
-            self._check_budget_for(spec)
-            started_at = time.perf_counter()
-            try:
-                kw = _call_kwargs(spec)
-                if temperature is not None:
-                    kw["temperature"] = temperature
-                if max_tokens is not None:
-                    kw["max_tokens"] = max_tokens
+        def open_stream(client: LLM, spec: LLMCallSpec):
+            kw = _call_kwargs(spec)
+            if temperature is not None:
+                kw["temperature"] = temperature
+            if max_tokens is not None:
+                kw["max_tokens"] = max_tokens
+            return client.chat_with_tools_stream(
+                messages,
+                tools,
+                tool_choice=tool_choice,
+                extra_options=_extra_options(spec, extra_options),
+                **kw,
+            )
 
-                stream = client.chat_with_tools_stream(
-                    messages,
-                    tools,
-                    tool_choice=tool_choice,
-                    extra_options=_extra_options(spec, extra_options),
-                    **kw,
-                )
-                first = anext(stream)
-                if idx > 0:
-                    logger.info(
-                        "LLM tool stream fallback 成功: 位置=%d provider=%s",
-                        idx,
-                        client.provider_name,
-                    )
-                yield await first
-                final_usage: dict | None = None
-                final_reason: str | None = None
-                async for chunk in stream:
-                    if chunk.get("usage"):
-                        final_usage = chunk["usage"]
-                    if chunk.get("finish_reason"):
-                        final_reason = chunk["finish_reason"]
-                    yield chunk
-                self._record_success(
-                    client,
-                    spec,
-                    idx,
-                    final_usage,
-                    started_at,
-                    finish_reason=final_reason or "stop",
-                    phase="tool_stream",
-                )
-                return
-            except StopAsyncIteration:
-                last_exc = RuntimeError(f"{client.provider_name} tool stream 输出为空")
-                self._record_cost_for(client, spec, None, error=True)
-                self._breakers.record_failure((spec.impl, spec.api_key, spec.model))
-                self._emit_audit(
-                    client,
-                    spec,
-                    idx,
-                    started_at=started_at,
-                    error="empty_stream",
-                )
-                blocked_key_group = _entry_group(spec)
-                logger.warning("LLM tool stream 位置=%d 输出为空, 切换备用", idx)
-            except Exception as e:  # noqa: BLE001
-                last_exc = e
-                was_rate_limited = self._record_failure(
-                    client, spec, idx, e, started_at, phase="tool_stream"
-                )
-                if not was_rate_limited:
-                    blocked_key_group = _entry_group(spec)
-        if last_exc is None:
-            raise RuntimeError("Fallback 链中没有任何 provider 支持 tool calling")
-        logger.error("LLM tool stream fallback 链全部失败")
-        raise last_exc
+        async for chunk in self._dispatch_stream(
+            open_stream,
+            extract_usage=lambda c: c.get("usage"),
+            extract_finish_reason=lambda c: c.get("finish_reason"),
+            require_tool_support=True,
+            phase="tool_stream",
+            empty_chain_error="Fallback 链中没有任何 provider 支持 tool calling",
+        ):
+            yield chunk
 
 
 __all__ = ["ChainEntry", "LLMDispatcher"]

@@ -6,7 +6,7 @@
     - task_type='summary' 走 cheap
     - 过滤后无候选 → 返 None
     - CompositeRouter 串联 + 兜底 default_first
-    - gateway.build_chain_from_settings 集成: 显式 pin > routing_request > default
+    - LLMGateway._resolve_provider_model 集成: 显式 pin > Router 决策 > default
 """
 
 from __future__ import annotations

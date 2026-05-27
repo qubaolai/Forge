@@ -38,7 +38,7 @@ class InboundRateLimitMiddleware(PreMiddleware):
         if not limiter.enabled:
             return None
         uid = req.user_id or ""
-        result = limiter.check(uid, estimated_tokens=req.estimated_input_tokens)
+        result = await limiter.check(uid, estimated_tokens=req.estimated_input_tokens)
         if not result.allow:
             logger.warning(
                 "入站限流触发: user=%s reason=%s retry_after=%.1fs",

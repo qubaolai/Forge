@@ -10,7 +10,7 @@ from forge.llm import LLMRequest, LLMResponse
 from forge.llm.caching.exact_cache import InProcessLRUCache, make_cache_key
 from forge.llm.inbound_rate_limiter import (
     InboundRateLimitExceeded,
-    InboundRateLimiter,
+    InProcessInboundRateLimiter as InboundRateLimiter,
 )
 from forge.llm.pipeline.cache import (
     CacheWriteMiddleware,
@@ -19,7 +19,7 @@ from forge.llm.pipeline.cache import (
 from forge.llm.pipeline.dedup import (
     DedupCompleteMiddleware,
     DeduplicationMiddleware,
-    IdempotencyStore,
+    InProcessIdempotencyStore as IdempotencyStore,
 )
 from forge.llm.pipeline.rate_limit import InboundRateLimitMiddleware
 from forge.llm.pipeline.validator import (
@@ -73,17 +73,17 @@ async def test_validator_passes_normal_request():
 # ----------------------------------------------------------------------
 async def test_rate_limiter_rpm():
     limiter = InboundRateLimiter(enabled=True, rpm=2)
-    assert limiter.check("u1").allow
-    assert limiter.check("u1").allow
-    res = limiter.check("u1")
+    assert (await limiter.check("u1")).allow
+    assert (await limiter.check("u1")).allow
+    res = await limiter.check("u1")
     assert not res.allow
     assert "RPM" in res.reason
 
 
 async def test_rate_limiter_tpm():
     limiter = InboundRateLimiter(enabled=True, tpm=100)
-    assert limiter.check("u1", estimated_tokens=60).allow
-    res = limiter.check("u1", estimated_tokens=60)
+    assert (await limiter.check("u1", estimated_tokens=60)).allow
+    res = await limiter.check("u1", estimated_tokens=60)
     assert not res.allow
     assert "TPM" in res.reason
 
@@ -91,7 +91,7 @@ async def test_rate_limiter_tpm():
 async def test_rate_limiter_disabled_passes():
     limiter = InboundRateLimiter(enabled=False, rpm=1)
     for _ in range(10):
-        assert limiter.check("u1").allow
+        assert (await limiter.check("u1")).allow
 
 
 async def test_rate_limit_middleware_raises():

@@ -103,9 +103,41 @@ async def with_total_timeout(
         ) from e
 
 
+def replay_as_chunks(
+    content: str,
+    *,
+    chunk_size: int = 40,
+    usage: dict | None = None,
+    finish_reason: str = "stop",
+) -> list[ChatChunk]:
+    """把整段 content 切片为多个 ChatChunk, 用于流式缓存回放.
+
+    - 前 N-1 个 chunk: delta=切片, finish_reason=None
+    - 最后 1 个 chunk: delta=最后切片, finish_reason=stop, usage=usage
+    - content 空时仍至少返回一个最终空 chunk, 保证调用方拿到 finish_reason
+    """
+    if not content:
+        return [ChatChunk(delta="", finish_reason=finish_reason, usage=usage)]
+    pieces = [
+        content[i : i + chunk_size] for i in range(0, len(content), chunk_size)
+    ]
+    chunks: list[ChatChunk] = []
+    for idx, piece in enumerate(pieces):
+        is_last = idx == len(pieces) - 1
+        chunks.append(
+            ChatChunk(
+                delta=piece,
+                finish_reason=finish_reason if is_last else None,
+                usage=usage if is_last else None,
+            )
+        )
+    return chunks
+
+
 __all__ = [
     "FirstTokenTimeoutError",
     "TimeoutConfig",
+    "replay_as_chunks",
     "stream_with_first_token_timeout",
     "with_total_timeout",
 ]

@@ -31,6 +31,14 @@ class AuditMiddleware(PostMiddleware):
     log_level: int = logging.INFO
 
     async def process(self, req: LLMRequest, resp: LLMResponse) -> LLMResponse:
+        # 更新 LatencyAwareRouter EMA (软依赖, 失败不影响响应)
+        if resp.provider and resp.model and resp.latency_ms > 0 and not resp.cache_hit:
+            try:
+                from ..router.latency_aware import get_latency_router
+
+                get_latency_router().update(resp.provider, resp.model, resp.latency_ms / 1000.0)
+            except Exception:  # noqa: BLE001
+                logger.debug("更新 LatencyAwareRouter EMA 失败 (已忽略)", exc_info=True)
         logger.log(
             self.log_level,
             "LLM 请求完成: user=%s provider=%s model=%s "

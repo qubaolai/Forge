@@ -3,60 +3,69 @@
 覆盖:
     1. 空 messages -> 空字符串, 不调 LLM
     2. 仅 system / 空内容 messages -> 空字符串, 不调 LLM
-    3. 正常 messages -> 调 LLM, 返回 content (strip 过)
-    4. LLM 抛错 -> 返回空字符串, 不抛
+    3. 正常 messages -> 调 gateway.complete, 返回 content (strip 过)
+    4. gateway.complete 抛错 -> 返回空字符串, 不抛
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from forge.core.types.message import Message
-from forge.llm.providers.base import ChatResult
+from forge.llm import LLMResponse
 from forge.memory.summary.summarizer import Summarizer
 
 
-def _llm(content: str = "summary text", *, raise_exc: Exception | None = None):
-    llm = MagicMock()
+def _gateway(content: str = "summary text", *, raise_exc: Exception | None = None):
+    """构造 mock LLMGateway: gateway.complete 是 AsyncMock."""
+    gw = MagicMock()
     if raise_exc:
-        llm.chat.side_effect = raise_exc
+        gw.complete = AsyncMock(side_effect=raise_exc)
     else:
-        llm.chat.return_value = ChatResult(content=content, model="test", usage={})
-    return llm
+        gw.complete = AsyncMock(
+            return_value=LLMResponse(content=content, model="test", usage={})
+        )
+    return gw
 
 
-def test_empty_messages_returns_empty_without_llm() -> None:
-    llm = _llm()
-    s = Summarizer(llm)
-    assert s.summarize([]) == ""
-    llm.chat.assert_not_called()
+@pytest.mark.asyncio
+async def test_empty_messages_returns_empty_without_llm() -> None:
+    gw = _gateway()
+    s = Summarizer(gw)
+    assert await s.summarize([]) == ""
+    gw.complete.assert_not_called()
 
 
-def test_only_system_or_empty_messages_returns_empty() -> None:
-    llm = _llm()
-    s = Summarizer(llm)
+@pytest.mark.asyncio
+async def test_only_system_or_empty_messages_returns_empty() -> None:
+    gw = _gateway()
+    s = Summarizer(gw)
     msgs = [
         Message(role="system", content="x"),
         Message(role="user", content=""),
         Message(role="assistant", content=""),
     ]
-    assert s.summarize(msgs) == ""
-    llm.chat.assert_not_called()
+    assert await s.summarize(msgs) == ""
+    gw.complete.assert_not_called()
 
 
-def test_summarize_returns_llm_content_stripped() -> None:
-    llm = _llm("  好的摘要  \n")
-    s = Summarizer(llm)
+@pytest.mark.asyncio
+async def test_summarize_returns_llm_content_stripped() -> None:
+    gw = _gateway("  好的摘要  \n")
+    s = Summarizer(gw)
     msgs = [
         Message(role="user", content="问 1"),
         Message(role="assistant", content="答 1"),
     ]
-    assert s.summarize(msgs) == "好的摘要"
-    llm.chat.assert_called_once()
+    assert await s.summarize(msgs) == "好的摘要"
+    gw.complete.assert_called_once()
 
 
-def test_summarize_llm_failure_returns_empty() -> None:
-    llm = _llm(raise_exc=RuntimeError("llm 503"))
-    s = Summarizer(llm)
+@pytest.mark.asyncio
+async def test_summarize_llm_failure_returns_empty() -> None:
+    gw = _gateway(raise_exc=RuntimeError("llm 503"))
+    s = Summarizer(gw)
     msgs = [Message(role="user", content="x"), Message(role="assistant", content="y")]
-    assert s.summarize(msgs) == ""
+    assert await s.summarize(msgs) == ""

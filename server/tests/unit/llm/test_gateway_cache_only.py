@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from forge.llm.gateway import build_chain_from_settings
+from forge.llm.dispatch.chain_builder import build_dispatch_chain as build_chain_from_settings
 
 
 class _FakeCache:

@@ -80,7 +80,12 @@ def build_real_discovery_callable(
         from forge.config.settings import get_settings
 
         from forge.agents.react.agent import ReActAgent
-        from forge.llm.gateway import build_chain_from_settings, split_provider_model
+        from forge.llm import (
+            GatewayBinding,
+            GatewayLLMAdapter,
+            get_llm_gateway,
+            split_provider_model,
+        )
         from forge.tools.registry import ToolRegistry
 
         settings = get_settings()  # 失败让上层抓
@@ -100,8 +105,16 @@ def build_real_discovery_callable(
             raise RuntimeError(
                 f"Discovery 模型档位 {model_profile!r} 必须配置为 provider:model"
             )
-        chain = await build_chain_from_settings(
-            settings, provider=target_provider, model=target_model
+
+        # Adaptive Discovery: 通过 GatewayBinding pin model_profile;
+        # 无 user_id (系统任务, 按 default user 计费 / 限额).
+        binding = GatewayBinding(
+            gateway=get_llm_gateway(settings),
+            preferred_provider=target_provider,
+            preferred_model=target_model,
+            model_profile=model_profile,
+            task_type="tool_use",
+            cache_enabled=False,  # 探索结果不复用
         )
 
         all_tools = ToolRegistry.get_all()
@@ -113,7 +126,7 @@ def build_real_discovery_callable(
         from forge.tools.executor import ToolExecutor
 
         agent = ReActAgent(
-            llm=chain,
+            llm=GatewayLLMAdapter(binding),
             tools=tools,
             system_prompt=_build_discovery_prompt(workspace_path, max_steps),
             max_steps=max_steps,

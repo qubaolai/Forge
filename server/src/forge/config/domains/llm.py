@@ -360,8 +360,9 @@ class LLMConfig(BaseModel):
 class UtilityLLMConfig(BaseModel):
     """工具模型配置 — 供标题生成、摘要、意图识别等轻量任务共用.
 
-    运行时由 forge.llm.gateway.build_utility_chain_from_settings 解析:
-        任务专属 utility provider/model → 任务 provider/model → 主模型
+    运行时由 forge.llm.dispatch.chain_builder.build_utility_dispatch_chain 解析:
+        任务专属 utility provider/model → 任务 provider/model → 主模型.
+    业务层通过 LLMRequest(task_type="utility", model_profile="fast") 触发该 3 级链.
     """
     model_config = {"extra": "forbid"}
 

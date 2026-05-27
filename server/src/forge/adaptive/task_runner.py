@@ -139,7 +139,12 @@ async def run_node_with_react(
     from forge.config.settings import get_settings
 
     from forge.agents.react.agent import ReActAgent
-    from forge.llm.gateway import build_chain_from_settings, split_provider_model
+    from forge.llm import (
+        GatewayBinding,
+        GatewayLLMAdapter,
+        get_llm_gateway,
+        split_provider_model,
+    )
     from forge.tools.registry import ToolRegistry
 
     try:
@@ -166,12 +171,21 @@ async def run_node_with_react(
         raise TaskRunnerError(
             f"任务 {node.id} 的模型档位 {node.model_profile!r} 必须配置为 provider:model"
         )
+
+    # Adaptive 任务: 通过 LLMGateway + GatewayBinding 接入,
+    # 用 model_profile 标识档位 (供 Router 观测), preferred_* 同时 pin 确保选定模型.
     try:
-        chain = await build_chain_from_settings(
-            settings, provider=target_provider, model=target_model
+        binding = GatewayBinding(
+            gateway=get_llm_gateway(settings),
+            preferred_provider=target_provider,
+            preferred_model=target_model,
+            model_profile=node.model_profile,
+            task_type="tool_use",
+            cache_enabled=False,
+            extra={"task_id": node.id, "task_kind": node.kind.value},
         )
     except Exception as exc:  # noqa: BLE001
-        raise TaskRunnerError(f"LLM chain 构造失败: {exc}") from exc
+        raise TaskRunnerError(f"LLMGateway 绑定失败: {exc}") from exc
 
     # 工具白名单（与 node.allowed_tools 取交集）
     try:
@@ -194,7 +208,7 @@ async def run_node_with_react(
     )
 
     agent = ReActAgent(
-        llm=chain,
+        llm=GatewayLLMAdapter(binding),
         tools=tools,
         system_prompt=_build_task_system_prompt(node, workspace_path),
         max_steps=node.max_steps,

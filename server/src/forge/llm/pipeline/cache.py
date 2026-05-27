@@ -44,6 +44,7 @@ def _cache_key_for(req: LLMRequest) -> str:
         req.preferred_provider or "",
         req.preferred_model or "",
         req.messages,
+        max_tokens=req.max_tokens,
     )
 
 
