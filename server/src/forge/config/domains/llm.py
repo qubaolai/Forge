@@ -207,6 +207,36 @@ class BudgetSettings(BaseModel):
         return data
 
 
+class InboundRateLimitConfig(BaseModel):
+    """LLM 网关入站限流配置 (per-user 滑动窗口)."""
+    model_config = {"extra": "forbid"}
+
+    enabled: bool = False
+    """整体开关. 关闭时直接放行, 不消耗资源."""
+
+    rpm: int | None = None
+    """每用户每分钟请求数上限. None=不限."""
+
+    tpm: int | None = None
+    """每用户每分钟 token 数上限. None=不限."""
+
+    window_seconds: float = 60.0
+
+
+class TimeoutConfig(BaseModel):
+    """LLM 调用多层超时配置."""
+    model_config = {"extra": "forbid"}
+
+    connection_timeout_s: float = 5.0
+    """TCP 建连超时."""
+
+    first_token_timeout_s: float = 15.0
+    """流式首 Token 超时 (超过则切下一个 entry)."""
+
+    total_timeout_s: float = 120.0
+    """整体响应完成超时."""
+
+
 class LLMConfig(BaseModel):
     """LLM 段配置: 默认 provider/model、重试、预算和可选模型元数据."""
     model_config = {"extra": "forbid"}
@@ -217,6 +247,15 @@ class LLMConfig(BaseModel):
     max_retries: int = 3
     retry_backoff_seconds: float = 1.0
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
+
+    inbound_rate_limit: InboundRateLimitConfig = Field(default_factory=InboundRateLimitConfig)
+    """网关入站限流配置 (per-user). Phase 4."""
+
+    timeout: TimeoutConfig = Field(default_factory=TimeoutConfig)
+    """多层超时配置 (connection / first_token / total). Phase 4."""
+
+    bulkhead_max_concurrent: int = 20
+    """每个 provider 最大并发数. 0=不启用舱壁. Phase 4."""
 
     @model_validator(mode="after")
     def _check_default(self) -> LLMConfig:
@@ -321,8 +360,9 @@ class LLMConfig(BaseModel):
 class UtilityLLMConfig(BaseModel):
     """工具模型配置 — 供标题生成、摘要、意图识别等轻量任务共用.
 
-    运行时由 forge.llm.gateway.build_utility_chain_from_settings 解析:
-        任务专属 utility provider/model → 任务 provider/model → 主模型
+    运行时由 forge.llm.dispatch.chain_builder.build_utility_dispatch_chain 解析:
+        任务专属 utility provider/model → 任务 provider/model → 主模型.
+    业务层通过 LLMRequest(task_type="utility", model_profile="fast") 触发该 3 级链.
     """
     model_config = {"extra": "forbid"}
 

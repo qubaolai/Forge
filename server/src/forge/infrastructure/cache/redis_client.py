@@ -249,3 +249,156 @@ class RedisClient:
             return await r.zrevrange(key, start, end)
         except Exception:
             return None
+
+    # ---- Phase 6 原子操作 ----
+    async def set_nx_ex(self, key: str, value: str, ttl_seconds: int) -> bool:
+        """SET key value NX EX ttl. 仅在 key 不存在时设置, 返回是否成功."""
+        r = await self._ensure()
+        if r is None:
+            return False
+        try:
+            return bool(await r.set(key, value, nx=True, ex=max(1, ttl_seconds)))
+        except Exception as e:
+            logger.warning("Redis SET NX EX 失败 key=%s err=%s", key, e)
+            return False
+
+    async def incrbyfloat(self, key: str, amount: float, ttl: int = 0) -> float | None:
+        """原子累加 float 值, 返回累加后的值. ttl > 0 时设置过期."""
+        r = await self._ensure()
+        if r is None:
+            return None
+        try:
+            new_val = await r.incrbyfloat(key, amount)
+            if ttl > 0:
+                await r.expire(key, ttl)
+            return float(new_val)
+        except Exception as e:
+            logger.warning("Redis INCRBYFLOAT 失败 key=%s err=%s", key, e)
+            return None
+
+    async def hincrby(self, key: str, field: str, amount: int = 1, ttl: int = 0) -> int | None:
+        """Hash 字段原子加 int. ttl > 0 时设置过期."""
+        r = await self._ensure()
+        if r is None:
+            return None
+        try:
+            new_val = await r.hincrby(key, field, amount)
+            if ttl > 0:
+                await r.expire(key, ttl)
+            return int(new_val)
+        except Exception as e:
+            logger.warning("Redis HINCRBY 失败 key=%s field=%s err=%s", key, field, e)
+            return None
+
+    async def hset_field(self, key: str, field: str, value: str, ttl: int = 0) -> bool:
+        """单字段 HSET. ttl > 0 时设置过期."""
+        r = await self._ensure()
+        if r is None:
+            return False
+        try:
+            await r.hset(key, field, value)
+            if ttl > 0:
+                await r.expire(key, ttl)
+            return True
+        except Exception as e:
+            logger.warning("Redis HSET 字段失败 key=%s field=%s err=%s", key, field, e)
+            return False
+
+    async def hget(self, key: str, field: str) -> str | None:
+        r = await self._ensure()
+        if r is None:
+            return None
+        try:
+            return await r.hget(key, field)
+        except Exception:
+            return None
+
+    async def zremrangebyscore(self, key: str, min_score: float, max_score: float) -> int:
+        """删除 score 在 [min, max] 之间的成员, 返回删除数."""
+        r = await self._ensure()
+        if r is None:
+            return 0
+        try:
+            return int(await r.zremrangebyscore(key, min_score, max_score))
+        except Exception as e:
+            logger.warning("Redis ZREMRANGEBYSCORE 失败 key=%s err=%s", key, e)
+            return 0
+
+    async def zcount(self, key: str, min_score: float = float("-inf"),
+                     max_score: float = float("inf")) -> int:
+        """ZCOUNT, 默认返回全集合大小."""
+        r = await self._ensure()
+        if r is None:
+            return 0
+        try:
+            if min_score == float("-inf") and max_score == float("inf"):
+                return int(await r.zcard(key))
+            return int(await r.zcount(key, min_score, max_score))
+        except Exception:
+            return 0
+
+    async def pipeline_zadd_count(
+        self,
+        key: str,
+        member: str,
+        score: float,
+        cutoff_score: float,
+        ttl: int,
+    ) -> tuple[int, bool]:
+        """原子滑动窗口: 淘汰 + ZADD + ZCARD + EXPIRE. 返回 (当前计数, 是否成功)."""
+        r = await self._ensure()
+        if r is None:
+            return 0, False
+        try:
+            async with r.pipeline(transaction=True) as pipe:
+                pipe.zremrangebyscore(key, 0, cutoff_score)
+                pipe.zadd(key, {member: score})
+                pipe.zcard(key)
+                pipe.expire(key, max(1, ttl))
+                results = await pipe.execute()
+            return int(results[2]), True
+        except Exception as e:
+            logger.warning("Redis 滑动窗口管道失败 key=%s err=%s", key, e)
+            return 0, False
+
+    async def zrem(self, key: str, *members: str) -> int:
+        """ZREM key member [member ...]. 返回实际删除数."""
+        r = await self._ensure()
+        if r is None:
+            return 0
+        try:
+            return int(await r.zrem(key, *members))
+        except Exception as e:
+            logger.warning("Redis ZREM 失败 key=%s err=%s", key, e)
+            return 0
+
+    async def pipeline_zadd_sum_window(
+        self,
+        key: str,
+        member: str,
+        score: float,
+        cutoff_score: float,
+        ttl: int,
+    ) -> tuple[list[str], bool]:
+        """ZSET 滑动窗口 + 返回窗口内所有 member.
+
+        用法 (TPM 统计):
+            member 形态 = "{ts}:{uuid}:{tokens}", tokens 由上层解析.
+
+        返回 (members_in_window, ok). ok=False 表示 Redis 不可用, 上层应静默放行.
+        """
+        r = await self._ensure()
+        if r is None:
+            return [], False
+        try:
+            async with r.pipeline(transaction=True) as pipe:
+                pipe.zremrangebyscore(key, 0, cutoff_score)
+                pipe.zadd(key, {member: score})
+                pipe.zrangebyscore(key, cutoff_score, "+inf")
+                pipe.expire(key, max(1, ttl))
+                results = await pipe.execute()
+            members = results[2] or []
+            return [m if isinstance(m, str) else m.decode() for m in members], True
+        except Exception as e:
+            logger.warning("Redis ZSET 窗口聚合失败 key=%s err=%s", key, e)
+            return [], False

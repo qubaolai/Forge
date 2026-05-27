@@ -9,7 +9,7 @@
     1. TurnPreparer.prepare           -> TurnContext
     2. yield 生命周期事件               -> session_created / session_renamed / message_start
     3. ContextAssembler.assemble       -> AssembledContext + system_prompt
-    4. 按agent_mode选Runner类 和 build LLM chain -> runner._RUNNER_REGISTRY 和 build_chain_from_settings
+    4. 按agent_mode选Runner类 + 构造 GatewayLLMAdapter -> runner._RUNNER_REGISTRY + LLMGateway
     5. TurnFinalizer.finalize          -> 写 DB + 发 done/error + publish turn.completed
 """
 
@@ -28,7 +28,7 @@ from forge.core.request_context import set_trace_id, set_user_id
 from forge.api.schemas.chat import ChatCompletionIn
 from forge.chat.assembler import ContextAssembler
 from forge.chat.finalizer import TurnFinalizer
-from forge.llm.gateway import build_chain_from_settings
+from forge.llm import GatewayBinding, GatewayLLMAdapter, get_llm_gateway
 from forge.chat.preparer import TurnPreparationError, TurnPreparer
 from forge.chat.resumer import ResumeError, TurnResumer
 from forge.chat.runner import get_runner_class, supported_modes
@@ -147,7 +147,12 @@ class TurnOrchestrator:
                 })
 
             # 4. 执行
-            runner = await self._setup_runner(ctx.agent_mode, system_prompt, body.model_options.model_dump())
+            runner = await self._setup_runner(
+                ctx.agent_mode,
+                system_prompt,
+                body.model_options.model_dump(),
+                user_id=user_id,
+            )
             if runner is None:
                 yield AgentEvent("error", {
                     "message": f"暂不支持 agent.mode={ctx.agent_mode!r}, 当前已注册 {supported_modes()}",
@@ -249,7 +254,12 @@ class TurnOrchestrator:
             build_result, system_prompt = await self._assembler.assemble(ctx)
             messages = _inject_partial_into_messages(build_result.messages, prev_state)
 
-            runner = await self._setup_runner(ctx.agent_mode, system_prompt, None)
+            runner = await self._setup_runner(
+                ctx.agent_mode,
+                system_prompt,
+                None,
+                user_id=user_id,
+            )
             if runner is None:
                 yield AgentEvent("error", {
                     "message": f"暂不支持 agent.mode={ctx.agent_mode!r}",
@@ -286,20 +296,36 @@ class TurnOrchestrator:
                 _ACTIVE_STREAMS.pop(assistant_msg_id, None)
 
     # ------------------------------------------------------------------
-    # _setup_runner: LLM chain + Runner 实例化
+    # _setup_runner: 构造 GatewayLLMAdapter + Runner 实例化
     # ------------------------------------------------------------------
-    async def _setup_runner(self, agent_mode: str, system_prompt: str, model_options):
+    async def _setup_runner(
+        self,
+        agent_mode: str,
+        system_prompt: str,
+        model_options,
+        *,
+        user_id: str | None = None,
+    ):
         settings = get_settings()
         provider = model_options.get("provider") if model_options else None
         model = model_options.get("model") if model_options else None
-        llm_chain = await build_chain_from_settings(settings, provider=provider, model=model)
+
+        # Chat 路径: 用户在前端选了 provider/model 直接 pin; 没选则交给 Router 决策.
+        binding = GatewayBinding(
+            gateway=get_llm_gateway(settings),
+            user_id=user_id,
+            preferred_provider=provider,
+            preferred_model=model,
+            task_type="chat",
+        )
+        llm = GatewayLLMAdapter(binding)
 
         runner_cls = get_runner_class(agent_mode)
         if runner_cls is None:
             return None
 
         tools = resolve_chat_tools(settings)
-        return _instantiate_runner(runner_cls, llm_chain, system_prompt, tools=tools)
+        return _instantiate_runner(runner_cls, llm, system_prompt, tools=tools)
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -336,9 +362,9 @@ class TurnOrchestrator:
 # ---------------------------------------------------------------------------
 # Runner 实例化
 # ---------------------------------------------------------------------------
-def _instantiate_runner(runner_cls, llm_chain, system_prompt: str, *, tools):
+def _instantiate_runner(runner_cls, llm, system_prompt: str, *, tools):
     """实例化 runner。当前只有 ReActRunner，保留注册表扩展点。"""
-    return runner_cls(llm_chain, system_prompt=system_prompt, role="local", tools=tools)
+    return runner_cls(llm, system_prompt=system_prompt, role="local", tools=tools)
 
 
 # ---------------------------------------------------------------------------

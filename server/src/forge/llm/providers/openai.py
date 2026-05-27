@@ -22,7 +22,7 @@ from openai import NOT_GIVEN, APIStatusError, APITimeoutError, OpenAI
 
 from forge.core.types.message import Message, ToolCall
 
-from ..gateway import register_llm
+from ..registry import register_llm
 from .base import LLM
 
 logger = logging.getLogger(__name__)

@@ -134,12 +134,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("模型目录就绪（来源: 数据库缓存）: providers=%s", [p["name"] for p in providers] if providers else "[]")
 
     # 3.1 LLM 预热: 从 ModelConfigCache 读取启用的供应商和 Key
+    # 硬要求: 配置中启用的 provider 必须能成功构建 client (代码/SDK 必须就绪);
+    #         单个 Key 鉴权失败等运行时错误才是 "软失败".
+    # 这里区分两类错误:
+    #   - ValueError("未注册的 LLM provider") → 代码缺陷, 直接抛出阻止启动
+    #   - 其他异常 (网络/Key 校验) → 计入 failed, 不阻塞启动
     from forge.llm.client_pool import get_llm_pool
+    from forge.llm.registry import list_providers as _registered_providers
 
     llm_pool = get_llm_pool()
     warmed, failed = 0, 0
+    fatal_errors: list[str] = []
     for p in providers:
         impl = p.get("impl") or p["name"]
+        if impl not in _registered_providers():
+            # provider 在 DB 启用但代码层未注册: 配置或代码错误, 必须阻止启动
+            fatal_errors.append(
+                f"provider={p['name']!r} impl={impl!r} 未在 LLM 注册表中, "
+                f"已注册: {_registered_providers()}"
+            )
+            continue
         client_options = {"base_url": p.get("base_url"), "timeout": p.get("timeout", 30)}
         keys = await model_cache.get_keys(p["name"])
         for key_data in keys:
@@ -150,11 +164,41 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 llm_pool.warm(impl, api_key, client_options)
                 llm_pool.register_key(impl, api_key, weight=key_data.get("weight", 1))
                 warmed += 1
+            except ValueError as e:
+                # build_llm_client 抛 ValueError = 注册表缺失, 同样视为致命
+                fatal_errors.append(
+                    f"impl={impl!r} fingerprint={key_data.get('fingerprint', '?')} → {e}"
+                )
+                failed += 1
             except Exception:
-                logger.exception("LLM 预热失败: impl=%s fingerprint=%s", impl, key_data.get("fingerprint", "?"))
+                logger.exception(
+                    "LLM 预热失败 (运行时错误): impl=%s fingerprint=%s",
+                    impl, key_data.get("fingerprint", "?"),
+                )
                 failed += 1
     logger.info("LLM 池预热完成: 成功=%d 失败=%d 池容量=%d", warmed, failed, llm_pool.size())
     app.state.llm_pool = llm_pool
+
+    if fatal_errors:
+        # 致命: provider 在配置中启用却找不到实现, 服务必须停止
+        msg = "LLM 预热致命错误, 服务无法启动:\n  - " + "\n  - ".join(fatal_errors)
+        logger.error(msg)
+        raise RuntimeError(msg)
+    if warmed == 0 and providers:
+        msg = (
+            f"LLM 预热失败: 启用的 {len(providers)} 个 provider 中没有任何 Key 成功构建 client, "
+            "无法对外提供 LLM 服务"
+        )
+        logger.error(msg)
+        raise RuntimeError(msg)
+
+    # 3.1.x LLMGateway 全局单例初始化 (业务层唯一对外入口)
+    from forge.llm.gateway import get_llm_gateway, reset_llm_gateway
+
+    reset_llm_gateway()  # 兼容 reload (uvicorn --reload)
+    llm_gateway = get_llm_gateway(settings, model_cache=model_cache)
+    app.state.llm_gateway = llm_gateway
+    logger.info("LLMGateway 已就绪")
 
     # 3.2 CostTracker: 加载 budget 配置 + baseline hydrate
     #   - configure_budget 把 settings.llm.budget 推到 tracker (硬: 配错则启动失败)
@@ -204,6 +248,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.model_cache = model_cache
 
+    # 3.3 LLM 网关 Phase 4/6: 入站限流 + 舱壁 + Redis-backed 实例注入
+    try:
+        await _setup_llm_gateway_runtime(settings, redis_client)
+    except Exception:  # noqa: BLE001
+        logger.exception("LLM 网关运行时配置失败, 降级使用进程内默认实现")
+
     # 4. RAG 组件 (软: 失败跳过, 除非 STRICT_RAG=true)
     await _setup_rag_components(app, settings, model_cache)
 
@@ -246,6 +296,70 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.warning("关闭数据库失败: %s", e)
 
         logger.info("服务已停止")
+
+
+async def _setup_llm_gateway_runtime(settings, redis_client) -> None:
+    """LLM 网关运行时配置: 入站限流 + 舱壁 + (Redis 可用时) Redis-backed 实现.
+
+    设计:
+        - 默认进程内实现 (零外部依赖, 单机可用)
+        - Redis 连通时自动升级到 Redis-backed 实例 (跨实例共享状态)
+        - Redis 不可用时静默保持进程内, 不抛异常
+    """
+    # 入站限流
+    rl_cfg = settings.llm.inbound_rate_limit
+    use_redis = redis_client is not None and await redis_client.ping()
+    if rl_cfg.enabled:
+        from forge.llm.inbound_rate_limiter import (
+            InProcessInboundRateLimiter,
+            RedisInboundRateLimiter,
+            set_inbound_rate_limiter,
+        )
+        if use_redis:
+            limiter = RedisInboundRateLimiter(
+                redis_client,
+                enabled=True,
+                rpm=rl_cfg.rpm,
+                tpm=rl_cfg.tpm,
+                window_seconds=rl_cfg.window_seconds,
+            )
+            logger.info(
+                "LLM 入站限流就绪 (Redis): rpm=%s tpm=%s window=%.0fs",
+                rl_cfg.rpm, rl_cfg.tpm, rl_cfg.window_seconds,
+            )
+        else:
+            limiter = InProcessInboundRateLimiter(
+                enabled=True,
+                rpm=rl_cfg.rpm,
+                tpm=rl_cfg.tpm,
+                window_seconds=rl_cfg.window_seconds,
+            )
+            logger.info(
+                "LLM 入站限流就绪 (进程内): rpm=%s tpm=%s window=%.0fs",
+                rl_cfg.rpm, rl_cfg.tpm, rl_cfg.window_seconds,
+            )
+        set_inbound_rate_limiter(limiter)
+
+    # 舱壁: 进程内即可 (per-provider asyncio.Semaphore, 不需要跨实例)
+    from forge.llm.resilience.bulkhead import ProviderBulkhead, set_bulkhead
+    set_bulkhead(ProviderBulkhead(
+        max_concurrent_per_provider=settings.llm.bulkhead_max_concurrent
+    ))
+    logger.info(
+        "LLM 舱壁就绪: max_concurrent_per_provider=%d",
+        settings.llm.bulkhead_max_concurrent,
+    )
+
+    # Redis-backed 幂等 + 精确缓存 (Redis 可用时升级)
+    if use_redis:
+        from forge.llm.caching.exact_cache import RedisExactCache, set_exact_cache
+        from forge.llm.pipeline.dedup import RedisIdempotencyStore, set_idempotency_store
+
+        set_exact_cache(RedisExactCache(redis_client))
+        set_idempotency_store(RedisIdempotencyStore(redis_client=redis_client))
+        logger.info("LLM 精确缓存 + 幂等存储已升级到 Redis backend")
+    else:
+        logger.info("Redis 不可用: LLM 精确缓存 / 幂等存储保持进程内 (单机模式)")
 
 
 def _cleanup_stale_worktrees(*, ttl_seconds: int = 24 * 3600) -> None:

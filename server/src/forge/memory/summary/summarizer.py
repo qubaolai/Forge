@@ -4,56 +4,47 @@
 本类不碰 DB / 不碰 Store; 只做 "list[Message] -> 摘要字符串" 这一件事.
 持久化由调用方自己 upsert.
 
-LLM 配置:
-    走 settings.memory.summarizer.provider/model. 留空时 fallback 到默认 LLM.
-    用同一个 LLMManager 池化, 不会每次新建 HTTP client.
+LLM 接入:
+    一律走 LLMGateway (task_type="utility"), 通过 settings.memory.summarizer.provider/model
+    设置 utility 档位的具体模型. Pre/Post pipeline (限流 / 预算 / 缓存 / 审计) 自动生效.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Protocol
 
 from forge.core.types.message import Message
-from forge.llm.providers.base import ChatMessage, ChatResult
+from forge.llm import LLMGateway, LLMRequest
+from forge.llm.providers.base import ChatMessage
 from forge.prompts import get_registry
 
 logger = logging.getLogger(__name__)
-
-
-class _ChatLLM(Protocol):
-    """Summarizer 用到的 LLM 子集: 只要一个 chat()."""
-
-    def chat(
-        self,
-        messages: list[ChatMessage],
-        *,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-    ) -> ChatResult: ...
 
 
 class Summarizer:
     """LLM 驱动的会话摘要器.
 
     Note:
-        sync 调用 (LLM.chat 本身就是 sync). Celery 任务函数也是 sync, 直接调.
-        在 async 上下文里要用就 await asyncio.to_thread(summarizer.summarize, ...).
+        async 接口 (summarize). Celery 任务里用 asyncio.run / 已有 event loop 时 await.
     """
 
     PROMPT_NAME = "memory/summarize"
 
     def __init__(
         self,
-        llm: _ChatLLM,
+        gateway: LLMGateway,
         *,
         max_summary_tokens: int = 1500,
+        preferred_provider: str | None = None,
+        preferred_model: str | None = None,
     ) -> None:
-        self._llm = llm
+        self._gateway = gateway
         self._max_tokens = max_summary_tokens
+        self._preferred_provider = preferred_provider
+        self._preferred_model = preferred_model
 
-    def summarize(self, messages: list[Message]) -> str:
-        """把一段对话压缩成摘要.
+    async def summarize(self, messages: list[Message]) -> str:
+        """把一段对话压缩成摘要 (async).
 
         Args:
             messages: 完整对话 (user/assistant). system 消息会被过滤掉.
@@ -72,14 +63,20 @@ class Summarizer:
             max_tokens=self._max_tokens,
         )
 
+        req = LLMRequest(
+            messages=[ChatMessage(role="user", content=prompt)],
+            temperature=0.3,
+            max_tokens=self._max_tokens,
+            task_type="utility",
+            model_profile="fast",
+            preferred_provider=self._preferred_provider,
+            preferred_model=self._preferred_model,
+            cache_enabled=False,  # 摘要内容用户感知, 不走精确缓存
+        )
         try:
-            result = self._llm.chat(
-                [ChatMessage(role="user", content=prompt)],
-                temperature=0.3,
-                max_tokens=self._max_tokens,
-            )
+            resp = await self._gateway.complete(req)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Summarizer LLM 调用失败: %s", exc)
             return ""
 
-        return (result.content or "").strip()
+        return (resp.content or "").strip()

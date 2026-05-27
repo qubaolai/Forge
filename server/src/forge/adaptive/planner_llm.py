@@ -160,22 +160,18 @@ def build_real_planner_callable(
         tool_allowlist: list[str],
         options: TaskOptions,
     ) -> str:
-        import asyncio
-
         from forge.config.settings import get_settings
 
-        from forge.llm.gateway import build_chain_from_settings, split_provider_model
+        from forge.llm import LLMRequest, get_llm_gateway
 
         # C10/D1: 真实路径下 LLM 不可用必须让 run FAILED，不再回退 fallback 假完成
         try:
             settings = get_settings()
             target_provider, target_model = _resolve_model_profile(settings, model_profile)
-            chain = await build_chain_from_settings(
-                settings, provider=target_provider, model=target_model
-            )
+            gateway = get_llm_gateway(settings)
         except Exception as exc:
-            logger.exception("Planner LLM chain 构造失败")
-            raise PlannerError(f"Planner LLM chain 构造失败: {exc}") from exc
+            logger.exception("Planner LLM 初始化失败")
+            raise PlannerError(f"Planner LLM 初始化失败: {exc}") from exc
 
         # C2/fix-2a: Message 实际定义在 core.types.message，
         # 之前 `from forge.llm.streaming import Message` 是错误的（streaming 是 placeholder）
@@ -196,18 +192,23 @@ def build_real_planner_callable(
             ),
         ]
 
+        req = LLMRequest(
+            messages=messages,
+            tools=[SUBMIT_TASK_GRAPH_TOOL],
+            tool_choice="auto",
+            preferred_provider=target_provider,
+            preferred_model=target_model,
+            model_profile=model_profile,
+            task_type="tool_use",
+            cache_enabled=False,  # Planner 输出依赖 discovery_report, 复用风险大
+        )
         try:
-            resp = await asyncio.to_thread(
-                chain.chat_with_tools,
-                messages,
-                [SUBMIT_TASK_GRAPH_TOOL],
-                tool_choice="auto",
-            )
+            resp = await gateway.complete_with_tools(req)
         except Exception as exc:
             logger.exception("Planner LLM 调用失败")
             raise PlannerError(f"Planner LLM 调用失败: {exc}") from exc
 
-        tool_calls = resp.get("tool_calls") or []
+        tool_calls = resp.tool_calls or []
         if not tool_calls:
             raise PlannerError("Planner LLM 未返回 tool_calls（submit_task_graph）")
         # 取第一个 submit_task_graph 调用
@@ -231,7 +232,7 @@ def build_real_planner_callable(
 
 def _resolve_model_profile(settings, model_profile: str) -> tuple[str, str]:
     """把 fast/smart/strong 档位解析成 provider:model。"""
-    from forge.llm.gateway import split_provider_model
+    from forge.llm import split_provider_model
 
     profiles = getattr(getattr(settings, "task_execution", None), "model_profiles", None)
     if profiles is None:

@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+from abc import ABC
 import logging
 from typing import Protocol
 
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Protocol
 # ---------------------------------------------------------------------------
-class TokenCounter(Protocol):
+class TokenCounter(ABC):
     """所有方法必须线程安全 / 协程安全 (无内部可变状态或自带锁)."""
 
     def count_text(self, text: str) -> int: ...
@@ -42,7 +43,7 @@ _PER_MESSAGE_OVERHEAD = 4
 # ---------------------------------------------------------------------------
 # Tiktoken 实现 (准确)
 # ---------------------------------------------------------------------------
-class TiktokenCounter:
+class TiktokenCounter(TokenCounter):
     """基于 tiktoken 的 GPT 系编码器.
 
     cl100k_base 覆盖 gpt-4 / gpt-4o / gpt-3.5-turbo, 也常被用作其他模型的近似.
@@ -78,7 +79,7 @@ class TiktokenCounter:
 # ---------------------------------------------------------------------------
 # 启发式实现 (粗略但安全, 不依赖第三方)
 # ---------------------------------------------------------------------------
-class HeuristicCounter:
+class HeuristicCounter(TokenCounter):
     """无依赖兜底.
 
     经验上界:

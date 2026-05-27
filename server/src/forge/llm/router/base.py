@@ -1,11 +1,12 @@
 """Router Protocol + 路由请求/决策类型.
 
-Router 决定:在一组候选 (provider, model) 中选哪个作为 primary 给 FallbackChain.
+Router 决定:在一组候选 (provider, model) 中选哪个作为 primary 给 LLMDispatcher.
 注意:
     - Router 只决定 primary，运行时 provider/model 不再配置 fallback。
     - Router 链按优先级串联 (CompositeRouter), 每个 Router.route 返回 None
       表示"我无意见, 交给下一个". 全部 None → CompositeRouter 走默认 (第一个候选).
-    - 用户显式 pin (build_chain_from_settings 传 provider/model) 完全绕过 router.
+    - 用户显式 pin (LLMRequest.preferred_provider/preferred_model 双值齐全)
+      完全绕过 router, 由 LLMGateway._resolve_provider_model 短路.
 """
 
 from __future__ import annotations
@@ -21,8 +22,7 @@ if TYPE_CHECKING:
 class RoutingRequest:
     """路由决策所需输入.
 
-    上游 (chat.assembler / runner) 在调 build_chain_from_settings 前构造,
-    没有路由需求时整体不传 (老调用面继续工作).
+    由 LLMGateway 从 LLMRequest 字段构造, 喂给 CompositeRouter.route().
     """
 
     task_type: str = "chat"

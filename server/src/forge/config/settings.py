@@ -8,7 +8,7 @@
     # LLM (支持运行时按 provider + model 切换)
     provider, model, call_cfg = s.llm.resolve(provider="dashscope", model="qwen-plus")
 
-    # 工具模型由 forge.llm.gateway.build_utility_chain_from_settings 统一解析
+    # 工具模型: 业务层通过 LLMRequest(task_type="utility", model_profile="fast") 走 LLMGateway 即可
 
     # 其他组件 (启动时定死 provider)
     embedder_cfg = s.embedding.active_config()
