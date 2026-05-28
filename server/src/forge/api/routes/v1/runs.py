@@ -1,145 +1,201 @@
-"""AdaptiveRun 路由骨架（M3）。"""
+"""新版 /v1/runs 路由 (Profile 驱动, RunStore 持久化).
+
+服务 CLI 端 (plan_exec / workflow). chat 端走 /v1/chat/*.
+
+端点:
+    POST /v1/runs                       新建并启动 run
+    GET  /v1/runs                       列出当前用户的 run (admin 全见)
+    GET  /v1/runs/{id}                  查询 run
+    GET  /v1/runs/{id}/events           SSE 订阅事件流 (cursor 模式)
+    POST /v1/runs/{id}/abort            中止 run
+
+注: HITL 决策走 POST /v1/decisions/{token} (与 workflow_gate 通用), 不再走
+/v1/runs/{id}/decide. workflow_gate 等 HITL 事件在 events.jsonl 内携带 token,
+客户端按 token 走通用 decisions 路由.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 
-from forge.config.settings import get_settings
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
-from forge.adaptive import events, run_index
-from forge.adaptive.models import AdaptiveRun, RunStatus
-from forge.adaptive.options import TaskOptions
-from forge.adaptive.store import AdaptiveRunStore
-from forge.adaptive.supervisor import build_orchestrator_factory, get_run_supervisor
+from forge.agents.profiles import get_agent_profile, list_modes
+from forge.agents.run_orchestrator import RunOrchestrator
+from forge.agents.run_supervisor import get_run_supervisor
 from forge.api.dependencies import AuthenticatedUser
-from forge.api.schemas.run import DecideIn, RunCreateIn
 from forge.core.exceptions import BadRequest, Conflict, Forbidden, NotFound
 from forge.core.response import success
-from forge.utils.id_generator import new_id
+from forge.infrastructure.run_store import RunStore
+from forge.infrastructure.run_store_models import (
+    TERMINAL_STATUSES,
+    RunRecord,
+)
+
+logger = logging.getLogger(__name__)
+
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
 
+# ---------------------------------------------------------------------------
+# request / response models
+# ---------------------------------------------------------------------------
+class RunCreateIn(BaseModel):
+    """POST /v1/runs 入参."""
+
+    mode: str = Field(..., description="agent_mode (plan_exec / workflow / ...)")
+    goal: str = Field(..., min_length=1, description="任务目标 (用户自然语言)")
+    workspace_path: str = Field(
+        ...,
+        min_length=1,
+        description="工作区根路径 (绝对路径). RunStore 落在 <workspace>/.forge/runs/",
+    )
+    user_system_prompt: str = Field(
+        default="",
+        description="用户附加的 system 约束 (拼到 profile 模板)",
+    )
+    model_options: dict | None = Field(
+        default=None,
+        description="覆盖 profile 默认模型: {provider, model}",
+    )
+    workflow_template: dict | None = Field(
+        default=None,
+        description="workflow 模式专用: YAML 模板内容 (本阶段未启用, 占位)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
 def _sse(event: dict) -> bytes:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
 
 
-def _resolve_workspace_path(raw_workspace_path: str | None) -> str:
-    text = (raw_workspace_path or "").strip()
+def _resolve_workspace_path(raw: str) -> str:
+    text = (raw or "").strip()
     if not text:
-        return str(Path.cwd())
+        raise BadRequest("workspace_path 必填, 不能为空", code=40051)
     return str(Path(text).expanduser().resolve())
 
 
-async def _resolve_workspace_for_run(run_id: str, raw_workspace_path: str | None) -> str:
-    """C11/D6: 查询型端点解析 workspace_path —— 优先客户端传入，
-    否则用全局 run index 反查；都没有再退化到 cwd。"""
-    if (raw_workspace_path or "").strip():
-        return _resolve_workspace_path(raw_workspace_path)
-    entry = await run_index.lookup(run_id)
-    if entry is not None and entry.workspace_path:
-        return entry.workspace_path
-    return _resolve_workspace_path(None)
-
-
-def _run_to_dict(run: AdaptiveRun) -> dict:
-    return run.to_dict()
-
-
-def _ensure_owner(run: AdaptiveRun, user) -> None:
-    """校验 run 归属。非 owner 也非 admin 直接拒绝（多租户隔离）。"""
-    if run.owner_user_id == user.user_id:
+def _ensure_owner(record: RunRecord, user) -> None:
+    if record.owner_user_id == user.user_id:
         return
     if getattr(user, "role", "") in ("owner", "admin"):
         return
     raise Forbidden("无权访问该 run", code=40330)
 
 
+def _record_to_dict(record: RunRecord) -> dict:
+    return record.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# endpoints
+# ---------------------------------------------------------------------------
 @router.post("")
 async def create_run(body: RunCreateIn, user: AuthenticatedUser):
-    """创建 run（仅建档，不触发执行）。"""
-    settings = get_settings()
-    options = TaskOptions.build(body.task_options, settings=settings)
-    # 创建型操作必须显式指定 workspace_path，避免落到 server 进程 cwd
-    if not options.workspace_path:
+    """创建 run 并立即启动后台执行."""
+    # 1. profile 校验
+    if body.mode not in list_modes():
         raise BadRequest(
-            "缺少 workspace_path：请在 task_options.workspace_path 中显式指定项目路径",
+            f"未知 mode={body.mode!r}, 可选: {list_modes()}",
             code=40052,
         )
-    workspace_path = _resolve_workspace_path(options.workspace_path)
-    store = AdaptiveRunStore(workspace_path=workspace_path)
+    profile = get_agent_profile(body.mode)
+    if profile.persistence != "run_store":
+        # chat 模式不允许走 /runs (chat 走 /v1/chat/*)
+        raise BadRequest(
+            f"mode={body.mode!r} 的 persistence={profile.persistence}, 不应走 /v1/runs",
+            code=40053,
+        )
+    if profile.requires_template and not body.workflow_template:
+        raise BadRequest(
+            f"mode={body.mode!r} 需要 workflow_template, 但未提供",
+            code=40054,
+        )
+    if body.workflow_template is not None:
+        # 启动期格式校验, 错误模板早抛
+        from forge.agents.workflow_lifecycle import (
+            WorkflowTemplateError,
+            validate_workflow_template,
+        )
+        try:
+            validate_workflow_template(body.workflow_template)
+        except WorkflowTemplateError as exc:
+            raise BadRequest(
+                f"workflow_template 校验失败: {exc}", code=40056,
+            ) from exc
 
-    run = AdaptiveRun(
-        run_id=new_id("run"),
-        workspace_path=workspace_path,
+    # 2. 落档案
+    workspace_path = _resolve_workspace_path(body.workspace_path)
+    store = RunStore(workspace_path=workspace_path)
+    metadata: dict = {"source": "api:/v1/runs"}
+    if body.workflow_template:
+        metadata["workflow_template"] = body.workflow_template
+
+    record = await store.create_run(
+        mode=body.mode,
         goal=body.goal,
         owner_user_id=user.user_id,
-        status=RunStatus.CREATED,
-        metadata={"source": "api:/runs"},
-        options_snapshot=options.to_dict(),
-    )
-    await store.save_run(run)
-    # C11/D6: 写全局 run index，让查询 API 不依赖客户端持续传 workspace_path
-    await run_index.record_run(
-        run_id=run.run_id,
-        owner_user_id=user.user_id,
-        workspace_path=workspace_path,
-    )
-    await store.append_event(
-        run.run_id,
-        events.RUN_CREATED,
-        {
-            "status": run.status.value,
-            "goal": run.goal,
-            "owner_user_id": user.user_id,
-        },
+        metadata=metadata,
     )
 
-    # B5/P0-3: POST /runs 不再只建档，投递后台任务真正执行 7 步主流程；
-    # 客户端可通过 GET /runs/{id}/events?follow=true 订阅 SSE 跟进。
-    allowlist = list(getattr(getattr(settings, "task_execution", None), "tool_allowlist", []))
-    factory = build_orchestrator_factory(tool_allowlist=allowlist)
-    await get_run_supervisor().start_run(
-        run=run,
-        options=options,
+    # 3. 投递后台执行
+    orchestrator = RunOrchestrator(
+        record=record,
         store=store,
-        orchestrator_factory=factory,
+        profile=profile,
+        goal=body.goal,
+        user_id=user.user_id,
+        user_system_prompt=body.user_system_prompt,
+        model_options=body.model_options or {},
+        workflow_template=body.workflow_template,
     )
-    return success(_run_to_dict(run))
+    get_run_supervisor().register(orchestrator)
+    logger.info(
+        "Run 创建并投递: run=%s mode=%s workspace=%s user=%s",
+        record.run_id, body.mode, workspace_path, user.user_id,
+    )
+    return success(_record_to_dict(record))
 
 
 @router.get("")
 async def list_runs(
     user: AuthenticatedUser,
-    workspace_path: str | None = None,
-    status: RunStatus | None = None,
+    workspace_path: str = Query(..., description="工作区根路径"),
+    mode: str | None = Query(default=None, description="按 mode 过滤"),
     limit: int = Query(100, ge=1, le=500),
 ):
-    """列出 run（仅当前用户拥有的）。管理员可见所有。"""
-    store = AdaptiveRunStore(workspace_path=_resolve_workspace_path(workspace_path))
-    owner_filter = None if getattr(user, "role", "") in ("owner", "admin") else user.user_id
-    runs = await store.list_runs(limit=limit, owner_user_id=owner_filter)
-    if status is not None:
-        runs = [run for run in runs if run.status == status]
-    payload = [_run_to_dict(run) for run in runs]
-    return success({"items": payload, "total": len(payload)})
+    """列出指定 workspace 下当前用户的 run. admin 可见所有 owner."""
+    resolved = _resolve_workspace_path(workspace_path)
+    store = RunStore(workspace_path=resolved)
+    owner_filter = (
+        None if getattr(user, "role", "") in ("owner", "admin") else user.user_id
+    )
+    items = await store.list_runs(mode=mode, owner_user_id=owner_filter, limit=limit)
+    return success({"items": [_record_to_dict(r) for r in items], "total": len(items)})
 
 
 @router.get("/{run_id}")
-async def get_run(run_id: str, user: AuthenticatedUser, workspace_path: str | None = None):
-    """查询单个 run。非 owner 也非 admin 直接 403。"""
-    # C11/D6: 客户端可省略 workspace_path，由全局 index 反查
-    resolved = await _resolve_workspace_for_run(run_id, workspace_path)
-    store = AdaptiveRunStore(workspace_path=resolved)
-    run = await store.load_run(run_id)
-    if run is None:
+async def get_run(
+    run_id: str,
+    user: AuthenticatedUser,
+    workspace_path: str = Query(..., description="工作区根路径"),
+):
+    resolved = _resolve_workspace_path(workspace_path)
+    store = RunStore(workspace_path=resolved)
+    record = await store.load_run(run_id)
+    if record is None:
         raise NotFound("run 不存在", code=40450)
-    _ensure_owner(run, user)
-    return success(_run_to_dict(run))
+    _ensure_owner(record, user)
+    return success(_record_to_dict(record))
 
 
 @router.get("/{run_id}/events")
@@ -147,66 +203,55 @@ async def stream_run_events(
     run_id: str,
     request: Request,
     user: AuthenticatedUser,
-    workspace_path: str | None = None,
-    after_event_id: str | None = None,
-    follow: bool = False,
+    workspace_path: str = Query(..., description="工作区根路径"),
+    after_event_id: str | None = Query(default=None),
+    follow: bool = Query(default=False),
     poll_interval_ms: int = Query(1000, ge=200, le=5000),
 ):
-    """读取 run 事件流（SSE）。"""
-    # C11/D6: 缺省 workspace_path 时走全局 index 反查
-    resolved = await _resolve_workspace_for_run(run_id, workspace_path)
-    store = AdaptiveRunStore(workspace_path=resolved)
-    run = await store.load_run(run_id)
-    if run is None:
+    """SSE 订阅事件流. follow=true 在 run 未到终态时持续轮询."""
+    resolved = _resolve_workspace_path(workspace_path)
+    store = RunStore(workspace_path=resolved)
+    record = await store.load_run(run_id)
+    if record is None:
         raise NotFound("run 不存在", code=40450)
-    _ensure_owner(run, user)
-    # B4/P1-8: cursor 不存在则 400，避免 follow 模式陷入静默空轮询
+    _ensure_owner(record, user)
     if after_event_id and not await store.has_event(run_id, after_event_id):
         raise BadRequest(
-            f"after_event_id={after_event_id} 不存在；客户端缓存可能过期，请改用 follow=true&after_event_id=空 重新订阅",
-            code=40053,
+            f"after_event_id={after_event_id} 不存在; 客户端缓存可能过期, "
+            "请改用 follow=true&after_event_id=空 重新订阅",
+            code=40055,
         )
-
-    terminal_statuses = {
-        RunStatus.COMPLETED,
-        RunStatus.FAILED,
-        RunStatus.ABORTED,
-        RunStatus.BLOCKED,
-    }
 
     async def _stream():
         cursor = after_event_id
-        sent_ids: set[str] = set()
+        sent: set[str] = set()
         while True:
             rows = await store.list_events(run_id, after_event_id=cursor)
             for row in rows:
-                if row.id in sent_ids:
+                if row.id in sent:
                     continue
-                sent_ids.add(row.id)
+                sent.add(row.id)
                 cursor = row.id
                 yield _sse(row.to_dict())
             if not follow:
                 break
             if await request.is_disconnected():
                 break
-            # follow 模式：若 run 已到终态，再轮询一次确保事件吐完即退出，
-            # 避免对已结束 run 永远空轮询
             latest = await store.load_run(run_id)
-            if latest is not None and latest.status in terminal_statuses:
+            if latest is not None and latest.status in TERMINAL_STATUSES:
+                # 终态后再吐一次保证不漏事件, 然后关闭流
                 final_rows = await store.list_events(run_id, after_event_id=cursor)
                 for row in final_rows:
-                    if row.id in sent_ids:
+                    if row.id in sent:
                         continue
-                    sent_ids.add(row.id)
+                    sent.add(row.id)
                     yield _sse(row.to_dict())
-                yield _sse(
-                    {
-                        "type": "stream.closed",
-                        "run_id": run_id,
-                        "status": latest.status.value,
-                        "reason": "terminal_state",
-                    }
-                )
+                yield _sse({
+                    "type": "stream.closed",
+                    "run_id": run_id,
+                    "status": latest.status,
+                    "reason": "terminal_state",
+                })
                 break
             await asyncio.sleep(poll_interval_ms / 1000)
 
@@ -222,86 +267,31 @@ async def stream_run_events(
 
 
 @router.post("/{run_id}/abort")
-async def abort_run(run_id: str, user: AuthenticatedUser, workspace_path: str | None = None):
-    """中止 run（同时取消后台执行任务）。"""
-    resolved = await _resolve_workspace_for_run(run_id, workspace_path)
-    store = AdaptiveRunStore(workspace_path=resolved)
-    run = await store.load_run(run_id)
-    if run is None:
+async def abort_run(
+    run_id: str,
+    user: AuthenticatedUser,
+    workspace_path: str = Query(..., description="工作区根路径"),
+):
+    resolved = _resolve_workspace_path(workspace_path)
+    store = RunStore(workspace_path=resolved)
+    record = await store.load_run(run_id)
+    if record is None:
         raise NotFound("run 不存在", code=40450)
-    _ensure_owner(run, user)
-    # B5: 先取消后台 task（若仍在跑），supervisor 内部 CancelledError 会把状态推到 ABORTED；
-    # 若 supervisor 未持有 task（重启后），下面 transition_status 直接落终态。
-    cancelled = await get_run_supervisor().cancel_run(run_id)
-    if cancelled:
-        # supervisor lifecycle 已把 status 推到 ABORTED，重新加载一次即可
-        updated = await store.load_run(run_id)
-        return success(_run_to_dict(updated)) if updated else success(None)
-    try:
-        updated = await store.transition_status(
-            run_id,
-            RunStatus.ABORTED,
-            payload={"reason": "user_request"},
+    _ensure_owner(record, user)
+    if record.status in TERMINAL_STATUSES:
+        raise Conflict(
+            f"run 已处于终态 {record.status}, 无法中止", code=40950,
         )
-    except ValueError as exc:
-        raise Conflict(f"无法中止当前 run: {exc}", code=40950) from exc
-    return success(_run_to_dict(updated))
 
-
-@router.post("/{run_id}/decide")
-async def decide_run(run_id: str, body: DecideIn, user: AuthenticatedUser, workspace_path: str | None = None):
-    """处理 BLOCKED run 的人工决策 (HITL)。
-
-    - ``continue`` → 把 run 状态切回 PLANNING，并由 supervisor 重新唤起
-      orchestrator 从规划开始继续执行（discovery 复用历史结果）。
-    - ``abort``    → 取消后台 task 并落 ABORTED。
-    """
-    resolved = await _resolve_workspace_for_run(run_id, workspace_path)
-    store = AdaptiveRunStore(workspace_path=resolved)
-    run = await store.load_run(run_id)
-    if run is None:
-        raise NotFound("run 不存在", code=40450)
-    _ensure_owner(run, user)
-    if run.status != RunStatus.BLOCKED:
-        raise BadRequest("当前 run 不是 BLOCKED 状态", code=40051)
-
-    if body.decision == "abort":
-        await get_run_supervisor().cancel_run(run_id)
-        try:
-            run = await store.transition_status(
-                run_id,
-                RunStatus.ABORTED,
-                payload={"decision": "abort", "notes": body.notes or ""},
-            )
-        except ValueError as exc:
-            raise Conflict(f"非法状态转换: {exc}", code=40951) from exc
-        return success(_run_to_dict(run))
-
-    # continue: 状态推到 PLANNING + 重新启动后台 task
-    try:
-        run = await store.transition_status(
-            run_id,
-            RunStatus.PLANNING,
-            payload={"decision": "continue", "notes": body.notes or ""},
+    cancelled = await get_run_supervisor().cancel(run_id)
+    # supervisor 内会 transition_status -> aborted; 重新加载
+    record = await store.load_run(run_id)
+    if not cancelled and record is not None and record.status not in TERMINAL_STATUSES:
+        # supervisor 不持有 task (例如进程重启), 直接落 aborted
+        record = await store.transition_status(
+            run_id, "aborted", payload={"reason": "user_request"},
         )
-    except ValueError as exc:
-        raise Conflict(f"非法状态转换: {exc}", code=40951) from exc
+    return success(_record_to_dict(record) if record else None)
 
-    # B5/HITL: 用持久化 options_snapshot 重建 TaskOptions，确保跨进程恢复
-    options = TaskOptions.from_dict(run.options_snapshot)
-    if not options.workspace_path:
-        # 历史 run 可能没存 workspace_path，回退到 run.workspace_path
-        options_dict = options.to_dict()
-        options_dict["workspace_path"] = run.workspace_path
-        options = TaskOptions.from_dict(options_dict)
 
-    settings = get_settings()
-    allowlist = list(getattr(getattr(settings, "task_execution", None), "tool_allowlist", []))
-    factory = build_orchestrator_factory(tool_allowlist=allowlist)
-    await get_run_supervisor().resume_run(
-        run=run,
-        options=options,
-        store=store,
-        orchestrator_factory=factory,
-    )
-    return success(_run_to_dict(run))
+__all__ = ["router"]

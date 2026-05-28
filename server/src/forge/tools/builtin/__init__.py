@@ -3,7 +3,7 @@
 import 触发各 builtin tool 的 @register_tool, 把它们注册到 ToolRegistry.
 """
 
-from .agent import delegate, spawn  # noqa: F401
+from .agent import advance_phase, exit_plan_mode, spawn  # noqa: F401
 from .artifact import create_artifact, get_artifact, search_artifact  # noqa: F401
 from .code import git_ops, grep, shell  # noqa: F401
 from .file import edit_file, glob_search, list_directory, read_file, write_file  # noqa: F401

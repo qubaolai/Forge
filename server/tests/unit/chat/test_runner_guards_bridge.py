@@ -1,8 +1,9 @@
-"""ReActRunner -> LoopGuard 桥接单测.
+"""GuardLifecycleAdapter 单测.
 
-不跑真 ReActAgent (会调 LLM); 直接验 _make_before_step_bridge 的逻辑:
-    1. 单个 guard 返回 None -> StepDecision 是空 (无注入, 无 force)
-    2. guard 返回 hint -> 注入文本, force_stop=False
+不跑真 ReActAgent (会调 LLM); 直接验 LoopGuard list -> AgentLifecycle 的
+适配逻辑:
+    1. 所有 guards 返回 None -> adapter.before_step 返回 None
+    2. guard 返回 hint -> 注入文本, force_text_only=False
     3. guard 返回 force_stop -> 注入文本 + force_text_only=True
     4. 多个 guards 全部参与, 任一 force_stop -> force_text_only=True
     5. guard 抛异常 -> 跳过, 不影响其他 guards
@@ -12,8 +13,9 @@ from __future__ import annotations
 
 import pytest
 
-from forge.agents.react.agent import StepContext
+from forge.agents.lifecycle import StepContext
 from forge.chat.guards.base import Guidance
+from forge.chat.guards.lifecycle_adapter import GuardLifecycleAdapter
 from forge.chat.guards.wall_clock import WallClockGuard
 from forge.chat.runner import ReActRunner
 from forge.workspace.runtime import WorkspaceRuntimeSettings
@@ -42,49 +44,32 @@ class _Crash:
         raise RuntimeError("boom")
 
 
-def _runner_with(guards):
-    """构造 Runner, 注入固定 guard 列表 (跳过工厂)."""
-    return ReActRunner(
-        llm_chain=object(),
-        system_prompt="",
-        guard_factories=[lambda max_steps, g=g: g for g in guards],
-    )
-
-
 def _ctx(step: int = 0) -> StepContext:
     return StepContext(step_index=step, max_steps=50, messages_count=2, last_step_tool_calls=())
 
 
 @pytest.mark.asyncio
-async def test_all_pass_returns_empty_decision() -> None:
-    runner = _runner_with([_Pass(), _Pass()])
-    # 模拟 run 流程: guards 在 run() 内被实例化, 这里手动跑 bridge
-    guards = [factory(50) for factory in runner._guard_factories]
-    bridge = runner._make_before_step_bridge(guards, run_started_at=0.0)
-
-    decision = await bridge(_ctx())
-    assert decision.inject_system_messages == []
-    assert decision.force_text_only is False
+async def test_all_pass_returns_none() -> None:
+    """全部 pass -> 返回 None (无 decision)."""
+    adapter = GuardLifecycleAdapter([_Pass(), _Pass()])
+    decision = await adapter.before_step(_ctx())
+    assert decision is None
 
 
 @pytest.mark.asyncio
 async def test_hint_injects_but_does_not_force() -> None:
-    runner = _runner_with([_Hint("提示 A")])
-    guards = [factory(50) for factory in runner._guard_factories]
-    bridge = runner._make_before_step_bridge(guards, run_started_at=0.0)
-
-    decision = await bridge(_ctx())
+    adapter = GuardLifecycleAdapter([_Hint("提示 A")])
+    decision = await adapter.before_step(_ctx())
+    assert decision is not None
     assert decision.inject_system_messages == ["提示 A"]
     assert decision.force_text_only is False
 
 
 @pytest.mark.asyncio
 async def test_force_stop_sets_text_only() -> None:
-    runner = _runner_with([_Force()])
-    guards = [factory(50) for factory in runner._guard_factories]
-    bridge = runner._make_before_step_bridge(guards, run_started_at=0.0)
-
-    decision = await bridge(_ctx())
+    adapter = GuardLifecycleAdapter([_Force()])
+    decision = await adapter.before_step(_ctx())
+    assert decision is not None
     assert decision.force_text_only is True
     assert decision.inject_system_messages == ["必须停"]
 
@@ -92,11 +77,9 @@ async def test_force_stop_sets_text_only() -> None:
 @pytest.mark.asyncio
 async def test_any_force_stop_wins() -> None:
     """即使有 hint, 只要任意 force_stop, 整步 force_text_only=True."""
-    runner = _runner_with([_Hint("提示 A"), _Force(), _Hint("提示 B")])
-    guards = [factory(50) for factory in runner._guard_factories]
-    bridge = runner._make_before_step_bridge(guards, run_started_at=0.0)
-
-    decision = await bridge(_ctx())
+    adapter = GuardLifecycleAdapter([_Hint("提示 A"), _Force(), _Hint("提示 B")])
+    decision = await adapter.before_step(_ctx())
+    assert decision is not None
     assert decision.force_text_only is True
     assert "提示 A" in decision.inject_system_messages
     assert "必须停" in decision.inject_system_messages
@@ -106,17 +89,15 @@ async def test_any_force_stop_wins() -> None:
 @pytest.mark.asyncio
 async def test_crash_isolated() -> None:
     """一个 guard 崩了, 其他照常工作."""
-    runner = _runner_with([_Crash(), _Hint("仍然给提示")])
-    guards = [factory(50) for factory in runner._guard_factories]
-    bridge = runner._make_before_step_bridge(guards, run_started_at=0.0)
-
-    decision = await bridge(_ctx())
-    # crash guard 被吞, hint 仍然生效
+    adapter = GuardLifecycleAdapter([_Crash(), _Hint("仍然给提示")])
+    decision = await adapter.before_step(_ctx())
+    assert decision is not None
     assert decision.inject_system_messages == ["仍然给提示"]
     assert decision.force_text_only is False
 
 
 def test_default_guards_read_workspace_wall_clock(monkeypatch) -> None:
+    """Runner._build_guard_factories 应从 workspace settings 读 wall_clock 配置."""
     monkeypatch.setattr(
         "forge.chat.runner.resolve_runtime_settings",
         lambda: WorkspaceRuntimeSettings(

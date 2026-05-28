@@ -133,43 +133,96 @@ observability:
     langfuse_secret_key: ${LANGFUSE_SECRET_KEY:}
     langfuse_host: ${LANGFUSE_HOST:https://cloud.langfuse.com}
 
-task_execution:
-  # 纯聊天只开放无文件系统/命令副作用的工具；工程文件操作走 adaptive。
-  chat_tool_allowlist:
-  - knowledge_search
-  - time_tool
-
-  tool_allowlist:
-  - read_file
-  - write_file
-  - edit_file
-  - list_directory
-  - glob_search
-  - grep
-  - shell
-  - git_ops
-  - http_request
-  - run_tests
-  - knowledge_search
-  - time_tool
-
+# agent_profiles: 所有 agent_mode 的统一治理 (chat / plan_exec / workflow / ...)
+agent_profiles:
   model_profiles:
     fast: ${FAST_MODEL:dashscope:qwen-plus}
     smart: ${SMART_MODEL:dashscope:qwen-plus}
     strong: ${STRONG_MODEL:dashscope:qwen3-max-preview}
-  planner_model_profile: smart
-  discovery_model_profile: fast
 
-  hard_caps:
-    max_agents: 8
-    max_steps_per_task: 50
-    max_replans: 3
-    max_task_retries: 2
-    max_run_duration_sec: 3600
+  profiles:
+    chat:
+      description: "Web 端对话模式: 只读工具, 不可派子任务, 无 Plan Mode"
+      system_prompt_template: profiles/chat
+      tools_allowed:
+        - knowledge_search
+        - time_tool
+      readonly_tools: []
+      sub_agents_allowed: []
+      plan_mode_initial: false
+      max_steps: 50
+      persistence: chat_db
+      model_profile: smart
 
-  default_options:
-    allow_write: true
-    allow_parallel: true
-    max_agents: 4
-    writer_mode: isolated_worktree
-    verifier_cmd: null
+    plan_exec:
+      description: "CLI 任务模式 (Claude Code 风格 Plan-Exec): Plan 阶段只读 + exit_plan_mode, 批准后解锁写工具"
+      system_prompt_template: profiles/plan_exec
+      tools_allowed:
+        - read_file
+        - list_directory
+        - glob_search
+        - grep
+        - knowledge_search
+        - time_tool
+        - write_file
+        - edit_file
+        - shell
+        - git_ops
+        - http_request
+        - exit_plan_mode
+        - create_artifact
+        - get_artifact
+        - search_artifact
+        - spawn_subagent
+      readonly_tools:
+        - read_file
+        - list_directory
+        - glob_search
+        - grep
+        - knowledge_search
+        - time_tool
+        - get_artifact
+        - search_artifact
+        - exit_plan_mode
+      sub_agents_allowed:
+        - developer
+        - architect
+        - reviewer
+        - qa
+      plan_mode_initial: true
+      max_steps: 80
+      persistence: run_store
+      model_profile: smart
+      large_artifact_threshold_bytes: 8192
+
+    workflow:
+      description: "CLI 工作流模式: YAML 模板驱动 phase 流水线, 命中 gate 走 HITL"
+      system_prompt_template: profiles/workflow
+      tools_allowed:
+        - read_file
+        - write_file
+        - edit_file
+        - list_directory
+        - glob_search
+        - grep
+        - shell
+        - knowledge_search
+        - time_tool
+        - advance_phase
+        - create_artifact
+        - get_artifact
+        - search_artifact
+        - spawn_subagent
+      readonly_tools: []
+      sub_agents_allowed:
+        - developer
+        - architect
+        - reviewer
+        - qa
+        - devops
+      plan_mode_initial: false
+      max_steps: 100
+      persistence: run_store
+      requires_template: true
+      model_profile: smart
+      large_artifact_threshold_bytes: 8192

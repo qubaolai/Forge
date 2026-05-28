@@ -29,7 +29,7 @@ from forge.llm.providers.base import ChatMessage
 logger = logging.getLogger(__name__)
 
 # 当前只支持 react 模式，后续 CLI plan 模式通过 runner 注册表扩展
-_DEFAULT_MODE = "react"
+_DEFAULT_MODE = "chat"
 _DEFAULT_CONTEXT_WINDOW = 128_000
 
 

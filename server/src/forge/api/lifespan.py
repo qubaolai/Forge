@@ -71,6 +71,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # render() 会走兜底字符串, 主流程不致崩溃.
         logger.exception("PromptRegistry 初始化失败, render() 将走兜底文本")
 
+    # 0.2 AgentProfile 加载 + 启动校验 (硬性: 任一项不通过 -> 阻止启动)
+    #     依赖 ToolRegistry / AGENT_ROLES / PromptRegistry 都已就绪.
+    import forge.tools  # noqa: F401  触发 builtin 工具注册
+    import forge.agents.roles  # noqa: F401  确保 AGENT_ROLES 加载
+    from forge.agents.profiles import load_profiles_at_startup
+
+    load_profiles_at_startup()
+
     # 1. Database (硬性)
     from forge.infrastructure.database import database as db_module
 
@@ -263,6 +271,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:  # noqa: BLE001
         logger.exception("stale worktree 清理失败, 已忽略")
 
+    # 6. HITL DecisionRegistry 后台清理 (软: 失败仅日志, 决策路径仍可用)
+    import asyncio as _asyncio_lifespan
+    from forge.agents.hitl import get_decision_registry
+
+    decision_registry = get_decision_registry()
+    decision_cleanup_task = _asyncio_lifespan.create_task(
+        decision_registry.cleanup_loop(),
+        name="hitl-decision-cleanup",
+    )
+    app.state.decision_cleanup_task = decision_cleanup_task
+
     logger.info("服务启动完成")
 
     try:
@@ -270,6 +289,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         # ---------- 关闭 ----------
         logger.info("服务关闭中...")
+
+        # HITL 清理 task 收尾
+        try:
+            decision_cleanup_task.cancel()
+            try:
+                await decision_cleanup_task
+            except (_asyncio_lifespan.CancelledError, Exception):  # noqa: BLE001
+                pass
+        except Exception:  # noqa: BLE001
+            logger.exception("HITL cleanup task 取消失败")
+
+        # RunSupervisor 收尾: 取消所有未完成的 CLI run task
+        try:
+            from forge.agents.run_supervisor import get_run_supervisor
+            await get_run_supervisor().shutdown()
+        except Exception:  # noqa: BLE001
+            logger.exception("RunSupervisor 关闭失败")
 
         if hasattr(app.state, "llm_pool"):
             try:

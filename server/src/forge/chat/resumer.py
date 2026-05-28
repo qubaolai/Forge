@@ -180,7 +180,7 @@ class TurnResumer:
             user_msg_id=user_msg_id,
             current_user_message=resume_prompt,
             agent_id=None,
-            agent_mode="react",
+            agent_mode="chat",
             is_new_session=False,
             new_title=None,
             trace_id=trace_id,

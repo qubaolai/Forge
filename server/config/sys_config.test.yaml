@@ -156,46 +156,23 @@ observability:
     langfuse_secret_key: ""
     langfuse_host: https://cloud.langfuse.com
 
-# Forge Adaptive Task Execution
-task_execution:
-  # C10/D1: 测试环境关闭真实 LLM 接入，避免单测 / CI 强依赖外部模型。
-  enable_real_llm: false
-  # 纯聊天只开放无文件系统/命令副作用的工具；工程文件操作走 adaptive。
-  chat_tool_allowlist:
-    - knowledge_search
-    - time_tool
-  tool_allowlist:
-    - read_file
-    - write_file
-    - edit_file
-    - list_directory
-    - glob_search
-    - grep
-    - shell
-    - git_ops
-    - http_request
-    - run_tests
-    - knowledge_search
-    - time_tool
-
-  # model_profiles 必须使用 provider:model，运行时不再猜测 provider。
+# 测试环境 agent_profiles: 仅 chat profile 用于回归.
+agent_profiles:
   model_profiles:
     fast: ${FAST_MODEL:dashscope:qwen-plus}
     smart: ${SMART_MODEL:dashscope:qwen-plus}
     strong: ${STRONG_MODEL:dashscope:qwen3-max-preview}
-  planner_model_profile: smart
-  discovery_model_profile: fast
 
-  hard_caps:
-    max_agents: 8
-    max_steps_per_task: 50
-    max_replans: 3
-    max_task_retries: 2
-    max_run_duration_sec: 3600
-
-  default_options:
-    allow_write: true
-    allow_parallel: true
-    max_agents: 4
-    writer_mode: isolated_worktree
-    verifier_cmd: null
+  profiles:
+    chat:
+      description: "Web 端对话模式 (test)"
+      system_prompt_template: profiles/chat
+      tools_allowed:
+        - knowledge_search
+        - time_tool
+      readonly_tools: []
+      sub_agents_allowed: []
+      plan_mode_initial: false
+      max_steps: 50
+      persistence: chat_db
+      model_profile: smart

@@ -9,31 +9,31 @@
     3. 有 tool_calls: 执行所有工具, 把 tool 消息追加, 回到第 2 步
     4. 无 tool_calls 或步数到顶: 结束
 
-为何不实现文本解析的 ReAct:
-    - 模型经常输出格式不一致 (如 'Thought:' 没换行), 解析脆弱
-    - 现代 LLM 都原生支持 function calling, 直接用更稳
-    - 兼容 OpenAI / DeepSeek / DashScope (compat) / 后续 Anthropic
+扩展点: 通过 AgentLifecycle 协议接入. 没有 lifecycle 时行为等同纯 ReAct.
 """
 
 import asyncio
 import logging
-import threading
 import time
 from collections.abc import (
     AsyncGenerator,
     AsyncIterator,
-    Awaitable,
-    Callable,
     Iterable,
-    Iterator,
 )
-from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
 from forge.agents.base import AgentEvent, AgentResult, BaseAgent
+from forge.agents.lifecycle import (
+    AgentLifecycle,
+    RunContext,
+    RunResult,
+    StepContext,
+    StepDecision,
+    StepOutcome,
+)
 from forge.core.request_context import current_client_type
 from forge.core.types.errors import AgentMaxStepsError
-from forge.core.types.message import Message
+from forge.core.types.message import Message, ToolCall
 from forge.observability.tracing.tracer import span
 from forge.prompts import get_registry
 from forge.tools.executor import ToolExecutor, get_default_executor
@@ -41,37 +41,6 @@ from forge.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# before_step 钩子: 给上层 (chat.Runner / LoopGuard) 注入引导的轻量接口.
-# 不让 ReActAgent 知道 "LoopGuard" 概念, 只懂 "上层可以让我注入 system 消息 +
-# 强制纯文本输出". 这样 agents 层和 chat 层的耦合最小.
-# ---------------------------------------------------------------------------
-@dataclass(frozen=True)
-class StepContext:
-    """每一步 LLM 调用前传给 before_step 的快照."""
-
-    step_index: int  # 0-based
-    max_steps: int  # 配置的 safety net 上限
-    messages_count: int  # 当前 messages 列表长度
-    last_step_tool_calls: tuple = ()  # 上一步 LLM 返回的 tool_calls (空表示第一步或上步无工具)
-    accumulated_usage: dict = field(default_factory=dict)
-    # 截至本步开始 (不含本步) 累计的 token 用量, 含 prompt_tokens / completion_tokens / total_tokens.
-    # R4 TokenBudgetGuard 用
-
-
-@dataclass(frozen=True)
-class StepDecision:
-    """before_step 的返回. 默认是 "什么都不做"."""
-
-    inject_system_messages: list[str] = field(default_factory=list)
-    # 追加到 messages 末尾的 system 消息 (LLM 当作最近的引导看)
-
-    force_text_only: bool = False
-    # 这一步把 tool_choice 改为 "none", 强制 LLM 不调工具, 只输出文本
-
-
-BeforeStepHook = Callable[[StepContext], Awaitable[StepDecision]]
 
 class ToolCallingLLM(Protocol):
     """ReAct 只依赖已绑定模型配置的 tool-calling facade."""
@@ -100,11 +69,7 @@ class ToolCallingLLM(Protocol):
 
 
 def _default_system_prompt() -> str:
-    """从 PromptRegistry 加载 ReAct 默认系统提示 (prompts/react/system.j2).
-
-    懒加载避免模块导入期 import PromptRegistry, 也允许 chat 路由传入
-    自己的 system_prompt (来自 chat/default_system.j2) 完全覆盖.
-    """
+    """从 PromptRegistry 加载 ReAct 默认系统提示 (prompts/react/system.j2)."""
     return get_registry().render("react/system")
 
 
@@ -142,11 +107,11 @@ class ReActAgent(BaseAgent):
         if tools is not None:
             # 自定义工具集: 单独算 schema (不命中 ToolRegistry 缓存)
             self._tools_list = list(tools)
-            self._tool_schemas = [t.openai_schema() for t in self._tools_list]
+            self._default_tool_schemas = [t.openai_schema() for t in self._tools_list]
         else:
             # 默认全集: 走 ToolRegistry 的注册期预算缓存
             self._tools_list = ToolRegistry.get_all()
-            self._tool_schemas = ToolRegistry.openai_schemas()
+            self._default_tool_schemas = ToolRegistry.openai_schemas()
         # ToolExecutor 无可变状态, 默认复用全局单例; 测试 / 隔离场景可显式注入.
         self._executor = executor or get_default_executor()
         logger.info(
@@ -220,10 +185,6 @@ class ReActAgent(BaseAgent):
         outer.set("final", False)
         raise AgentMaxStepsError(self._max_steps)
 
-    # def _execute_tool_blocking(self, tc) -> Message:
-    #     """同步 run() 入口也统一走 aexecute()，避免异步工具被误调 run()."""
-    #     return _run_awaitable_blocking(lambda: self._executor.aexecute(tc, role=self._role))
-
     async def stream(
         self,
         user_input: str,
@@ -233,7 +194,8 @@ class ReActAgent(BaseAgent):
         session_id: str | None = None,
         abort_event: Any | None = None,
         model_options: dict[str, Any] | None = None,
-        before_step: BeforeStepHook | None = None,
+        lifecycle: AgentLifecycle | None = None,
+        run_ctx: RunContext | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """ReAct 真流式执行.
 
@@ -241,9 +203,9 @@ class ReActAgent(BaseAgent):
         tool_calls 在 finish_reason='tool_calls' 时一次性产出.
 
         Args:
-            before_step: 可选钩子, 每步 LLM 调用前被调一次. 上层 (chat.Runner)
-                用它桥接 LoopGuard, 决定是否注入 system 引导 / 强制纯文本输出.
-                ReActAgent 本身不感知 LoopGuard.
+            lifecycle: 生命周期扩展点 (mode / 持久化 / Plan Mode / HITL 都通过它接入).
+                None 表示纯 ReAct, 行为与 max_steps + 默认 tool_schemas 等价.
+            run_ctx: 传给 lifecycle.on_start 的 run 静态上下文.
         """
         messages: list[Message] = [Message(role="system", content=self._system_prompt)]
         if history:
@@ -262,9 +224,17 @@ class ReActAgent(BaseAgent):
         finish_reason = "stop"
         # 跨 step 拼接的 reasoning (DeepSeek thinking 等), 用于最终落库 / 调试
         accumulated_reasoning = ""
-        # 思考累计墙钟时间 (毫秒): 每个 step 从首个 reasoning_delta 到首个 content_delta
-        # (或该 step 结束) 的耗时. 仅统计 DeepSeek thinking / 类似机制实际产生 reasoning 的时间.
+        # 思考累计墙钟时间 (毫秒)
         accumulated_reasoning_ms = 0
+
+        # lifecycle.on_start: 在主循环前调一次
+        if lifecycle is not None:
+            try:
+                await lifecycle.on_start(run_ctx or RunContext())
+            except Exception:  # noqa: BLE001
+                logger.exception("lifecycle.on_start 失败, 主流程继续")
+
+        run_started_at = time.monotonic()
 
         try:
             with span(
@@ -273,73 +243,87 @@ class ReActAgent(BaseAgent):
                 user_input_len=len(user_input),
                 history_count=len(history or []),
             ) as outer:
-                # 上一步的 tool_calls (给 before_step 看, R4 StuckDetector 用)
-                last_step_tool_calls: tuple = ()
+                # 上一步的 tool_calls (StuckDetector / before_step 用)
+                last_step_tool_calls: tuple[ToolCall, ...] = ()
                 for _step in range(self._max_steps):
                     if abort_event and abort_event.is_set():
                         finish_reason = "aborted"
                         break
 
-                    # ★ before_step 钩子: 上层注入引导. ReActAgent 自己不知道
-                    # 为什么注入, 只负责执行 StepDecision.
-                    force_text_only = False
-                    if before_step is not None:
-                        try:
-                            decision = await before_step(
-                                StepContext(
-                                    step_index=_step,
-                                    max_steps=self._max_steps,
-                                    messages_count=len(messages),
-                                    last_step_tool_calls=last_step_tool_calls,
-                                    accumulated_usage=dict(total_usage),
-                                )
-                            )
-                        except Exception:  # noqa: BLE001
-                            logger.exception("before_step hook 失败, 本步跳过引导")
-                            decision = StepDecision()
-                        for sys_text in decision.inject_system_messages:
-                            messages.append(Message(role="system", content=sys_text))
-                            logger.info(
-                                "ReAct 注入引导 step=%d injected_len=%d force_text_only=%s",
-                                _step + 1,
-                                len(sys_text),
-                                decision.force_text_only,
-                            )
-                        force_text_only = decision.force_text_only
+                    step_ctx = StepContext(
+                        step_index=_step,
+                        max_steps=self._max_steps,
+                        messages_count=len(messages),
+                        last_step_tool_calls=last_step_tool_calls,
+                        accumulated_usage=dict(total_usage),
+                        elapsed_seconds=time.monotonic() - run_started_at,
+                    )
 
+                    # lifecycle.resolve_tools: 动态工具集核心 (Plan Mode 切 readonly/full)
+                    current_tool_schemas = self._default_tool_schemas
+                    if lifecycle is not None:
+                        try:
+                            resolved = await lifecycle.resolve_tools(step_ctx)
+                            if resolved is not None:
+                                current_tool_schemas = resolved
+                        except Exception:  # noqa: BLE001
+                            logger.exception("lifecycle.resolve_tools 失败, 用默认 schemas")
+
+                    # lifecycle.before_step: 注入引导 / 决定强制纯文本
+                    force_text_only = False
+                    if lifecycle is not None:
+                        try:
+                            decision = await lifecycle.before_step(step_ctx)
+                        except Exception:  # noqa: BLE001
+                            logger.exception("lifecycle.before_step 失败, 本步跳过引导")
+                            decision = None
+                        if decision is not None:
+                            for sys_text in decision.inject_system_messages:
+                                messages.append(Message(role="system", content=sys_text))
+                                logger.info(
+                                    "ReAct 注入引导 step=%d injected_len=%d force_text_only=%s",
+                                    _step + 1,
+                                    len(sys_text),
+                                    decision.force_text_only,
+                                )
+                            force_text_only = decision.force_text_only
+
+                    step_started_at = time.perf_counter()
                     step_content = ""
-                    step_tool_calls: list = []
+                    step_tool_calls: list[ToolCall] = []
                     step_finish: str | None = None
-                    step_usage: dict = {}
+                    step_usage: dict[str, int] = {}
                     step_reasoning = ""
-                    # 本 step 的思考起点; 首个 reasoning_delta 到达时记录,
-                    # 首个 content_delta 出现 (或 step 结束) 时累加到 accumulated_reasoning_ms 并清零
                     step_reasoning_start: float | None = None
-                    # 统一思考阶段信号: reasoning_delta 由 provider 可选产出 (仅 thinking 模型),
-                    # 首个 content_delta 或 tool_call 前发 reasoning_end 附带已用时.
                     reasoning_phase_open = False
 
                     # ---- 流式 LLM 调用（span 只覆盖推理阶段，不含工具执行）----
                     with span(
-                        "agent.react.llm_call", step=_step + 1, messages_count=len(messages)
+                        "agent.react.llm_call",
+                        step=_step + 1,
+                        messages_count=len(messages),
+                        tool_count=len(current_tool_schemas),
                     ) as llm_span:
                         try:
-                            # force_text_only -> tool_choice="none", 让 LLM 这步必须输出文本
-                            # 不能调工具. 用于 StepSafetyNet 的最后一步强制收尾.
                             _tool_choice = "none" if force_text_only else "auto"
-
                             chunk_iter = self._llm.chat_with_tools_stream(
                                 messages,
-                                self._tool_schemas,
+                                current_tool_schemas,
                                 extra_options=model_options,
                                 tool_choice=_tool_choice,
                             )
                         except Exception as e:
                             logger.exception("chat_with_tools_stream 失败")
                             llm_span.set_error(e)
-                            yield self._make_error_event(
+                            err_ev = self._make_error_event(
                                 e, accumulated_content, accumulated_tool_calls, total_usage
                             )
+                            await self._invoke_on_error(
+                                lifecycle, e,
+                                accumulated_content, accumulated_tool_calls, total_usage,
+                                accumulated_reasoning, accumulated_reasoning_ms,
+                            )
+                            yield err_ev
                             return
 
                         reasoning_phase_open = True
@@ -352,7 +336,6 @@ class ReActAgent(BaseAgent):
 
                                 delta_text = chunk.get("content_delta", "") or ""
                                 if delta_text:
-                                    # 首个 content 抵达: 先合计本 step 思考用时, 再关阶段
                                     if step_reasoning_start is not None:
                                         accumulated_reasoning_ms += int(
                                             (time.perf_counter() - step_reasoning_start) * 1000
@@ -368,7 +351,6 @@ class ReActAgent(BaseAgent):
                                     accumulated_content += delta_text
                                     yield AgentEvent("delta", {"content": delta_text})
 
-                                # reasoning 增量 (provider 可选, 仅 thinking 模式产生)
                                 reasoning_delta = chunk.get("reasoning_delta") or ""
                                 if reasoning_delta:
                                     if step_reasoning_start is None:
@@ -400,23 +382,27 @@ class ReActAgent(BaseAgent):
                                     {"reasoning_duration_ms": accumulated_reasoning_ms},
                                 )
                                 reasoning_phase_open = False
-                            yield self._make_error_event(
+                            err_ev = self._make_error_event(
                                 e, accumulated_content, accumulated_tool_calls, total_usage
                             )
+                            await self._invoke_on_error(
+                                lifecycle, e,
+                                accumulated_content, accumulated_tool_calls, total_usage,
+                                accumulated_reasoning, accumulated_reasoning_ms,
+                            )
+                            yield err_ev
                             return
 
-                        # 本 step 结束时若计时器还开着 (整步只有 reasoning 没 content) 也累加
+                        # 本 step 结束时计时器收尾
                         if step_reasoning_start is not None:
                             accumulated_reasoning_ms += int(
                                 (time.perf_counter() - step_reasoning_start) * 1000
                             )
                             step_reasoning_start = None
-
-                        # 本 step 流式结束后若思考阶段还开着, 在 tool_call / abort / 空响应
-                        # 之前关闭, 保证前端能切回"普通"渲染状态.
                         if reasoning_phase_open:
                             yield AgentEvent(
-                                "reasoning_end", {"reasoning_duration_ms": accumulated_reasoning_ms}
+                                "reasoning_end",
+                                {"reasoning_duration_ms": accumulated_reasoning_ms},
                             )
                             reasoning_phase_open = False
 
@@ -447,11 +433,14 @@ class ReActAgent(BaseAgent):
                     # ---- 没有 tool_calls: 终态, 已经流完所有 delta ----
                     if not step_tool_calls:
                         finish_reason = step_finish or "stop"
+                        # 调 after_step (这步无工具调用, outcome.tool_calls 空)
+                        await self._invoke_after_step(
+                            lifecycle, step_ctx, _step, step_content,
+                            [], step_usage, finish_reason, step_started_at,
+                        )
                         break
 
-                    # ---- 有 tool_calls: 把 assistant 消息加上, 顺序执行工具 ----
-                    # reasoning_content 写到 Message, 下一轮请求时 DeepSeek 的
-                    # _messages_payload 会回灌, 不写会 400
+                    # ---- 有 tool_calls: 把 assistant 消息加上, 执行工具 ----
                     messages.append(
                         Message(
                             role="assistant",
@@ -461,8 +450,7 @@ class ReActAgent(BaseAgent):
                         )
                     )
 
-                    # 阶段 1: 先把所有 tool_call 事件按 LLM 给的顺序 yield 出去,
-                    # 同时往 accumulated_tool_calls 注册占位 (status=running).
+                    # 阶段 1: 先把所有 tool_call 事件按 LLM 给的顺序 yield 出去
                     for tc in step_tool_calls:
                         tc_record = {
                             "id": tc.id,
@@ -474,10 +462,7 @@ class ReActAgent(BaseAgent):
                         accumulated_tool_calls.append(tc_record)
                         yield AgentEvent("tool_call", {"tool_call": tc_record})
 
-                    # 阶段 2: 执行. 连续的 parallelism_safe 工具组合并并行执行,
-                    # 遇到 unsafe 先排干当前并行批次再串行执行 unsafe.
-                    # 这样保证: 全是 safe -> 全并行; 全是 unsafe -> 全串行;
-                    # 混合 -> 保留 LLM 顺序的同时, 安全块仍能并行加速.
+                    # 阶段 2: 执行 (含 lifecycle.before_tool_call 拦截 + on_tool_result 替换)
                     results_by_id: dict[str, Message] = {}
                     i = 0
                     while i < len(step_tool_calls):
@@ -491,16 +476,17 @@ class ReActAgent(BaseAgent):
                                 j += 1
                             batch = step_tool_calls[i:j]
                             if len(batch) == 1:
-                                # 单条 safe, 直接跑 (没必要 gather)
                                 async for ev in self._execute_one_yield(
-                                    batch[0], _step, accumulated_tool_calls, results_by_id
+                                    batch[0], _step, accumulated_tool_calls, results_by_id,
+                                    lifecycle, step_ctx,
                                 ):
                                     yield ev
                             else:
-                                # 多条 safe -> 并行, 用 as_completed 让 tool_result
-                                # 谁先跑完谁先 yield (用户体验更好).
+                                # 多条 safe -> 并行
                                 tasks = [
-                                    asyncio.create_task(self._execute_one(tc, _step))
+                                    asyncio.create_task(
+                                        self._execute_with_lifecycle(tc, _step, lifecycle, step_ctx)
+                                    )
                                     for tc in batch
                                 ]
                                 for fut in asyncio.as_completed(tasks):
@@ -519,27 +505,52 @@ class ReActAgent(BaseAgent):
                                     )
                             i = j
                         else:
-                            # 单条 unsafe, 串行执行
                             async for ev in self._execute_one_yield(
-                                cur, _step, accumulated_tool_calls, results_by_id
+                                cur, _step, accumulated_tool_calls, results_by_id,
+                                lifecycle, step_ctx,
                             ):
                                 yield ev
                             i += 1
 
                     # 阶段 3: 把 tool 消息按 LLM 原始顺序追加到 messages
-                    # (OpenAI 期望 tool 消息和 assistant.tool_calls 顺序对齐).
                     for tc in step_tool_calls:
                         messages.append(results_by_id[tc.id])
 
-                    # 记录本步 tool_calls 给下一步的 before_step 钩子用
+                    # 记录本步 tool_calls 给下一步 lifecycle.before_step 用
                     last_step_tool_calls = tuple(step_tool_calls)
+
+                    # 调 after_step
+                    await self._invoke_after_step(
+                        lifecycle, step_ctx, _step, step_content,
+                        step_tool_calls, step_usage, step_finish or "tool_calls",
+                        step_started_at,
+                    )
                 else:
                     finish_reason = "length"
 
-                # 顶层span记录整体结果
+                # 顶层 span 记录整体结果
                 outer.set("total_steps", _step + 1)
                 outer.set("finish_reason", finish_reason)
                 outer.set("total_tokens", total_usage.get("total_tokens", 0))
+
+            # lifecycle.on_complete
+            if lifecycle is not None:
+                final_result = RunResult(
+                    finish_reason=finish_reason,
+                    content=accumulated_content,
+                    tool_calls=list(accumulated_tool_calls),
+                    reasoning_content=accumulated_reasoning or None,
+                    reasoning_duration_ms=accumulated_reasoning_ms or None,
+                    usage={
+                        "prompt_tokens": total_usage.get("prompt_tokens", 0),
+                        "completion_tokens": total_usage.get("completion_tokens", 0),
+                        "total_tokens": total_usage.get("total_tokens", 0),
+                    },
+                )
+                try:
+                    await lifecycle.on_complete(final_result)
+                except Exception:  # noqa: BLE001
+                    logger.exception("lifecycle.on_complete 失败")
 
             yield AgentEvent(
                 "done",
@@ -560,6 +571,11 @@ class ReActAgent(BaseAgent):
             raise
         except Exception as e:  # noqa: BLE001
             logger.exception("ReAct stream 异常")
+            await self._invoke_on_error(
+                lifecycle, e,
+                accumulated_content, accumulated_tool_calls, total_usage,
+                accumulated_reasoning, accumulated_reasoning_ms,
+            )
             yield self._make_error_event(
                 e, accumulated_content, accumulated_tool_calls, total_usage
             )
@@ -576,10 +592,35 @@ class ReActAgent(BaseAgent):
             yield cast(dict[str, Any], value)
 
     # ------------------------------------------------------------------
-    # 工具执行辅助 (R7 并行支持)
+    # 工具执行辅助 (含 lifecycle.before_tool_call / on_tool_result)
     # ------------------------------------------------------------------
-    async def _execute_one(self, tc, step_idx: int) -> tuple[Any, Message, str, str]:
-        """跑一个工具, 返回 (tc, tool_msg, status, result_str). 不 yield."""
+    async def _execute_with_lifecycle(
+        self,
+        tc: ToolCall,
+        step_idx: int,
+        lifecycle: AgentLifecycle | None,
+        step_ctx: StepContext,
+    ) -> tuple[ToolCall, Message, str, str]:
+        """跑一个工具, 经过 lifecycle 拦截 + 结果替换. 不 yield."""
+        # 1. before_tool_call 拦截
+        if lifecycle is not None:
+            try:
+                veto = await lifecycle.before_tool_call(tc, step_ctx)
+            except Exception:  # noqa: BLE001
+                logger.exception("lifecycle.before_tool_call 失败, 默认放行")
+                veto = None
+            if veto is not None and veto.blocked:
+                msg = veto.replacement_message or Message(
+                    role="tool",
+                    content=f"[blocked] {veto.reason or '工具调用被拦截'}",
+                    tool_call_id=tc.id,
+                    name=tc.name,
+                )
+                # 拦截后仍要走 on_tool_result 让持久化层有机会处理
+                msg = await self._maybe_replace_msg(lifecycle, tc, msg)
+                return tc, msg, "blocked", msg.content
+
+        # 2. 真实执行
         _tool_start = time.perf_counter()
         with span("agent.react.tool", tool=tc.name, step=step_idx + 1) as ts:
             try:
@@ -600,17 +641,39 @@ class ReActAgent(BaseAgent):
                 status = "error"
                 result_str = str(e)
             ts.set("duration_ms", round((time.perf_counter() - _tool_start) * 1000, 1))
-        return tc, tool_msg, status, result_str
+
+        # 3. on_tool_result 替换 (持久化层把大产物落 artifact 回灌占位)
+        tool_msg = await self._maybe_replace_msg(lifecycle, tc, tool_msg)
+        return tc, tool_msg, status, tool_msg.content
+
+    @staticmethod
+    async def _maybe_replace_msg(
+        lifecycle: AgentLifecycle | None,
+        tc: ToolCall,
+        msg: Message,
+    ) -> Message:
+        if lifecycle is None:
+            return msg
+        try:
+            replaced = await lifecycle.on_tool_result(tc, msg)
+        except Exception:  # noqa: BLE001
+            logger.exception("lifecycle.on_tool_result 失败")
+            return msg
+        return replaced if replaced is not None else msg
 
     async def _execute_one_yield(
         self,
-        tc,
+        tc: ToolCall,
         step_idx: int,
         accumulated_tool_calls: list[dict],
         results_by_id: dict[str, Message],
+        lifecycle: AgentLifecycle | None,
+        step_ctx: StepContext,
     ) -> AsyncIterator[AgentEvent]:
         """跑一个工具, 把 tool_result event yield 出来, 顺便 update 累计列表."""
-        tc, tool_msg, status, result_str = await self._execute_one(tc, step_idx)
+        tc, tool_msg, status, result_str = await self._execute_with_lifecycle(
+            tc, step_idx, lifecycle, step_ctx
+        )
         results_by_id[tc.id] = tool_msg
         _update_record(accumulated_tool_calls, tc.id, status, result_str)
         yield AgentEvent(
@@ -621,6 +684,65 @@ class ReActAgent(BaseAgent):
                 "status": status,
             },
         )
+
+    # ------------------------------------------------------------------
+    # lifecycle 辅助
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def _invoke_after_step(
+        lifecycle: AgentLifecycle | None,
+        step_ctx: StepContext,
+        step_index: int,
+        step_content: str,
+        step_tool_calls: list[ToolCall],
+        step_usage: dict[str, int],
+        finish_reason: str,
+        step_started_at: float,
+    ) -> None:
+        if lifecycle is None:
+            return
+        outcome = StepOutcome(
+            step_index=step_index,
+            content=step_content,
+            tool_calls=list(step_tool_calls),
+            usage=dict(step_usage),
+            finish_reason=finish_reason,
+            duration_ms=(time.perf_counter() - step_started_at) * 1000,
+        )
+        try:
+            await lifecycle.after_step(step_ctx, outcome)
+        except Exception:  # noqa: BLE001
+            logger.exception("lifecycle.after_step 失败")
+
+    @staticmethod
+    async def _invoke_on_error(
+        lifecycle: AgentLifecycle | None,
+        exc: BaseException,
+        content: str,
+        tool_calls: list[dict],
+        usage: dict[str, int],
+        reasoning_content: str,
+        reasoning_duration_ms: int,
+    ) -> None:
+        if lifecycle is None:
+            return
+        partial = RunResult(
+            finish_reason="error",
+            content=content,
+            tool_calls=list(tool_calls),
+            reasoning_content=reasoning_content or None,
+            reasoning_duration_ms=reasoning_duration_ms or None,
+            usage={
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "completion_tokens": usage.get("completion_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
+            },
+            error_message=str(exc),
+        )
+        try:
+            await lifecycle.on_error(exc, partial)
+        except Exception:  # noqa: BLE001
+            logger.exception("lifecycle.on_error 失败")
 
     @staticmethod
     def _make_error_event(
@@ -651,7 +773,7 @@ class ReActAgent(BaseAgent):
 
         优先走整条 fallback 链 (带 retry + 成本记账); 拿不到链才退化到单 LLM.
         """
-        return await self._llm.chat_with_tools(messages, self._tool_schemas)
+        return await self._llm.chat_with_tools(messages, self._default_tool_schemas)
 
     @staticmethod
     def _merge_usage(total: dict[str, int], delta: dict) -> None:

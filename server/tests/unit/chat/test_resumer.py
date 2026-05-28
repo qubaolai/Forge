@@ -194,7 +194,7 @@ async def test_resume_happy_path_marks_streaming_and_returns_state() -> None:
     # current_user_message 由模板渲染, 应当包含核心引导短语
     assert "继续完成回答" in ctx.current_user_message
     assert "不要重复" in ctx.current_user_message
-    assert ctx.agent_mode == "react"
+    assert ctx.agent_mode == "chat"
     assert ctx.is_new_session is False
     assert ctx.exclude_message_ids == ()
 

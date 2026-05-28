@@ -14,6 +14,7 @@ from forge.api.routes.v1 import (
     artifacts,
     auth,
     chat,
+    decisions,
     knowledge_bases,
     models,
     providers,
@@ -40,6 +41,7 @@ v1.include_router(knowledge_bases.router)
 v1.include_router(models.router, tags=["models"])
 v1.include_router(providers.router, tags=["providers"])
 v1.include_router(admin.router)
+v1.include_router(decisions.router)
 
 
 @v1.get("/tools", tags=["tools"])

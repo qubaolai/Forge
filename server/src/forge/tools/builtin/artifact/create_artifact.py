@@ -1,4 +1,7 @@
-"""create_artifact 工具."""
+"""create_artifact 工具 (基于通用 RunStore).
+
+将子 agent 产物落盘为 artifact, 供下游 step / agent 读取.
+"""
 
 from __future__ import annotations
 
@@ -6,85 +9,110 @@ from pathlib import Path
 from typing import Any
 
 from forge.core.types.errors import ToolValidationError
-from forge.orchestration.workflow.artifact import Artifact, ArtifactType
-from forge.orchestration.workflow.artifact_store import ArtifactStore
+from forge.infrastructure.run_store import RunStore
+from forge.infrastructure.run_store_models import Artifact
 from forge.tools.base import Tool
 from forge.tools.registry import register_tool
 from forge.utils.id_generator import new_id
+
+
+_ALLOWED_KINDS: tuple[str, ...] = (
+    "report",
+    "patch_set",
+    "tool_output",
+    "plan",
+    "summary",
+    "memo",
+    "other",
+)
 
 
 @register_tool
 class CreateArtifact(Tool):
     name = "create_artifact"
     description = (
-        "创建一个 workflow artifact 并落盘. 需要 workflow_id, 返回 artifact_id 供后续引用."
+        "在当前 run 下创建一个 artifact (Agent 间通信介质). "
+        "传入 run_id + kind + title + payload, 返回 artifact_id 供下游引用."
     )
     parameters: dict[str, Any] = {
         "type": "object",
         "properties": {
-            "workflow_id": {"type": "string", "description": "目标 workflow_id"},
-            "phase_id": {"type": "string", "description": "所属 phase_id, 默认 manual"},
-            "created_by_role": {"type": "string", "description": "创建角色, 默认 local"},
-            "type": {
+            "run_id": {"type": "string", "description": "归属的 RunRecord.run_id"},
+            "kind": {
                 "type": "string",
-                "enum": [t.value for t in ArtifactType],
-                "description": "artifact 类型",
+                "description": f"artifact 类型, 推荐取值: {', '.join(_ALLOWED_KINDS)}",
             },
             "title": {"type": "string", "description": "artifact 标题"},
-            "summary": {"type": "string", "description": "artifact 摘要"},
-            "payload": {"type": "object", "description": "artifact 完整结构化内容"},
-            "workspace_root": {
+            "summary": {"type": "string", "description": "artifact 摘要 (≤ 200 字)"},
+            "payload": {
+                "type": "object",
+                "description": "artifact 完整结构化内容",
+            },
+            "task_id": {
                 "type": "string",
-                "description": "可选. 指定 workspace 根路径, 不传则自动按 workflow_id 查找",
+                "description": "(可选) 关联的 phase / step id",
+            },
+            "workspace_path": {
+                "type": "string",
+                "description": "RunStore 根路径 (默认当前 cwd)",
             },
         },
-        "required": ["type", "title", "summary", "payload"],
+        "required": ["run_id", "kind", "title", "payload"],
     }
     required_scope = "workspace"
 
     async def arun(self, args: dict[str, Any]) -> dict[str, Any]:
-        workflow_id = str(args.get("workflow_id") or "").strip()
-        if not workflow_id:
-            raise ToolValidationError(self.name, "缺少 workflow_id")
-
-        type_raw = str(args.get("type") or "").strip().lower()
-        try:
-            artifact_type = ArtifactType(type_raw)
-        except ValueError as exc:
-            raise ToolValidationError(self.name, f"未知 artifact type: {type_raw}") from exc
-
+        run_id = str(args.get("run_id") or "").strip()
+        if not run_id:
+            raise ToolValidationError(self.name, "缺少 run_id")
+        kind = str(args.get("kind") or "").strip()
+        if not kind:
+            raise ToolValidationError(self.name, "缺少 kind")
         title = str(args.get("title") or "").strip()
-        summary = str(args.get("summary") or "").strip()
+        if not title:
+            raise ToolValidationError(self.name, "缺少 title")
         payload = args.get("payload")
         if not isinstance(payload, dict):
             raise ToolValidationError(self.name, "payload 必须是 object")
 
-        artifact = Artifact(
-            id=new_id("art"),
-            workflow_id=workflow_id,
-            phase_id=str(args.get("phase_id") or "manual"),
-            type=artifact_type,
-            title=title,
-            summary=summary,
-            payload=payload,
-            created_by_role=str(args.get("created_by_role") or "local"),
-        )
-        store = ArtifactStore()
-        workspace_root_raw = args.get("workspace_root")
-        if isinstance(workspace_root_raw, str) and workspace_root_raw.strip():
-            await store.save(
-                artifact,
-                workspace_root=Path(workspace_root_raw).expanduser().resolve(),
+        workspace_path = args.get("workspace_path")
+        store = RunStore(
+            workspace_path=(
+                Path(workspace_path).expanduser().resolve()
+                if isinstance(workspace_path, str) and workspace_path.strip()
+                else None
             )
-        else:
-            await store.save(artifact)
-
+        )
+        artifact = Artifact(
+            artifact_id=new_id("art"),
+            run_id=run_id,
+            kind=kind,
+            payload=payload,
+            task_id=(
+                str(args["task_id"])
+                if args.get("task_id") is not None
+                else None
+            ),
+            metadata={
+                "title": title,
+                "summary": str(args.get("summary") or "")[:200],
+            },
+        )
+        await store.save_artifact(artifact)
+        await store.append_event(
+            run_id,
+            "artifact_created",
+            {
+                "artifact_id": artifact.artifact_id,
+                "kind": kind,
+                "task_id": artifact.task_id,
+                "title": title,
+            },
+        )
         return {
             "ok": True,
-            "artifact_id": artifact.id,
-            "workflow_id": artifact.workflow_id,
-            "phase_id": artifact.phase_id,
-            "type": artifact.type.value,
-            "title": artifact.title,
-            "summary": artifact.summary,
+            "artifact_id": artifact.artifact_id,
+            "run_id": run_id,
+            "kind": kind,
+            "title": title,
         }

@@ -2,39 +2,38 @@
 
 AgentRunner = 一次 turn 内, 真正跑 agent 循环并产事件的角色.
 
-为什么单独一层 (而不是直接用 ReActAgent.stream):
-    1. LoopGuard 接入点: Runner 桥接 LoopGuard 到 ReActAgent 的 before_step 钩子,
-       agents 层不感知 LoopGuard.
-    2. 累计结果统一打包成 RunResult: Finalizer 不关心 Runner 内部细节.
+ReActRunner 的职责:
+    1. 用 GuardLifecycleAdapter 把 LoopGuard 链接入 AgentLifecycle 协议
+    2. 跑 ReActAgent.stream, 透传事件
+    3. 累计 RunResult 给 Finalizer 用
+
+未来加入 plan_exec / workflow mode 时, 通过 ReActRunner.from_profile 装配
+不同的 lifecycle 数组 (Plan Mode / 持久化 / Workflow gate), 无需新 Runner 类.
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import logging
-import time
 from collections.abc import AsyncIterator, Callable, Iterable
 from typing import Protocol
 
 from forge.agents.base import AgentEvent
-from forge.agents.react.agent import (
-    ReActAgent,
-    StepContext,
-    StepDecision,
-)
+from forge.agents.lifecycle import AgentLifecycle, MultiLifecycle, RunContext
+from forge.agents.react.agent import ReActAgent
 from forge.chat.guards import (
+    GuardLifecycleAdapter,
     LoopGuard,
-    LoopState,
     StepSafetyNet,
     StuckDetector,
     TokenBudgetGuard,
     WallClockGuard,
 )
 from forge.chat.types import RunResult, TurnContext
+from forge.config.domains.agent_profiles import AgentProfile
 from forge.core.types.message import Message
 from forge.tools.base import Tool
+from forge.tools.registry import ToolRegistry
 from forge.workspace.runtime import (
     WorkspaceRuntimeSettings,
     resolve_runtime_settings,
@@ -42,19 +41,14 @@ from forge.workspace.runtime import (
 
 logger = logging.getLogger(__name__)
 
-# Safety net: max_steps 不再是业务约束, 是兜底上限.
-# 配合 StepSafetyNet 在最后几步引导收尾, 真到 50 时模型已经被 force_text_only.
+# Safety net: max_steps 不是业务约束, 是兜底上限.
 DEFAULT_MAX_STEPS = 50
 
-# 默认 guard 工厂列表. 每个 turn 新建一组实例 (避免跨 turn 状态污染).
 GuardFactory = Callable[[int], LoopGuard]
 
 
 def _default_guard_factories(runtime: WorkspaceRuntimeSettings) -> list[GuardFactory]:
-    """所有默认 guards. 每个 turn 创建一组新实例.
-
-    顺序无关紧要 (任一 force_stop 都生效).
-    """
+    """所有默认 guards. 每个 turn 创建一组新实例 (避免跨 turn 状态污染)."""
     return [
         lambda max_steps: StepSafetyNet(),
         lambda max_steps: StuckDetector(),
@@ -68,12 +62,7 @@ def _default_guard_factories(runtime: WorkspaceRuntimeSettings) -> list[GuardFac
 
 
 class AgentRunner(Protocol):
-    """所有 agent mode 的统一执行接口.
-
-    实现方约定:
-        - run() yields AgentEvent (跟 ReActAgent.stream 一致, Orchestrator 直接吐 SSE)
-        - 跑完后 self.result 必须有值, Finalizer 据此写 DB / 发终态事件
-    """
+    """所有 agent mode 的统一执行接口."""
 
     result: RunResult
 
@@ -86,7 +75,7 @@ class AgentRunner(Protocol):
 
 
 class ReActRunner(AgentRunner):
-    """包装 ReActAgent.stream + 桥接 LoopGuard."""
+    """ReActAgent.stream 的包装, 用 lifecycle 接入 LoopGuard."""
 
     def __init__(
         self,
@@ -95,6 +84,7 @@ class ReActRunner(AgentRunner):
         *,
         max_steps: int = DEFAULT_MAX_STEPS,
         guard_factories: list[GuardFactory] | None = None,
+        extra_lifecycles: list[AgentLifecycle] | None = None,
         role: str = "local",
         tools: Iterable[Tool] | None = None,
     ) -> None:
@@ -102,9 +92,9 @@ class ReActRunner(AgentRunner):
         self._system_prompt = system_prompt
         self._max_steps = max_steps
         self._guard_factories = guard_factories
+        self._extra_lifecycles = list(extra_lifecycles or [])
         self._role = role
         self._tools = list(tools) if tools is not None else None
-        # run() 完成后 finalize 阶段读
         self.result: RunResult = RunResult()
 
     async def run(
@@ -114,12 +104,22 @@ class ReActRunner(AgentRunner):
         abort_event: asyncio.Event,
     ) -> AsyncIterator[AgentEvent]:
         """跑 ReAct stream, 透传事件, 同时累计 RunResult."""
-        # 每个 turn 创建一组新 guard 实例 (避免跨 turn 状态污染, 例如 StuckDetector 的 deque)
+        # 装配 lifecycle: GuardLifecycleAdapter 一定有; extra_lifecycles 由
+        # 上层 (后续 Profile 体系) 追加 Plan Mode / 持久化 / Workflow 等.
         guards: list[LoopGuard] = [
             factory(self._max_steps) for factory in self._build_guard_factories()
         ]
-        run_started_at = time.monotonic()
-        before_step = self._make_before_step_bridge(guards, run_started_at)
+        lifecycles: list[AgentLifecycle] = [GuardLifecycleAdapter(guards)]
+        lifecycles.extend(self._extra_lifecycles)
+        lifecycle = MultiLifecycle(lifecycles)
+
+        run_ctx = RunContext(
+            run_id=None,  # chat 路径不通过 RunStore, 此处保持 None
+            mode=ctx.agent_mode,
+            user_id=ctx.user_id,
+            session_id=ctx.session_id,
+            metadata={"trace_id": ctx.trace_id},
+        )
 
         agent = ReActAgent(
             self._llm,
@@ -131,17 +131,18 @@ class ReActRunner(AgentRunner):
 
         # messages 里包含 system + history + current_user, ReActAgent 自己会再加 system.
         # 把 system 和 current_user 切掉, 只留 history.
-        # message_id / session_id 故意不传 -- message_start 由 Orchestrator 先发, 避免重复.
         history = messages[1:-1] if len(messages) >= 2 else []
         assembled_user_msg = (
             messages[-1].content if len(messages) >= 1 else ctx.current_user_message
         )
+
         async for event in agent.stream(
             assembled_user_msg,
             history=history,
             abort_event=abort_event,
             model_options=ctx.model_options,
-            before_step=before_step,
+            lifecycle=lifecycle,
+            run_ctx=run_ctx,
         ):
             event_dict = event.to_dict()
 
@@ -159,8 +160,6 @@ class ReActRunner(AgentRunner):
                 return
 
             if event.type == "error":
-                # error 不下发, Finalizer 走 error 分支输出统一格式 (跟原 _stream_chat 行为对齐:
-                # 原代码: 收到 error -> 更新 DB -> yield error event -> return)
                 self.result.error_message = event_dict.get("message", "")
                 self.result.content = event_dict.get("content", "") or ""
                 self.result.tool_calls = event_dict.get("tool_calls", None) or []
@@ -168,7 +167,6 @@ class ReActRunner(AgentRunner):
                 self.result.finish_reason = "error"
                 return
 
-            # 中间事件 (delta / tool_call / tool_result / reasoning_delta / reasoning_end ...) 直接透传
             yield event
 
     def _build_guard_factories(self) -> list[GuardFactory]:
@@ -178,99 +176,39 @@ class ReActRunner(AgentRunner):
         return _default_guard_factories(runtime)
 
     # ------------------------------------------------------------------
-    # before_step 桥接: ReActAgent 的钩子 -> LoopGuard 链
+    # Profile 驱动的工厂方法 (mode 路由的唯一入口)
     # ------------------------------------------------------------------
-    def _make_before_step_bridge(self, guards: list[LoopGuard], run_started_at: float):
-        """返回一个 async 函数, 闭包持 guards + 计时引用.
+    @classmethod
+    def from_profile(
+        cls,
+        llm_chain,
+        profile: AgentProfile,
+        *,
+        system_prompt: str,
+        extra_lifecycles: list[AgentLifecycle] | None = None,
+        role: str = "local",
+    ) -> ReActRunner:
+        """按 Profile 装配 Runner.
 
-        ReActAgent.stream 调它时传 StepContext, 这里:
-            1. 构造 LoopState (含 elapsed_seconds / accumulated_tokens)
-            2. 逐 guard.before_step
-            3. 合并 guidance + 决定 force_text_only
-            4. 返回 StepDecision
+        - tools_allowed → 从 ToolRegistry 过滤实际 Tool 实例
+        - max_steps → 兜底上限
+        - extra_lifecycles → 调用方按需追加 Plan Mode / 持久化 / Workflow 等
+          (阶段 5/6/7 会在 Runner 外部装配, 这里不内置)
         """
-
-        async def bridge(step_ctx: StepContext) -> StepDecision:
-            # 抽出上一步第一个 tool_call 的特征 (StuckDetector 用)
-            last_name: str | None = None
-            last_args_hash: str | None = None
-            if step_ctx.last_step_tool_calls:
-                first = step_ctx.last_step_tool_calls[0]
-                last_name = getattr(first, "name", None)
-                args = getattr(first, "arguments", None)
-                last_args_hash = _hash_args(args)
-
-            state = LoopState(
-                step_index=step_ctx.step_index,
-                max_steps=step_ctx.max_steps,
-                last_tool_name=last_name,
-                last_tool_args_hash=last_args_hash,
-                last_step_tool_calls=step_ctx.last_step_tool_calls,
-                accumulated_tokens=int(step_ctx.accumulated_usage.get("total_tokens", 0) or 0),
-                elapsed_seconds=time.monotonic() - run_started_at,
+        tools = tuple(
+            t for t in ToolRegistry.get_all() if t.name in set(profile.tools_allowed)
+        )
+        missing = sorted(set(profile.tools_allowed) - {t.name for t in tools})
+        if missing:
+            # 启动期已校验, 运行期不该再出现; 这里 warn 防御
+            logger.warning(
+                "profile.tools_allowed 含未注册工具 (启动校验应已拦截): %s", missing
             )
-
-            inject: list[str] = []
-            force_stop = False
-            for g in guards:
-                try:
-                    guidance = await g.before_step(state)
-                except Exception:  # noqa: BLE001
-                    logger.exception("guard %s 失败, 跳过", type(g).__name__)
-                    continue
-                if guidance is None:
-                    continue
-                inject.append(guidance.content)
-                if guidance.severity == "force_stop":
-                    force_stop = True
-
-            return StepDecision(
-                inject_system_messages=inject,
-                force_text_only=force_stop,
-            )
-
-        return bridge
-
-
-def _hash_args(args) -> str | None:
-    """对 tool args 做 canonical JSON 哈希, 给 StuckDetector 比对用."""
-    if args is None:
-        return None
-    try:
-        canonical = json.dumps(args, sort_keys=True, ensure_ascii=False)
-    except (TypeError, ValueError):
-        canonical = str(args)
-    return hashlib.md5(canonical.encode("utf-8")).hexdigest()
-
-
-# ---------------------------------------------------------------------------
-# Runner 注册表: agent.mode -> AgentRunner 实现类
-# ---------------------------------------------------------------------------
-_RUNNER_REGISTRY: dict[str, type[AgentRunner]] = {}
-
-
-def register_runner(mode: str):
-    """类装饰器: 把 AgentRunner 实现登记到 mode 注册表."""
-
-    def deco(cls) -> type[AgentRunner]:
-        if mode in _RUNNER_REGISTRY:
-            raise ValueError(
-                f"agent mode 重复注册: {mode} ("
-                f"已存在: {_RUNNER_REGISTRY[mode].__name__}, 新增: {cls.__name__})"
-            )
-        _RUNNER_REGISTRY[mode] = cls
-        return cls
-
-    return deco
-
-
-def get_runner_class(mode: str) -> type[AgentRunner] | None:
-    return _RUNNER_REGISTRY.get(mode)
-
-
-def supported_modes() -> list[str]:
-    return sorted(_RUNNER_REGISTRY.keys())
-
-
-# 触发 ReActRunner 自注册
-register_runner("react")(ReActRunner)
+        return cls(
+            llm_chain,
+            system_prompt=system_prompt,
+            max_steps=profile.max_steps,
+            extra_lifecycles=extra_lifecycles,
+            role=role,
+            tools=tools,
+        )

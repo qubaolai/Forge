@@ -36,7 +36,6 @@ SUBAGENT_DENY_TOOLS: frozenset[str] = frozenset(
         # 共享空间 (artifact) 创建权限只属于父; 子只能 get/search.
         "create_artifact",
         # 二级派发会让子 agent 控制流程, 与"父调度"模型冲突.
-        "delegate_to_agent",
         "spawn_subagent",
     }
 )
@@ -123,14 +122,27 @@ async def _default_subagent_runner(target_role: str, task: str, max_steps: int) 
 
     from forge.agents.react.agent import ReActAgent
     from forge.agents.roles import get_agent_role, resolve_runtime_model_id
-    from forge.chat.llm_selection import build_llm_chain_for_agent
+    from forge.llm import GatewayBinding, GatewayLLMAdapter, get_llm_gateway
     from forge.prompts import get_registry
 
     role = get_agent_role(target_role)
-    llm = build_llm_chain_for_agent(
-        cast(Any, _AgentSnapshot(model_id=resolve_runtime_model_id(role))),
-        get_settings(),
+    settings = get_settings()
+    runtime_model_id = resolve_runtime_model_id(role)
+    # runtime_model_id 形如 "provider:model"; 拆出来交给 binding
+    provider: str | None = None
+    model: str | None = None
+    if runtime_model_id and ":" in runtime_model_id:
+        provider, model = runtime_model_id.split(":", 1)
+    binding = GatewayBinding(
+        gateway=get_llm_gateway(settings),
+        preferred_provider=provider,
+        preferred_model=model,
+        task_type="tool_use",
     )
+    llm = GatewayLLMAdapter(binding)
+    _ = _AgentSnapshot  # 保留类定义, 测试桩可用; 不再注入 chain
+    _ = cast  # noqa: F841 (兼容旧 typing import)
+    _ = Any   # noqa: F841
     tools = resolve_subagent_tools(role.allowed_tools)
     system_prompt = get_registry().render(
         role.prompt_template,

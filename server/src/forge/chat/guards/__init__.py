@@ -12,15 +12,17 @@
 """
 
 from .base import Guidance, LoopGuard, LoopState
+from .lifecycle_adapter import GuardLifecycleAdapter
 from .step_safety_net import StepSafetyNet
 from .stuck_detector import StuckDetector
 from .token_budget import TokenBudgetGuard
 from .wall_clock import WallClockGuard
 
 __all__ = [
+    "GuardLifecycleAdapter",
+    "Guidance",
     "LoopGuard",
     "LoopState",
-    "Guidance",
     "StepSafetyNet",
     "StuckDetector",
     "TokenBudgetGuard",
