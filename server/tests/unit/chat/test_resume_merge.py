@@ -50,7 +50,6 @@ def _ctx() -> TurnContext:
         assistant_msg_id="msg_a",
         user_msg_id="msg_u",
         current_user_message="continue",
-        agent_id=None,
         agent_mode="react",
         is_new_session=False,
         new_title=None,

@@ -45,9 +45,7 @@ class ChatSessionRepository:
         row = res.scalar_one_or_none()
         return self._to_view(row) if row else None
 
-    async def create(
-        self, *, user_id: str, agent_id: str = "default", title: str | None = None
-    ) -> SessionView:
+    async def create(self, *, user_id: str, title: str | None = None) -> SessionView:
         row = ChatSessionOrm(user_id=user_id, title=title or "")
         self.db.add(row)
         await self.db.flush()

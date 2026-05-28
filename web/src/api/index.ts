@@ -26,7 +26,7 @@ export const usersApi = {
 
 export const sessionsApi = {
   list: (params: PaginationParams) => apiClient.get<PaginatedData<ChatSession>>('/sessions', { params }),
-  create: (agentId: string, title?: string) => apiClient.post<ChatSession>('/sessions', { agent_id: agentId, title }),
+  create: (title?: string) => apiClient.post<ChatSession>('/sessions', { title }),
   get: (id: string) => apiClient.get<ChatSession>(`/sessions/${id}`),
   update: (id: string, payload: { title?: string }) => apiClient.patch<ChatSession>(`/sessions/${id}`, payload),
   remove: (id: string) => apiClient.delete<void>(`/sessions/${id}`),

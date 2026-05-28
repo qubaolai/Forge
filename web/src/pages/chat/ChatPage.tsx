@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { sessionsApi, agentsApi, systemApi, ModelGroup } from '@/api';
+import { sessionsApi, systemApi, ModelGroup } from '@/api';
 import { ChatMessage, Citation } from '@/types';
 import { useChatStream } from '@/hooks/useChatStream';
 import { MessageList } from '@/components/chat/MessageList';
@@ -12,13 +12,11 @@ import type { ModelOptions } from '@/hooks/useChatStream';
 
 export default function ChatPage() {
   const { sessionId } = useParams();
-  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
 
   const isNew = sessionId === 'new';
   const noSession = !sessionId; // /chat 根路由
-  const agentIdParam = searchParams.get('agent');
 
   const skipResetRef = useRef(false);
 
@@ -32,11 +30,6 @@ export default function ChatPage() {
     queryKey: ['session', sessionId],
     queryFn: () => sessionsApi.get(sessionId!),
     enabled: !!sessionId && !isNew,
-  });
-
-  const { data: agents } = useQuery({
-    queryKey: ['agents'],
-    queryFn: () => agentsApi.list({ page: 1, page_size: 50 }),
   });
 
   const [pendingUser, setPendingUser] = useState<ChatMessage[]>([]);
@@ -102,8 +95,8 @@ export default function ChatPage() {
       qc.setQueryData(['session', newSessionId], {
         id: newSessionId,
         title,
-        agent_id: agents?.items?.[0]?.id || 'default',
-        agent_name: agents?.items?.[0]?.name || '',
+        agent_id: '',
+        agent_name: '',
         user_id: '',
         message_count: 0,
         created_at: new Date().toISOString(),
@@ -210,10 +203,9 @@ export default function ChatPage() {
 
     const modelOptions = buildModelOptions();
     if (isNew) {
-      const agentId = agentIdParam || agents?.items?.[0]?.id;
-      send(null, text, agentId, undefined, modelOptions);
+      send(null, text, undefined, modelOptions);
     } else {
-      send(sessionId!, text, undefined, undefined, modelOptions);
+      send(sessionId!, text, undefined, modelOptions);
     }
   }
 

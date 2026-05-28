@@ -51,7 +51,6 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
     (
       sessionId: string | null,
       message: string,
-      agentId?: string,
       attachments?: { file_id: string; type: string }[],
       modelOptions?: ModelOptions,
     ) => {
@@ -71,7 +70,6 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
 
       const body: Record<string, unknown> = { message, attachments };
       if (sessionId) body.session_id = sessionId;
-      if (agentId) body.agent_id = agentId;
       if (modelOptions && Object.keys(modelOptions).length > 0) {
         body.model_options = modelOptions;
       }

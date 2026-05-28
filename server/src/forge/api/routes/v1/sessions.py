@@ -31,7 +31,7 @@ async def list_sessions(
 
 @router.post("")
 async def create_session(body: SessionCreateIn, user: AuthenticatedUser, svc: SessionServiceDep):
-    session = await svc.create(user.user_id, agent_id=body.agent_id, title=body.title)
+    session = await svc.create(user.user_id, title=body.title)
     return success(await svc.get_single_enriched(session))
 
 

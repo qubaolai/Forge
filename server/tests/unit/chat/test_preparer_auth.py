@@ -57,7 +57,6 @@ async def test_existing_session_owner_mismatch_rejected() -> None:
             user_name="tester",
             session_id="sess_x",
             message="你好",
-            agent_id_hint=None,
             trace_id="trace-x",
             model_options=None,
         )
@@ -65,4 +64,3 @@ async def test_existing_session_owner_mismatch_rejected() -> None:
     assert exc.value.code == "40310"
     msg_repo.count_by_session.assert_not_called()
     msg_repo.add.assert_not_called()
-

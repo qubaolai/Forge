@@ -26,7 +26,6 @@ def _ctx() -> TurnContext:
         assistant_msg_id="msg_a",
         user_msg_id="msg_u",
         current_user_message="hi",
-        agent_id=None,
         agent_mode="react",
         is_new_session=False,
         new_title=None,
@@ -156,3 +155,26 @@ def test_run_result_terminal_ok_only_stop() -> None:
     assert RunResult(finish_reason="partial_steps").is_terminal_ok is False
     assert RunResult(finish_reason="aborted").is_terminal_ok is False
     assert RunResult(finish_reason="error").is_terminal_ok is False
+
+
+def test_context_meta_records_finish_reason_and_model_options() -> None:
+    """终态元信息要支持 resume 恢复模型选择。"""
+    ctx = _ctx()
+    ctx = type(ctx)(**{
+        **ctx.__dict__,
+        "model_options": {
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+            "thinking": True,
+        },
+    })
+    result = RunResult(finish_reason="partial_steps")
+
+    meta = TurnFinalizer._build_context_meta(ctx, result, BuildMeta())
+
+    assert meta["finish_reason"] == "partial_steps"
+    assert meta["model_options"] == {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "thinking": True,
+    }

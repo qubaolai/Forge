@@ -14,21 +14,20 @@
 
 from __future__ import annotations
 
-import logging
 import asyncio
+import logging
 
+from forge.api.schemas.chat import ModelOptionsIn
 from forge.chat.types import TurnContext
 from forge.infrastructure.database.database import get_session_factory
-
 from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
 from forge.infrastructure.database.repositories.chat_session_repo import ChatSessionRepository
-from forge.observability.tracing.tracer import span
-from forge.api.schemas.chat import ModelOptionsIn
 from forge.llm.providers.base import ChatMessage
+from forge.observability.tracing.tracer import span
 
 logger = logging.getLogger(__name__)
 
-# 当前只支持 react 模式，后续 CLI plan 模式通过 runner 注册表扩展
+# 当前 chat 路径固定使用 chat profile；任务模式走 /v1/runs。
 _DEFAULT_MODE = "chat"
 _DEFAULT_CONTEXT_WINDOW = 128_000
 
@@ -52,7 +51,6 @@ class TurnPreparer:
         user_name: str,
         session_id: str | None,
         message: str,
-        agent_id_hint: str | None,
         trace_id: str,
         model_options: ModelOptionsIn | None = None,
     ) -> TurnContext:
@@ -71,7 +69,7 @@ class TurnPreparer:
                 # 1. session 解析 / 新建
                 is_new_session = session_id is None
                 if is_new_session:
-                    session = await sess_repo.create(user_id=user_id, agent_id="default")
+                    session = await sess_repo.create(user_id=user_id)
                 else:
                     existing_session = await sess_repo.get_by_id(session_id or "")
                     if existing_session is None:
@@ -129,7 +127,6 @@ class TurnPreparer:
             assistant_msg_id=assistant_msg_id,
             user_msg_id=user_msg_id,
             current_user_message=message,
-            agent_id=None,
             agent_mode=_DEFAULT_MODE,
             is_new_session=is_new_session,
             new_title=new_title,

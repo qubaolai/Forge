@@ -17,7 +17,6 @@ from forge.chat.types import ResumeState, RunResult, TurnContext
 from forge.context.base import BuildMeta
 from forge.core.content_merge import strip_overlap
 from forge.infrastructure.database.database import get_session_factory
-
 from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
 from forge.observability.tracing.tracer import span
 
@@ -161,12 +160,76 @@ class TurnFinalizer:
                     status=status,
                     tool_calls=result.tool_calls or None,
                     usage=result.usage or None,
-                    context_meta=asdict(build_meta),
+                    context_meta=self._build_context_meta(ctx, result, build_meta),
                     reasoning_content=result.reasoning_content,
                     reasoning_duration_ms=result.reasoning_duration_ms,
                     error_message=result.error_message,
                 )
             await db.commit()
+
+    @staticmethod
+    def _build_context_meta(
+        ctx: TurnContext,
+        result: RunResult,
+        build_meta: BuildMeta,
+    ) -> dict:
+        """构造落库元信息，供 resume 恢复模型与状态。"""
+        meta = asdict(build_meta)
+        meta["finish_reason"] = result.finish_reason
+        if ctx.model_options:
+            meta["model_options"] = dict(ctx.model_options)
+        return meta
+
+    async def mark_unhandled_error(self, ctx: TurnContext, message: str) -> None:
+        """执行链路未进入 finalize 时，将 assistant 消息兜底标记为 error。"""
+        await self._mark_terminal_without_result(
+            ctx,
+            status="error",
+            finish_reason="error",
+            error_message=message or "未知错误",
+        )
+
+    async def mark_cancelled(self, ctx: TurnContext, message: str) -> None:
+        """服务关闭硬取消时，将 assistant 消息兜底标记为 aborted。"""
+        await self._mark_terminal_without_result(
+            ctx,
+            status="aborted",
+            finish_reason="aborted",
+            error_message=message or "服务关闭，生成已中断",
+        )
+
+    async def _mark_terminal_without_result(
+        self,
+        ctx: TurnContext,
+        *,
+        status: str,
+        finish_reason: str,
+        error_message: str,
+    ) -> None:
+        factory = get_session_factory()
+        async with factory() as db:
+            repo = ChatMessageRepository(db)
+            msg = await repo.get_by_id(ctx.assistant_msg_id)
+            if msg:
+                meta = dict(msg.context_meta or {})
+                meta["finish_reason"] = finish_reason
+                meta["unhandled_terminal"] = True
+                if ctx.model_options:
+                    meta["model_options"] = dict(ctx.model_options)
+                await repo.update(
+                    msg,
+                    status=status,
+                    error_message=error_message,
+                    context_meta=meta,
+                )
+            await db.commit()
+        logger.info(
+            "异常终态兜底落库 session=%s message_id=%s status=%s finish_reason=%s",
+            ctx.session_id,
+            ctx.assistant_msg_id,
+            status,
+            finish_reason,
+        )
 
     # ------------------------------------------------------------------
     @staticmethod

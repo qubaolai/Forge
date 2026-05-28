@@ -25,7 +25,6 @@ import logging
 
 from forge.chat.types import ResumeState, TurnContext
 from forge.infrastructure.database.database import get_session_factory
-
 from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
 from forge.infrastructure.database.repositories.chat_session_repo import ChatSessionRepository
 from forge.observability.tracing.tracer import span
@@ -93,11 +92,83 @@ def _is_message_active_locally(message_id: str) -> bool:
     服务重启后进程内无任何活跃流，返回 False，允许接管遗留 streaming 消息。
     """
     try:
-        from forge.chat.orchestrator import get_active_streams  # noqa: PLC0415
+        from forge.chat.supervisor import get_chat_supervisor  # noqa: PLC0415
 
-        return message_id in get_active_streams()
+        return get_chat_supervisor().has_active(message_id)
     except ImportError:
         return False
+
+
+async def _rebuild_from_event_log(message_id: str) -> dict | None:
+    """从 events.jsonl 折叠重建 prev_content / prev_tool_calls / prev_usage 等。
+
+    用于服务重启 / DB 内容缺失场景: events.jsonl 是 source of truth, DB content
+    只是 finalizer 折叠后的最终态; 若 turn 未走到 finalizer (例如崩溃), DB content
+    可能空, 但 events.jsonl 里所有已下发的 delta 都在.
+
+    返回 None 表示该 message 没有 events.jsonl (新对话 / 已清理).
+    """
+    try:
+        from forge.chat.event_store import ChatEventStore  # noqa: PLC0415
+    except ImportError:
+        return None
+
+    try:
+        store = ChatEventStore(message_id)
+    except OSError as exc:
+        logger.warning("读取续写事件日志失败 message_id=%s: %s", message_id, exc)
+        return None
+    if not store.dir.exists():
+        return None
+
+    content_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    reasoning_duration_ms: int | None = None
+    tool_calls_by_id: dict[str, dict] = {}
+    usage: dict = {}
+    finish_reason: str | None = None
+    has_events = False
+
+    async for record in store.iter_events(after_seq=0):
+        has_events = True
+        ev_type = record.get("type")
+        if ev_type == "delta":
+            content_parts.append(record.get("content") or "")
+        elif ev_type == "reasoning_delta":
+            reasoning_parts.append(record.get("content") or "")
+        elif ev_type == "reasoning_end":
+            ms = record.get("reasoning_duration_ms")
+            if isinstance(ms, int | float):
+                reasoning_duration_ms = int(ms)
+        elif ev_type == "tool_call":
+            tc = record.get("tool_call")
+            if isinstance(tc, dict) and tc.get("id"):
+                tool_calls_by_id[tc["id"]] = dict(tc)
+        elif ev_type == "tool_result":
+            tid = record.get("tool_call_id")
+            if tid and tid in tool_calls_by_id:
+                tool_calls_by_id[tid]["status"] = record.get("status")
+                tool_calls_by_id[tid]["result"] = record.get("result")
+        elif ev_type in ("done", "task_partial"):
+            u = record.get("usage")
+            if isinstance(u, dict):
+                usage = dict(u)
+            finish_reason = record.get("finish_reason") or record.get("reason")
+            ms = record.get("reasoning_duration_ms")
+            if isinstance(ms, int | float):
+                reasoning_duration_ms = int(ms)
+
+    if not has_events:
+        return None
+
+    return {
+        "content": "".join(content_parts),
+        "reasoning_content": "".join(reasoning_parts) or None,
+        "reasoning_duration_ms": reasoning_duration_ms,
+        "tool_calls": list(tool_calls_by_id.values()),
+        "usage": usage,
+        "finish_reason": finish_reason,
+    }
 
 
 class ResumeError(Exception):
@@ -172,11 +243,12 @@ class TurnResumer:
                 assistant_msg_id = asst.id
                 user_msg_id = parent.id
                 user_msg_content = parent.content or ""
-                prev_content = asst.content or ""
-                prev_tool_calls = list(asst.tool_calls or [])
-                prev_reasoning = asst.reasoning_content
-                prev_reasoning_ms = asst.reasoning_duration_ms
-                prev_usage = dict(asst.usage or {})
+                db_content = asst.content or ""
+                db_tool_calls = list(asst.tool_calls or [])
+                db_reasoning = asst.reasoning_content
+                db_reasoning_ms = asst.reasoning_duration_ms
+                db_usage = dict(asst.usage or {})
+                db_model_options = _extract_model_options(asst.context_meta or {})
                 # 遗留 streaming → 归一化为 aborted（语义等价，便于日志/finalizer 处理）
                 prev_status = "aborted" if asst.status == "streaming" else asst.status
                 prev_finish_reason = (asst.context_meta or {}).get("finish_reason", prev_status)
@@ -186,11 +258,39 @@ class TurnResumer:
                 await msg_repo.update(asst, status="streaming")
                 await db.commit()
 
-                s.set("session_id", session_id)
-                s.set("prev_status", prev_status)
-                s.set("prev_content_len", len(prev_content))
-                s.set("prev_tool_calls", len(prev_tool_calls))
-                s.set("agent_mode", mode)
+            # ★ 新架构: events.jsonl 才是 source of truth.
+            # 若 DB content 为空 (旧 bug 残留 / finalizer 没跑) 但 events.jsonl 还在,
+            # 折叠日志重建 prev_* 才能让续写真正能"继续"而不是"重来".
+            prev_content = db_content
+            prev_tool_calls = db_tool_calls
+            prev_reasoning = db_reasoning
+            prev_reasoning_ms = db_reasoning_ms
+            prev_usage = db_usage
+            rebuilt = await _rebuild_from_event_log(assistant_msg_id)
+            if rebuilt is not None:
+                rebuilt_content = rebuilt["content"]
+                if len(rebuilt_content) >= len(db_content):
+                    prev_content = rebuilt_content
+                    prev_tool_calls = rebuilt["tool_calls"] or db_tool_calls
+                    if rebuilt["reasoning_content"]:
+                        prev_reasoning = rebuilt["reasoning_content"]
+                    if rebuilt["reasoning_duration_ms"] is not None:
+                        prev_reasoning_ms = rebuilt["reasoning_duration_ms"]
+                    if rebuilt["usage"]:
+                        prev_usage = rebuilt["usage"]
+                    if rebuilt["finish_reason"]:
+                        prev_finish_reason = rebuilt["finish_reason"]
+                    logger.info(
+                        "续写从 events.jsonl 重建 prev_content message_id=%s "
+                        "db_len=%d jsonl_len=%d",
+                        assistant_msg_id, len(db_content), len(rebuilt_content),
+                    )
+
+            s.set("session_id", session_id)
+            s.set("prev_status", prev_status)
+            s.set("prev_content_len", len(prev_content))
+            s.set("prev_tool_calls", len(prev_tool_calls))
+            s.set("agent_mode", mode)
 
         # 渲染续写提示词: 含 suffix_anchor (上次末尾 80 字符) + 结构感知 (代码块/表格)
         resume_prompt = _render_resume_prompt(prev_content)
@@ -202,13 +302,12 @@ class TurnResumer:
             assistant_msg_id=assistant_msg_id,
             user_msg_id=user_msg_id,
             current_user_message=resume_prompt,
-            agent_id=None,
             agent_mode="chat",
             is_new_session=False,
             new_title=None,
             trace_id=trace_id,
-            model_options=None,
-            exclude_message_ids=(),
+            model_options=db_model_options,
+            exclude_message_ids=(assistant_msg_id,),
             context_window=128_000,
         )
 
@@ -238,3 +337,20 @@ class TurnResumer:
             },
         )
         return ctx, resume
+
+
+def _extract_model_options(context_meta: dict) -> dict | None:
+    """从消息元信息恢复上轮模型选项。"""
+    raw = context_meta.get("model_options")
+    if not isinstance(raw, dict):
+        return None
+    provider = raw.get("provider")
+    model = raw.get("model")
+    if not isinstance(provider, str) or not isinstance(model, str):
+        return None
+    out = {"provider": provider, "model": model}
+    if "thinking" in raw:
+        out["thinking"] = raw.get("thinking")
+    if isinstance(raw.get("thinking_level"), str):
+        out["thinking_level"] = raw.get("thinking_level")
+    return out

@@ -40,6 +40,11 @@ __all__ = [
     "chroma_dir",
     "bm25_path",
     "uploads_dir",
+    # Chat run 持久化
+    "chat_runs_dir",
+    "chat_run_dir",
+    "chat_run_state_path",
+    "chat_run_events_path",
     # 任务 / 日志 / 审计
     "tasks_db_path",
     "cost_log_path",
@@ -179,6 +184,36 @@ def encode_workspace_path(p: Path) -> str:
 
 def kb_dir() -> Path:
     return _mkdir(app_data_dir() / "kb")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chat run 持久化（events.jsonl + state.json，per assistant message_id）
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def chat_runs_dir() -> Path:
+    """所有 chat turn 的事件流根目录。
+
+    每个 assistant message_id 一个子目录：
+        <chat_runs>/<message_id>/state.json
+        <chat_runs>/<message_id>/events.jsonl
+
+    保留策略：完成后 7 天清理（见 ChatTurnSupervisor）。
+    """
+    return _mkdir(app_data_dir() / "chat_runs")
+
+
+def chat_run_dir(message_id: str) -> Path:
+    """某条 assistant message 的事件流目录。"""
+    return _mkdir(chat_runs_dir() / message_id)
+
+
+def chat_run_state_path(message_id: str) -> Path:
+    return chat_run_dir(message_id) / "state.json"
+
+
+def chat_run_events_path(message_id: str) -> Path:
+    return chat_run_dir(message_id) / "events.jsonl"
 
 
 def kb_db_path() -> Path:

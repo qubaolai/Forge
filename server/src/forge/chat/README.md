@@ -62,7 +62,7 @@ chat/
 
 | 角色 | DB 接触 | yield SSE 事件 | 输入 | 输出 |
 |---|---|---|---|---|
-| `TurnPreparer` | ✅ 自有事务 | ❌ | user_id / message / agent_id | `(TurnContext, _AgentSnapshot)` |
+| `TurnPreparer` | ✅ 自有事务 | ❌ | user_id / message | `TurnContext` |
 | `TurnResumer` | ✅ 自有事务 | ❌ | user_id / message_id | `(TurnContext, _AgentSnapshot, ResumeState)` |
 | `ContextAssembler` | ✅ 自有事务 (内部) | ❌ | TurnContext / AgentSnapshot | `(AssembledContext, system_prompt)` |
 | `ReActRunner` | ❌ | ✅ 中间事件 (delta/tool_call/tool_result/...) | messages / abort_event | `RunResult` (累积态) |

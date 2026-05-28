@@ -284,6 +284,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.decision_cleanup_task = decision_cleanup_task
 
+    # 7. ChatTurnSupervisor 后台清理与进程关闭收尾
+    from forge.chat.supervisor import get_chat_supervisor
+
+    chat_supervisor = get_chat_supervisor()
+    chat_supervisor.start_cleanup_loop()
+    app.state.chat_supervisor = chat_supervisor
+
     logger.info("服务启动完成")
 
     try:
@@ -306,6 +313,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await get_run_supervisor().shutdown()
         except Exception:  # noqa: BLE001
             logger.exception("RunSupervisor 关闭失败")
+
+        # ChatTurnSupervisor 收尾: 通知仍在生成的对话中断并落库
+        try:
+            await get_chat_supervisor().shutdown()
+        except Exception:  # noqa: BLE001
+            logger.exception("ChatTurnSupervisor 关闭失败")
 
         if hasattr(app.state, "llm_pool"):
             try:

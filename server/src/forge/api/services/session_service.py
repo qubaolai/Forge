@@ -39,8 +39,8 @@ class SessionService:
             out.append({
                 "id": s.id,
                 "user_id": s.user_id,
-                "agent_id": s.agent_id or "default",
-                "agent_name": "默认助手",
+                "agent_id": "",
+                "agent_name": "",
                 "title": s.title,
                 "message_count": count_map.get(s.id, 0),
                 "last_message_at": last_map.get(s.id),
@@ -53,10 +53,8 @@ class SessionService:
         items = await self._enrich([session])
         return items[0]
 
-    async def create(
-        self, user_id: str, *, agent_id: str = "default", title: str | None = None
-    ) -> SessionView:
-        return await self.session_repo.create(user_id=user_id, agent_id=agent_id, title=title)
+    async def create(self, user_id: str, *, title: str | None = None) -> SessionView:
+        return await self.session_repo.create(user_id=user_id, title=title)
 
     async def get_owned(self, session_id: str, user_id: str) -> SessionView:
         session = await self.session_repo.get_by_id(session_id)

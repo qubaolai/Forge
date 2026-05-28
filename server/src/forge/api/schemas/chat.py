@@ -28,7 +28,6 @@ class SessionOut(BaseModel):
 
 
 class SessionCreateIn(BaseModel):
-    agent_id: str = "default"
     title: str | None = None
 
 
@@ -86,7 +85,6 @@ class ChatCompletionIn(BaseModel):
     """
 
     session_id: str | None = None
-    agent_id: str | None = None
     message: str = Field(min_length=1)
     attachments: list[ChatAttachment] = Field(default_factory=list)
     model_options: ModelOptionsIn

@@ -199,7 +199,7 @@ class EarlyToolBlockGuard:
 
 目前 guard 阈值是构造参数. 后续可:
 - 让 `AgentOrm` 加 `guard_config` JSON 字段
-- ReActRunner 从 ctx.agent_id 加载, 按 agent 用不同阈值
+- ReActRunner 从 chat profile 加载，按 profile 使用不同阈值
 - "客服 Agent" 用更严格的限制, "代码助手 Agent" 用更宽松的
 
 ## 相关文档

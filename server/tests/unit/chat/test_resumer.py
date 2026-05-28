@@ -61,7 +61,13 @@ def _patches(factory, msg_repo, sess_repo):
     ]
 
 
-def _asst(status="partial", content="部分文本", tool_calls=None, parent_id="msg_u1"):
+def _asst(
+    status="partial",
+    content="部分文本",
+    tool_calls=None,
+    parent_id="msg_u1",
+    context_meta=None,
+):
     return SimpleNamespace(
         id="msg_a1",
         role="assistant",
@@ -73,7 +79,7 @@ def _asst(status="partial", content="部分文本", tool_calls=None, parent_id="
         reasoning_content=None,
         reasoning_duration_ms=None,
         usage={},
-        context_meta={"finish_reason": "partial_steps"},
+        context_meta=context_meta or {"finish_reason": "partial_steps"},
     )
 
 
@@ -82,7 +88,7 @@ def _parent(id_="msg_u1"):
 
 
 def _session(user_id="u1"):
-    return SimpleNamespace(id="sess_x", user_id=user_id, agent_id="default")
+    return SimpleNamespace(id="sess_x", user_id=user_id)
 
 
 async def _prepare(asst, session, parent, *, user_id="u1"):
@@ -199,7 +205,7 @@ async def test_resume_happy_path_marks_streaming_and_returns_state() -> None:
     assert "不要重复" in ctx.current_user_message
     assert ctx.agent_mode == "chat"
     assert ctx.is_new_session is False
-    assert ctx.exclude_message_ids == ()
+    assert ctx.exclude_message_ids == ("msg_a1",)
 
     # resume state: 注意 prev_status 应是 update 前的 "aborted"
     assert resume.original_user_message == "原始问题"
@@ -207,6 +213,32 @@ async def test_resume_happy_path_marks_streaming_and_returns_state() -> None:
     assert len(resume.prev_tool_calls) == 2
     assert resume.prev_finish_reason == "partial_steps"
     assert resume.prev_status == "aborted"
+
+
+@pytest.mark.asyncio
+async def test_resume_restores_model_options_from_context_meta() -> None:
+    """续写沿用上轮模型选择和 thinking 参数。"""
+    asst = _asst(
+        status="partial",
+        context_meta={
+            "finish_reason": "partial_steps",
+            "model_options": {
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-6",
+                "thinking": True,
+                "thinking_level": "high",
+            },
+        },
+    )
+    ctx, resume, _ = await _prepare(asst, _session(), _parent())
+
+    assert resume.prev_finish_reason == "partial_steps"
+    assert ctx.model_options == {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "thinking": True,
+        "thinking_level": "high",
+    }
 
 
 @pytest.mark.asyncio
