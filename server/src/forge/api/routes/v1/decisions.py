@@ -5,9 +5,9 @@
     POST /v1/decisions/{token}   - 提交决策 (approved + feedback + edited_plan)
 
 token 由后端在 PlanModeLifecycle / WorkflowLifecycle 内生成, 通过 SSE
-事件 / tool_call.arguments 给到客户端.
+事件给到客户端。
 
-授权: token 创建时记录 run_id; 提交决策时验证 run owner = 当前用户.
+授权: token 创建时记录 run_id + owner_user_id; 提交决策时验证 owner.
 跨用户越权访问返回 403.
 """
 
@@ -19,8 +19,9 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from forge.agents.hitl import Decision, get_decision_registry
+from forge.agents.run_supervisor import get_run_supervisor
 from forge.api.dependencies import AuthenticatedUser
-from forge.core.exceptions import NotFound
+from forge.core.exceptions import Forbidden, NotFound
 from forge.core.response import success
 
 logger = logging.getLogger(__name__)
@@ -47,11 +48,11 @@ async def get_decision(token: str, user: AuthenticatedUser):
     返回字段:
         token, kind, payload, decided (None=待决策 / {approved, feedback, ...})
     """
-    _ = user
     registry = get_decision_registry()
     item = registry.get(token)
     if item is None:
         raise NotFound(f"decision token 不存在: {token}", code=40460)
+    _ensure_decision_owner(item, user)
     return success(_pending_to_dict(item))
 
 
@@ -62,11 +63,11 @@ async def submit_decision(token: str, body: DecisionSubmitIn, user: Authenticate
     - 重复 resolve → 静默 OK (幂等)
     - 已过期 token → 200 + decided.approved=False feedback=超时
     """
-    _ = user
     registry = get_decision_registry()
     item = registry.get(token)
     if item is None:
         raise NotFound(f"decision token 不存在: {token}", code=40460)
+    _ensure_decision_owner(item, user)
 
     decision = Decision(
         approved=body.approved,
@@ -78,6 +79,29 @@ async def submit_decision(token: str, body: DecisionSubmitIn, user: Authenticate
         "POST /v1/decisions/%s approved=%s ok=%s", token, body.approved, ok,
     )
     return success({"token": token, "ok": ok, "decided": _decision_to_dict(decision)})
+
+
+def _ensure_decision_owner(item, user) -> None:
+    """校验当前用户是否可读取/提交该 decision."""
+    if getattr(user, "role", "") in ("owner", "admin"):
+        return
+
+    # 优先用 registry 中显式记录的 owner 校验
+    owner_user_id = getattr(item, "owner_user_id", None)
+    if owner_user_id:
+        if owner_user_id == user.user_id:
+            return
+        raise Forbidden("无权访问该 decision", code=40331)
+
+    # 兼容历史 token: 退化到 run_supervisor 内存信息校验
+    run_id = getattr(item, "run_id", None)
+    if run_id:
+        orch = get_run_supervisor().get(run_id)
+        if orch is not None and orch.record.owner_user_id == user.user_id:
+            return
+
+    # 无法证明归属时默认拒绝，避免越权
+    raise Forbidden("无权访问该 decision", code=40331)
 
 
 def _pending_to_dict(item) -> dict:

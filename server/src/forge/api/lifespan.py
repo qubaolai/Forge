@@ -26,7 +26,7 @@ import inspect
 import logging
 import os
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import TYPE_CHECKING
 
 from forge.config.settings import get_settings
@@ -73,8 +73,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # 0.2 AgentProfile 加载 + 启动校验 (硬性: 任一项不通过 -> 阻止启动)
     #     依赖 ToolRegistry / AGENT_ROLES / PromptRegistry 都已就绪.
-    import forge.tools  # noqa: F401  触发 builtin 工具注册
     import forge.agents.roles  # noqa: F401  确保 AGENT_ROLES 加载
+    import forge.tools  # noqa: F401  触发 builtin 工具注册
     from forge.agents.profiles import load_profiles_at_startup
 
     load_profiles_at_startup()
@@ -85,6 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     db_module.init_engine()
     await db_module.ping()
     await db_module.bootstrap_schema()
+    app.state.database = db_module
     logger.info("数据库就绪: %s", settings.db.safe_url)
 
     # 2. TaskQueue (单机默认 LocalTaskQueue; 失败降级 NullTaskQueue)
@@ -273,6 +274,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # 6. HITL DecisionRegistry 后台清理 (软: 失败仅日志, 决策路径仍可用)
     import asyncio as _asyncio_lifespan
+
     from forge.agents.hitl import get_decision_registry
 
     decision_registry = get_decision_registry()
@@ -293,10 +295,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # HITL 清理 task 收尾
         try:
             decision_cleanup_task.cancel()
-            try:
+            with suppress(_asyncio_lifespan.CancelledError, Exception):
                 await decision_cleanup_task
-            except (_asyncio_lifespan.CancelledError, Exception):  # noqa: BLE001
-                pass
         except Exception:  # noqa: BLE001
             logger.exception("HITL cleanup task 取消失败")
 

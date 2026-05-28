@@ -34,8 +34,8 @@ _CAPABILITIES: dict[str, dict] = {
     "gpt-4o":            {"context_window": 128000, "supports_tools": True, "supports_images": True,  "thinking": None},
     "gpt-4o-mini":       {"context_window": 128000, "supports_tools": True, "supports_images": True,  "thinking": None},
     # DeepSeek
-    "deepseek-v4-pro":   {"context_window": 1000000, "supports_tools": True, "supports_images": False, "thinking": {"type": "reasoning_effort", "options": ["high", "max"], "default": "high"}},
-    "deepseek-v4-flash": {"context_window": 1000000, "supports_tools": True, "supports_images": False, "thinking": {"type": "reasoning_effort", "options": ["high", "max"], "default": "high"}},
+    "deepseek-v4-pro":   {"context_window": 1000000, "supports_tools": True, "supports_images": False, "thinking": {"type": "reasoning_effort", "options": ["standard", "low", "medium", "high", "xhigh"], "default": "standard"}},
+    "deepseek-v4-flash": {"context_window": 1000000, "supports_tools": True, "supports_images": False, "thinking": {"type": "reasoning_effort", "options": ["standard", "low", "medium", "high", "xhigh"], "default": "standard"}},
     # DashScope (Qwen)
     "qwen3-max-preview": {"context_window": 32768,  "supports_tools": True, "supports_images": False, "thinking": None},
     "qwen-plus":         {"context_window": 131072, "supports_tools": True, "supports_images": False, "thinking": None},
@@ -140,13 +140,7 @@ async def seed() -> None:
                 continue
             cap = _CAPABILITIES.get(model_name, {})
             thinking_raw = cap.get("thinking")
-            thinking_type = None
-            thinking_options = None
-            thinking_default = None
-            if thinking_raw:
-                thinking_type = thinking_raw["type"]
-                thinking_options = thinking_raw.get("options")
-                thinking_default = thinking_raw.get("default")
+            thinking_options = thinking_raw.get("options") if thinking_raw else None
 
             model_data = {
                 "name": model_name,
@@ -157,9 +151,7 @@ async def seed() -> None:
                 "supports_tools": cap.get("supports_tools", True),
                 "supports_images": cap.get("supports_images", False),
                 "supports_thinking": thinking_raw is not None,
-                "thinking_type": thinking_type,
                 "thinking_options": thinking_options,
-                "thinking_default": thinking_default,
                 "extra_params": extra,
                 "cost_tier": cost_tier,
                 "is_default": (model_name == "qwen-plus" or model_name == "gpt-4o"

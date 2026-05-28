@@ -123,9 +123,25 @@ async def chat_stop(body: ChatStopIn, user: AuthenticatedUser):
     """中断指定消息的流式生成."""
     streams = get_active_streams()
     event = streams.get(body.message_id)
-    if event is None:
+    if event is not None:
+        event.set()
         return success(None)
-    event.set()
+
+    # 兜底: 若进程内无活跃流，但 DB 仍是 streaming（例如重启/异常中断），
+    # 允许当前用户把自己的消息落成 aborted，便于后续 resume。
+    factory = get_session_factory()
+    async with factory() as db:
+        repo = ChatMessageRepository(db)
+        sess_repo = ChatSessionRepository(db)
+        asst = await repo.get_by_id(body.message_id)
+        if not asst or asst.role != "assistant":
+            return success(None)
+        session = await sess_repo.get_by_id(asst.session_id)
+        if not session or session.user_id != user.user_id:
+            return success(None)
+        if asst.status == "streaming":
+            await repo.update(asst, status="aborted")
+            await db.commit()
     return success(None)
 
 

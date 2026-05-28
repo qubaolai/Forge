@@ -45,6 +45,7 @@ class PendingDecision:
 
     token: str
     run_id: str | None
+    owner_user_id: str | None
     kind: DecisionKind
     payload: dict[str, Any]
     event: asyncio.Event
@@ -76,12 +77,14 @@ class DecisionRegistry:
         kind: DecisionKind,
         payload: dict[str, Any],
         run_id: str | None = None,
+        owner_user_id: str | None = None,
         ttl_sec: int = 1800,
     ) -> PendingDecision:
         token = new_id("dec")
         item = PendingDecision(
             token=token,
             run_id=run_id,
+            owner_user_id=owner_user_id,
             kind=kind,
             payload=dict(payload),
             event=asyncio.Event(),

@@ -21,7 +21,7 @@ logger = logging.getLogger("encrypt_keys")
 def _is_already_encrypted(text: str) -> bool:
     """简单判断：AES-GCM 密文是 Base64 编码，以 nonce(12) + ciphertext 形式存储。
     明文 API Key 通常以 sk- / fk- / api- 开头。"""
-    return not any(text.startswith(p) for p in ("sk-", "fk-", "api-", "ak-", "cm-"))
+    return not any(text.startswith(p) for p in ("sk-", "fk-", "api-", "ak-", "cm-", "tp-"))
 
 
 async def encrypt_keys() -> None:

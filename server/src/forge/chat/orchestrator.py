@@ -79,6 +79,11 @@ class TurnOrchestrator:
         assistant_msg_id: str | None = None
         abort_event: asyncio.Event | None = None
         ctx: TurnContext | None = None
+        # finalizer 完成后置 True，finally 据此判断是否需要补救落库
+        _turn_completed = False
+        # 积累已下发的 delta/tool_call，供中断时落库
+        _content_parts: list[str] = []
+        _tool_calls_buf: list[dict] = []
 
         logger.info(
             "对话开始 user=%s session_hint=%s input_len=%d",
@@ -154,10 +159,25 @@ class TurnOrchestrator:
                 user_id=user_id,
             )
             async for ev in runner.run(ctx, build_result.messages, abort_event):
+                # 缓冲已下发内容，供中断时落库
+                _d = ev.to_dict()
+                _t = _d.get("type")
+                if _t == "delta":
+                    _content_parts.append(_d.get("content") or "")
+                elif _t == "tool_call":
+                    if _tc := _d.get("tool_call"):
+                        _tool_calls_buf.append(dict(_tc))
+                elif _t == "tool_result":
+                    for _tc in _tool_calls_buf:
+                        if _tc.get("id") == _d.get("tool_call_id"):
+                            _tc["status"] = _d.get("status")
+                            _tc["result"] = _d.get("result")
+                            break
                 yield ev
 
-            # 5. finalize
+            # 5. finalize — 标记完成在前，防止 yield final_event 被打断后 finally 重复清理
             final_event = await self._finalizer.finalize(ctx, runner.result, build_result.meta)
+            _turn_completed = True
             if final_event:
                 yield final_event
 
@@ -170,10 +190,8 @@ class TurnOrchestrator:
             )
 
         except asyncio.CancelledError as exc:
-            logger.info("客户端中断对话: message_id=%s", assistant_msg_id)
+            logger.info("客户端取消对话 (CancelledError): message_id=%s", assistant_msg_id)
             turn_span_ctx.set_error(exc)
-            if assistant_msg_id:
-                await self._mark_aborted_on_cancel(assistant_msg_id)
             raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("turn 异常")
@@ -186,6 +204,20 @@ class TurnOrchestrator:
             turn_span_cm.__exit__(None, None, None)
             if assistant_msg_id:
                 _ACTIVE_STREAMS.pop(assistant_msg_id, None)
+            # ★ 核心修复：所有未正常完成的 turn（GeneratorExit/CancelledError/Exception）
+            # 都在独立 task 中落库。用 create_task 而非 await，因为在 GeneratorExit 上下文
+            # 中 await 会被阻断，而 create_task 是同步调度，不受异常类型限制。
+            if not _turn_completed and assistant_msg_id:
+                try:
+                    asyncio.create_task(
+                        self._mark_aborted_on_cancel(
+                            assistant_msg_id,
+                            content="".join(_content_parts),
+                            tool_calls=_tool_calls_buf or None,
+                        )
+                    )
+                except RuntimeError:
+                    logger.warning("事件循环关闭，无法调度中断清理 message_id=%s", assistant_msg_id)
 
     # ------------------------------------------------------------------
     # resume_turn: 继续 aborted/partial 的 assistant 消息
@@ -206,6 +238,11 @@ class TurnOrchestrator:
         assistant_msg_id: str | None = None
         abort_event: asyncio.Event | None = None
         ctx: TurnContext | None = None
+        prev_state: ResumeState | None = None
+        _turn_completed = False
+        # 积累本次续写新增的 delta/tool_call
+        _content_parts: list[str] = []
+        _tool_calls_buf: list[dict] = []
 
         logger.info("续写开始 user=%s message_id=%s", user_id, message_id)
 
@@ -255,11 +292,26 @@ class TurnOrchestrator:
                 user_id=user_id,
             )
             async for ev in runner.run(ctx, messages, abort_event):
+                # 缓冲本次续写新增内容
+                _d = ev.to_dict()
+                _t = _d.get("type")
+                if _t == "delta":
+                    _content_parts.append(_d.get("content") or "")
+                elif _t == "tool_call":
+                    if _tc := _d.get("tool_call"):
+                        _tool_calls_buf.append(dict(_tc))
+                elif _t == "tool_result":
+                    for _tc in _tool_calls_buf:
+                        if _tc.get("id") == _d.get("tool_call_id"):
+                            _tc["status"] = _d.get("status")
+                            _tc["result"] = _d.get("result")
+                            break
                 yield ev
 
             final_event = await self._finalizer.finalize(
                 ctx, runner.result, build_result.meta, prev_state=prev_state,
             )
+            _turn_completed = True
             if final_event:
                 yield final_event
 
@@ -272,9 +324,7 @@ class TurnOrchestrator:
             )
 
         except asyncio.CancelledError:
-            logger.info("客户端中断续写: message_id=%s", assistant_msg_id)
-            if assistant_msg_id:
-                await self._mark_aborted_on_cancel(assistant_msg_id)
+            logger.info("客户端取消续写 (CancelledError): message_id=%s", assistant_msg_id)
             raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("resume 异常")
@@ -282,6 +332,21 @@ class TurnOrchestrator:
         finally:
             if assistant_msg_id:
                 _ACTIVE_STREAMS.pop(assistant_msg_id, None)
+            # ★ 核心修复：合并上次内容 + 本次新增，在独立 task 中落库
+            if not _turn_completed and assistant_msg_id:
+                _prev_content = prev_state.prev_content if prev_state else ""
+                _new_content = "".join(_content_parts)
+                _prev_tcs = list(prev_state.prev_tool_calls or []) if prev_state else []
+                try:
+                    asyncio.create_task(
+                        self._mark_aborted_on_cancel(
+                            assistant_msg_id,
+                            content=_prev_content + _new_content,
+                            tool_calls=(_prev_tcs + _tool_calls_buf) or None,
+                        )
+                    )
+                except RuntimeError:
+                    logger.warning("事件循环关闭，无法调度续写中断清理 message_id=%s", assistant_msg_id)
 
     # ------------------------------------------------------------------
     # _setup_runner: 构造 GatewayLLMAdapter + ReActRunner.from_profile
@@ -335,15 +400,29 @@ class TurnOrchestrator:
         )
 
     @staticmethod
-    async def _mark_aborted_on_cancel(assistant_msg_id: str) -> None:
+    async def _mark_aborted_on_cancel(
+        assistant_msg_id: str,
+        *,
+        content: str = "",
+        tool_calls: list | None = None,
+    ) -> None:
         try:
             factory = get_session_factory()
             async with factory() as db:
                 repo = ChatMessageRepository(db)
                 msg = await repo.get_by_id(assistant_msg_id)
                 if msg and msg.status == "streaming":
-                    await repo.update(msg, status="aborted")
+                    await repo.update(
+                        msg,
+                        status="aborted",
+                        content=content or None,
+                        tool_calls=tool_calls or None,
+                    )
                 await db.commit()
+            logger.info(
+                "cancel 清理完成 message_id=%s content_len=%d tool_calls=%d",
+                assistant_msg_id, len(content), len(tool_calls or []),
+            )
         except Exception:  # noqa: BLE001
             logger.exception("cancel 清理失败 message_id=%s", assistant_msg_id)
 

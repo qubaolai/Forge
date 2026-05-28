@@ -158,13 +158,17 @@ class ChatMessageRepository:
         return await self._to_view(row, session_id)
 
     async def get_by_id(self, message_id: str) -> ChatMessageView | None:
+        # 这里要一并取出业务 session_id，避免 _to_view 默认空串导致上层续写链路查不到会话。
         res = await self.db.execute(
-            select(ChatMessageOrm).where(ChatMessageOrm.message_id == message_id)
+            select(ChatMessageOrm, ChatSessionOrm.session_id)
+            .outerjoin(ChatSessionOrm, ChatSessionOrm.id == ChatMessageOrm.session_id)
+            .where(ChatMessageOrm.message_id == message_id)
         )
-        row = res.scalar_one_or_none()
-        if row is None:
+        pair = res.first()
+        if pair is None:
             return None
-        return await self._to_view(row)
+        row, session_business_id = pair
+        return await self._to_view(row, session_business_id or "")
 
     async def count_by_session(self, session_id: str) -> int:
         sid = await self._session_db_id(session_id)

@@ -76,6 +76,8 @@ class TurnPreparer:
                     existing_session = await sess_repo.get_by_id(session_id or "")
                     if existing_session is None:
                         raise TurnPreparationError("会话不存在", code="40410")
+                    if existing_session.user_id != user_id:
+                        raise TurnPreparationError("无权访问该会话", code="40310")
                     session = existing_session
                 session_id_actual = session.id
 

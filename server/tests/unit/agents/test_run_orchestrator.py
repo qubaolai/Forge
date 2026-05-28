@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -121,6 +120,7 @@ async def test_plan_exec_flow_with_approval(store: RunStore) -> None:
         readonly_schemas=readonly,
         full_schemas=full,
         run_id=record.run_id,
+        store=store,
         ttl_sec=5,
     )
     persist_lc = RunStorePersistenceLifecycle(store, record.run_id)
@@ -177,6 +177,7 @@ async def test_plan_exec_flow_with_approval(store: RunStore) -> None:
     types = [e.type for e in stored_events]
     assert "run_started" in types
     assert "lifecycle_attached" in types
+    assert "plan_decision_required" in types
     assert "step_completed" in types  # at least one step
     assert "run_status_changed" in types  # on_complete -> completed
 

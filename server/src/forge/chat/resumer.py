@@ -86,6 +86,20 @@ def _render_resume_prompt(prev_content: str) -> str:
 _RESUMABLE_STATUSES = {"aborted", "partial"}
 
 
+def _is_message_active_locally(message_id: str) -> bool:
+    """检查进程内是否有该 message_id 的活跃流。
+
+    延迟导入避免循环依赖（orchestrator 已 import resumer）。
+    服务重启后进程内无任何活跃流，返回 False，允许接管遗留 streaming 消息。
+    """
+    try:
+        from forge.chat.orchestrator import get_active_streams  # noqa: PLC0415
+
+        return message_id in get_active_streams()
+    except ImportError:
+        return False
+
+
 class ResumeError(Exception):
     """resume 阶段不可恢复错误. Orchestrator 转 SSE error."""
 
@@ -130,7 +144,15 @@ class TurnResumer:
                 if session is None or session.user_id != user_id:
                     raise ResumeError("无权访问该会话", code="40310")
 
-                if asst.status not in _RESUMABLE_STATUSES:
+                if asst.status == "streaming":
+                    # 并发 resume 防护：本地有活跃流则拒绝
+                    if _is_message_active_locally(asst.id):
+                        raise ResumeError(
+                            "已有活跃流正在生成中，不允许并发 resume",
+                            code="40902",
+                        )
+                    # 遗留 streaming（服务重启/异常中断）→ 视同 aborted 允许续写
+                elif asst.status not in _RESUMABLE_STATUSES:
                     raise ResumeError(
                         f"当前状态 {asst.status!r} 不可恢复 (仅支持 aborted / partial)",
                         code="40901",
@@ -155,7 +177,8 @@ class TurnResumer:
                 prev_reasoning = asst.reasoning_content
                 prev_reasoning_ms = asst.reasoning_duration_ms
                 prev_usage = dict(asst.usage or {})
-                prev_status = asst.status
+                # 遗留 streaming → 归一化为 aborted（语义等价，便于日志/finalizer 处理）
+                prev_status = "aborted" if asst.status == "streaming" else asst.status
                 prev_finish_reason = (asst.context_meta or {}).get("finish_reason", prev_status)
 
                 # ★ 关键: 状态置回 streaming, 让本轮可以再注册 abort_event,

@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from contextlib import suppress
 from contextvars import ContextVar
 
 from forge.agents.hitl import (
@@ -31,6 +32,7 @@ from forge.agents.hitl import (
 )
 from forge.agents.lifecycle import RunContext, StepContext, ToolCallVeto
 from forge.core.types.message import Message, ToolCall
+from forge.infrastructure.run_store import RunStore
 
 logger = logging.getLogger(__name__)
 
@@ -65,12 +67,16 @@ class PlanModeLifecycle:
         full_schemas: list[dict],
         *,
         run_id: str | None = None,
+        owner_user_id: str | None = None,
+        store: RunStore | None = None,
         registry: DecisionRegistry | None = None,
         ttl_sec: int = 1800,
     ) -> None:
         self._readonly = list(readonly_schemas)
         self._full = list(full_schemas)
         self._run_id = run_id
+        self._owner_user_id = owner_user_id
+        self._store = store
         self._registry = registry or get_decision_registry()
         self._ttl_sec = ttl_sec
 
@@ -78,6 +84,8 @@ class PlanModeLifecycle:
         PLAN_MODE.set(True)
         if self._run_id is None:
             self._run_id = ctx.run_id
+        if self._owner_user_id is None:
+            self._owner_user_id = ctx.user_id
         logger.info(
             "Plan Mode 进入: run=%s readonly_tools=%d full_tools=%d",
             ctx.run_id, len(self._readonly), len(self._full),
@@ -122,21 +130,22 @@ class PlanModeLifecycle:
             kind="plan",
             payload={"plan_markdown": plan_md},
             run_id=self._run_id,
+            owner_user_id=self._owner_user_id,
             ttl_sec=self._ttl_sec,
         )
+        await self._mark_blocked(pending.token)
         logger.info(
             "Plan 提交, 等待用户决策: token=%s run=%s plan_len=%d",
             pending.token, self._run_id, len(plan_md),
         )
 
-        try:
-            await asyncio.wait_for(pending.event.wait(), timeout=self._ttl_sec + 5)
-        except TimeoutError:
+        with suppress(TimeoutError):
             # cleanup_loop 应该已经标记 decided = Decision(False, "决策超时")
-            pass
+            await asyncio.wait_for(pending.event.wait(), timeout=self._ttl_sec + 5)
 
         decided: Decision | None = pending.decided
         self._registry.remove(pending.token)
+        await self._mark_running(pending.token, decided)
 
         if decided is None or not decided.approved:
             feedback = (decided.feedback if decided else "决策超时") or "未批准"
@@ -185,6 +194,29 @@ class PlanModeLifecycle:
                 content=content,
             ),
         )
+
+    async def _mark_blocked(self, token: str) -> None:
+        if self._store is None or self._run_id is None:
+            return
+        payload = {"reason": "plan_decision_required", "token": token}
+        try:
+            await self._store.transition_status(self._run_id, "blocked", payload=payload)
+            await self._store.append_event(self._run_id, "plan_decision_required", payload)
+        except Exception:  # noqa: BLE001
+            logger.exception("Plan Mode blocked 状态写入失败 run=%s", self._run_id)
+
+    async def _mark_running(self, token: str, decided: Decision | None) -> None:
+        if self._store is None or self._run_id is None:
+            return
+        payload = {
+            "reason": "plan_decision_received",
+            "token": token,
+            "approved": bool(decided and decided.approved),
+        }
+        try:
+            await self._store.transition_status(self._run_id, "running", payload=payload)
+        except Exception:  # noqa: BLE001
+            logger.exception("Plan Mode running 状态恢复失败 run=%s", self._run_id)
 
 
 __all__ = ["PLAN_MODE", "PlanModeLifecycle", "is_plan_mode", "set_plan_mode"]

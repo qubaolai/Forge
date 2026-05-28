@@ -36,31 +36,31 @@ ON DUPLICATE KEY UPDATE key_id=VALUES(key_id);
 INSERT INTO models (id, model_id, provider_id, name, display_name, model_type,
   context_window, max_output_tokens,
   supports_tools, supports_images, supports_thinking,
-  thinking_type, thinking_options, thinking_default,
+  thinking_options,
   extra_params, cost_tier, is_enabled, is_default, priority, created_at, updated_at)
 VALUES
 -- DashScope / 通义千问
 (3001, 'mdl_ds_max',    1001, 'qwen3-max-preview', '通义千问 Max', 'text',
-  32768,  8192,  true, false, false, NULL, NULL, NULL,
+  32768,  8192,  true, false, false, NULL,
   '{"temperature":0.7}', 'mid',   true, false, 90, NOW(), NOW()),
 (3002, 'mdl_ds_plus',   1001, 'qwen-plus', '通义千问 Plus', 'text',
-  131072, 8192,  true, false, false, NULL, NULL, NULL,
+  131072, 8192,  true, false, false, NULL,
   '{"temperature":0.7}', 'cheap', true, true,  100, NOW(), NOW()),
 (3003, 'mdl_ds_36plus', 1001, 'qwen3.6-plus', '通义千问 qwen3.6-plus', 'text',
-  131072, 8192,  true, false, false, NULL, NULL, NULL,
+  131072, 8192,  true, false, false, NULL,
   '{"temperature":0.7}', 'mid',   true, false, 80, NOW(), NOW()),
 (3004, 'mdl_ds_flash',  1001, 'qwen3.5-flash', '通义千问 qwen3.5-flash', 'text',
-  8192,   4096,  true, false, false, NULL, NULL, NULL,
+  8192,   4096,  true, false, false, NULL,
   '{"temperature":0.7}', 'cheap', true, false, 70, NOW(), NOW()),
 
 -- DeepSeek
 (3021, 'mdl_dp_pro',  1003, 'deepseek-v4-pro',  'DeepSeek V4 PRO',  'text',
   1000000, 32768, true, false, true,
-  'reasoning_effort', '["high","max"]', 'high',
+  '["standard","low","medium","high","xhigh"]',
   '{"temperature":0.7}', 'expensive', true, true,  100, NOW(), NOW()),
 (3022, 'mdl_dp_flash', 1003, 'deepseek-v4-flash', 'DeepSeek V4 flash', 'text',
   1000000, 32768, true, false, true,
-  'reasoning_effort', '["high","max"]', 'high',
+  '["standard","low","medium","high","xhigh"]',
   '{"temperature":0.7}', 'mid',       true, false, 90, NOW(), NOW())
 ON DUPLICATE KEY UPDATE name=VALUES(name);
 

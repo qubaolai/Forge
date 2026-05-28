@@ -142,8 +142,11 @@ async def test_status_streaming_rejected() -> None:
     with ExitStack() as stack, pytest.raises(ResumeError) as exc:
         for p in _patches(factory, m, s):
             stack.enter_context(p)
+        stack.enter_context(
+            patch("forge.chat.resumer._is_message_active_locally", return_value=True)
+        )
         await TurnResumer().prepare(user_id="u1", message_id="msg_a1", trace_id="")
-    assert exc.value.code == "40901"
+    assert exc.value.code == "40902"
 
 
 @pytest.mark.asyncio
@@ -203,4 +206,26 @@ async def test_resume_happy_path_marks_streaming_and_returns_state() -> None:
     assert resume.prev_content == "我开始回答: 1."
     assert len(resume.prev_tool_calls) == 2
     assert resume.prev_finish_reason == "partial_steps"
+    assert resume.prev_status == "aborted"
+
+
+@pytest.mark.asyncio
+async def test_stale_streaming_can_be_resumed() -> None:
+    """遗留 streaming（本地无活跃流）允许接管续写。"""
+    asst = _asst(
+        status="streaming",
+        content="上次中断在这里",
+    )
+    factory, m, s = _build_fake_db(asst=asst, session=_session(), parent=_parent())
+    with ExitStack() as stack:
+        for p in _patches(factory, m, s):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch("forge.chat.resumer._is_message_active_locally", return_value=False)
+        )
+        ctx, resume = await TurnResumer().prepare(
+            user_id="u1", message_id="msg_a1", trace_id="trace-x"
+        )
+
+    assert ctx.assistant_msg_id == "msg_a1"
     assert resume.prev_status == "aborted"

@@ -138,6 +138,23 @@
 | POST | `/chat/stop` | 中断指定消息生成 | ✅ |
 | POST | `/chat/regenerate` | 重新生成 | 后续 |
 
+### 2.3.1 任务运行 `/runs` + 决策 `/decisions`
+
+| 方法 | 路径 | 用途 | 必需 |
+|---|---|---|---|
+| POST | `/runs` | 创建并启动任务 run（`mode=plan_exec/workflow`） | ✅ |
+| GET | `/runs` | 列出 run（按 workspace） | ✅ |
+| GET | `/runs/{id}` | 查询 run 快照 | ✅ |
+| GET | `/runs/{id}/events` | SSE 订阅 run 事件 | ✅ |
+| POST | `/runs/{id}/abort` | 中止 run | ✅ |
+| GET | `/decisions/{token}` | 查询待决策项（Plan/Gate） | ✅ |
+| POST | `/decisions/{token}` | 提交决策（批准/拒绝） | ✅ |
+
+说明：
+
+1. `/runs` 的人工决策入口是 `/decisions/{token}`，不再使用 `/runs/{id}/decide`。
+2. `token` 由 run 事件流返回（例如 `plan_decision_required`、`workflow_gate_required`）。
+
 ### 2.4 知识库 `/knowledge-bases`
 
 | 方法 | 路径 | 用途 | 必需 |

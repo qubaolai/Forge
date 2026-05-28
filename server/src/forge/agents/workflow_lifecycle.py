@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from contextlib import suppress
 from typing import Any
 
 from forge.agents.hitl import (
@@ -98,6 +99,7 @@ class WorkflowLifecycle:
         template: dict[str, Any],
         *,
         run_id: str,
+        owner_user_id: str | None = None,
         store: RunStore | None = None,
         registry: DecisionRegistry | None = None,
         ttl_sec: int = 1800,
@@ -105,6 +107,7 @@ class WorkflowLifecycle:
         validate_workflow_template(template)
         self._template = template
         self._run_id = run_id
+        self._owner_user_id = owner_user_id
         self._store = store
         self._registry = registry or get_decision_registry()
         self._ttl_sec = ttl_sec
@@ -122,6 +125,8 @@ class WorkflowLifecycle:
         return self._phases[self._current_idx]
 
     async def on_start(self, ctx: RunContext) -> None:
+        if self._owner_user_id is None:
+            self._owner_user_id = ctx.user_id
         if self._store is not None:
             try:
                 await self._store.append_event(
@@ -257,10 +262,20 @@ class WorkflowLifecycle:
                 ],
             },
             run_id=self._run_id,
+            owner_user_id=self._owner_user_id,
             ttl_sec=self._ttl_sec,
         )
         if self._store is not None:
             try:
+                await self._store.transition_status(
+                    self._run_id,
+                    "blocked",
+                    payload={
+                        "reason": "workflow_gate_required",
+                        "token": pending.token,
+                        "completed_phase": completed_phase["id"],
+                    },
+                )
                 await self._store.append_event(
                     self._run_id,
                     "workflow_gate_required",
@@ -279,14 +294,25 @@ class WorkflowLifecycle:
             "Workflow gate 等待: token=%s run=%s phase=%s",
             pending.token, self._run_id, completed_phase["id"],
         )
-        try:
+        with suppress(TimeoutError):
             await asyncio.wait_for(
                 pending.event.wait(), timeout=self._ttl_sec + 5,
             )
-        except TimeoutError:
-            pass
         decided = pending.decided
         self._registry.remove(pending.token)
+        if self._store is not None:
+            try:
+                await self._store.transition_status(
+                    self._run_id,
+                    "running",
+                    payload={
+                        "reason": "workflow_gate_received",
+                        "token": pending.token,
+                        "approved": bool(decided and decided.approved),
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("workflow gate 恢复 running 失败 run=%s", self._run_id)
         return decided
 
     def _veto(

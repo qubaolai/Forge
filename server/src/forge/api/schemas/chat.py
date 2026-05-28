@@ -68,16 +68,15 @@ class ChatAttachment(BaseModel):
 class ModelOptionsIn(BaseModel):
     """模型选择 — 前端必须指定 provider 和 model。
 
-    思考参数按供应商区分:
-    - DeepSeek: reasoning_effort = "high" | "max"
-    - Anthropic: thinking = true, 可配 thinking_budget (默认 5000)
+    统一思考参数:
+    - thinking: 是否开启思考
+    - thinking_level: 思考强度档位 (由前端映射)
     """
 
     provider: str
     model: str
-    reasoning_effort: Literal["high", "max"] | None = None
     thinking: bool | None = None
-    thinking_budget: int | None = None
+    thinking_level: Literal["standard", "low", "medium", "high", "xhigh"] | None = None
 
 
 class ChatCompletionIn(BaseModel):

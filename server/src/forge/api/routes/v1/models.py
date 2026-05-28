@@ -23,16 +23,9 @@ def _build_thinking_meta(model: dict) -> dict | None:
     if not model.get("supports_thinking"):
         return None
 
-    thinking_type = model.get("thinking_type")
-    if thinking_type == "reasoning_effort":
-        options = model.get("thinking_options") or ["high", "max"]
-        default = model.get("thinking_default") or (options[0] if options else "high")
-        return {"type": "reasoning_effort", "options": options, "default": default}
-
-    if thinking_type == "enabled":
-        return {"type": "enabled", "default": model.get("thinking_default") or "enabled"}
-
-    return None
+    options = model.get("thinking_options") or None
+    default = options[0] if options else None
+    return {"options": options, "default": default}
 
 
 def _to_model_info(model: dict, provider_name: str) -> dict:
@@ -46,6 +39,7 @@ def _to_model_info(model: dict, provider_name: str) -> dict:
         "context_window": int(model.get("context_window") or 0),
         "supports_tools": bool(model.get("supports_tools", False)),
         "supports_images": bool(model.get("supports_images", False)),
+        "supports_thinking": bool(model.get("supports_thinking", False)),
         "thinking": _build_thinking_meta(model),
     }
 
@@ -111,9 +105,7 @@ async def list_models(
                         "supports_tools": m.supports_tools,
                         "supports_images": m.supports_images,
                         "supports_thinking": m.supports_thinking,
-                        "thinking_type": m.thinking_type,
                         "thinking_options": m.thinking_options,
-                        "thinking_default": m.thinking_default,
                     },
                     provider_row.name,
                 )

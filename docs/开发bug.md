@@ -9,7 +9,7 @@
 第二轮复查发现，上一轮记录的一部分问题已经被补丁修复或缓解：
 
 - `/api/v1/runs` 现在会通过 `RunSupervisor` 启动后台 AdaptiveRun。
-- `/runs/{id}/decide` 的 continue 会重新唤起 supervisor。
+- HITL 决策入口已统一为 `/decisions/{token}`（由 runs 事件中的 token 驱动）。
 - TaskGraph artifact 已经落盘。
 - `allow_write=False` 已经进入 Validator 和 Executor 的基础校验。
 - SSE 传入不存在的 `after_event_id` 时已经返回 400。
@@ -17,6 +17,31 @@
 - Integrator 已经记录 `integrated_patch_ids`，并用 `git apply --check` 做预检查。
 
 但当前 `server/` 端仍不能判断为 M9 后“服务端已完整实现”。原因是：真实 Adaptive 执行链路默认关闭，打开后仍存在配置、导入、执行隔离和权限边界问题；默认 fallback 路径仍会生成“看似完成”的占位产物，不能保证产出可落地代码。
+
+## 2026-05-28 增补（聊天续写权限）
+
+### chat/completions 与 chat/resume 会话归属校验不一致（已修复）
+
+涉及文件：
+
+- `server/src/forge/chat/preparer.py`
+- `server/src/forge/chat/resumer.py`
+
+问题现象：
+
+- 非会话所有者在 `chat/completions` 传入他人 `session_id` 时，旧逻辑只校验“会话是否存在”，未校验 owner。
+- 这会导致消息可能先被写入；随后用户点击“继续生成”进入 `chat/resume` 时，被 `resumer` 的 owner 校验拦截并报 `40310 无权访问该会话`，表现为“当前对话能发消息，但继续生成提示无权访问”。
+
+修复内容：
+
+- 在 `TurnPreparer.prepare()` 的已有会话分支新增 owner 校验：
+  - `existing_session.user_id != user_id` 时直接抛 `TurnPreparationError("无权访问该会话", code="40310")`。
+- 保持与 `TurnResumer.prepare()` 一致的权限语义，统一为“非 owner 在入口即拒绝”。
+
+验证：
+
+- 新增单测：`server/tests/unit/chat/test_preparer_auth.py::test_existing_session_owner_mismatch_rejected`。
+- 该测试覆盖“非 owner 使用已有会话时，在任何消息写入前直接返回 40310”。
 
 ## P0 问题
 

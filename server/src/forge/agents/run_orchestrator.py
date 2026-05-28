@@ -20,13 +20,11 @@ import logging
 import time
 from typing import Any
 
-from forge.agents.base import AgentEvent
 from forge.agents.lifecycle import AgentLifecycle, RunContext
 from forge.agents.persistence_lifecycle import RunStorePersistenceLifecycle
 from forge.agents.plan_mode import PlanModeLifecycle
-from forge.agents.profiles import get_agent_profile
-from forge.agents.workflow_lifecycle import WorkflowLifecycle
 from forge.agents.react.agent import ReActAgent
+from forge.agents.workflow_lifecycle import WorkflowLifecycle
 from forge.chat.guards import (
     GuardLifecycleAdapter,
     LoopGuard,
@@ -37,7 +35,6 @@ from forge.chat.guards import (
 )
 from forge.config.domains.agent_profiles import AgentProfile
 from forge.config.settings import get_settings
-from forge.core.types.message import Message
 from forge.infrastructure.run_store import RunStore
 from forge.infrastructure.run_store_models import RunRecord
 from forge.llm import GatewayBinding, GatewayLLMAdapter, get_llm_gateway
@@ -220,6 +217,8 @@ class RunOrchestrator:
                     readonly_schemas=readonly_schemas,
                     full_schemas=full_schemas,
                     run_id=self.run_id,
+                    owner_user_id=self._user_id,
+                    store=self._store,
                 )
             )
 
@@ -229,6 +228,7 @@ class RunOrchestrator:
                 WorkflowLifecycle(
                     self._workflow_template,
                     run_id=self.run_id,
+                    owner_user_id=self._user_id,
                     store=self._store,
                 )
             )
