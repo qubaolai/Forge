@@ -114,7 +114,7 @@ class ModelRepository:
     _SYNC_UPDATABLE_FIELDS = frozenset({
         "display_name", "context_window", "max_output_tokens",
         "supports_tools", "supports_images", "supports_thinking",
-        "thinking_type", "thinking_options", "thinking_default",
+        "thinking_options",
         "extra_params",
     })
 
@@ -143,9 +143,7 @@ class ModelRepository:
                 "supports_tools": model_data.get("supports_tools", True),
                 "supports_images": model_data.get("supports_images", False),
                 "supports_thinking": model_data.get("supports_thinking", False),
-                "thinking_type": model_data.get("thinking_type"),
                 "thinking_options": model_data.get("thinking_options"),
-                "thinking_default": model_data.get("thinking_default"),
                 "extra_params": model_data.get("extra_params"),
                 "cost_tier": model_data.get("cost_tier", "mid"),
                 "is_enabled": True,
@@ -191,9 +189,7 @@ class ModelRepository:
             supports_tools=model_data.get("supports_tools", True),
             supports_images=model_data.get("supports_images", False),
             supports_thinking=model_data.get("supports_thinking", False),
-            thinking_type=model_data.get("thinking_type"),
             thinking_options=model_data.get("thinking_options"),
-            thinking_default=model_data.get("thinking_default"),
             extra_params=model_data.get("extra_params"),
             cost_tier=model_data.get("cost_tier", "mid"),
             is_enabled=True,

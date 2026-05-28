@@ -22,9 +22,7 @@ class _FakeCache:
                     "supports_tools": True,
                     "supports_images": True,
                     "supports_thinking": True,
-                    "thinking_type": "enabled",
-                    "thinking_options": None,
-                    "thinking_default": "enabled",
+                    "thinking_options": ["standard", "low", "medium", "high", "xhigh"],
                 },
                 {
                     "model_id": "mdl_a_2",
@@ -35,9 +33,7 @@ class _FakeCache:
                     "supports_tools": False,
                     "supports_images": False,
                     "supports_thinking": False,
-                    "thinking_type": None,
                     "thinking_options": None,
-                    "thinking_default": None,
                 },
             ],
             "openai": [
@@ -50,9 +46,7 @@ class _FakeCache:
                     "supports_tools": True,
                     "supports_images": True,
                     "supports_thinking": True,
-                    "thinking_type": "reasoning_effort",
-                    "thinking_options": ["high", "max"],
-                    "thinking_default": "high",
+                    "thinking_options": ["standard", "low", "medium", "high", "xhigh"],
                 },
             ],
         }
@@ -86,11 +80,18 @@ async def test_list_models_grouped_by_provider() -> None:
     assert anthropic_group["provider"] == "anthropic"
     assert len(anthropic_group["models"]) == 1
     assert anthropic_group["models"][0]["name"] == "claude-sonnet-4-6"
-    assert anthropic_group["models"][0]["thinking"] == {"type": "enabled", "default": "enabled"}
+    assert anthropic_group["models"][0]["supports_thinking"] is True
+    assert anthropic_group["models"][0]["thinking"] == {
+        "options": ["standard", "low", "medium", "high", "xhigh"],
+        "default": "standard",
+    }
 
     openai_group = data["groups"][1]
     assert openai_group["provider"] == "openai"
-    assert openai_group["models"][0]["thinking"]["type"] == "reasoning_effort"
+    assert openai_group["models"][0]["thinking"] == {
+        "options": ["standard", "low", "medium", "high", "xhigh"],
+        "default": "standard",
+    }
 
 
 @pytest.mark.asyncio

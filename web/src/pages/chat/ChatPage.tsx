@@ -5,7 +5,7 @@ import { sessionsApi, agentsApi, systemApi, ModelGroup } from '@/api';
 import { ChatMessage, Citation } from '@/types';
 import { useChatStream } from '@/hooks/useChatStream';
 import { MessageList } from '@/components/chat/MessageList';
-import { ChatInput, ReasoningEffort } from '@/components/chat/ChatInput';
+import { ChatInput, ThinkingLevel } from '@/components/chat/ChatInput';
 import { CitationPanel } from '@/components/chat/CitationPanel';
 import { PanelRight } from 'lucide-react';
 import type { ModelOptions } from '@/hooks/useChatStream';
@@ -42,7 +42,7 @@ export default function ChatPage() {
   const [pendingUser, setPendingUser] = useState<ChatMessage[]>([]);
   const [showPanel, setShowPanel] = useState(true);
   const [selectedCitation, setSelectedCitation] = useState<number | null>(null);
-  const [reasoning, setReasoning] = useState<ReasoningEffort>('high');
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>('standard');
   const [thinkingEnabled, setThinkingEnabled] = useState(true);
 
   // 模型选择
@@ -182,12 +182,15 @@ export default function ChatPage() {
 
   function buildModelOptions(): ModelOptions {
     const opts: ModelOptions = { provider: selectedProvider, model: selectedModel };
-    const meta = currentModelMeta?.thinking;
-    if (meta?.type === 'reasoning_effort') {
-      opts.reasoning_effort = reasoning;
-    } else if (meta?.type === 'enabled' && thinkingEnabled) {
-      opts.thinking = true;
-      opts.thinking_budget = 5000;
+    if (!currentModelMeta?.supports_thinking) {
+      return opts;
+    }
+    opts.thinking = thinkingEnabled;
+    const levels = (currentModelMeta.thinking?.options || []).filter(Boolean);
+    if (thinkingEnabled && levels.length > 0) {
+      const defaultLevel = currentModelMeta.thinking?.default || levels[0];
+      const resolvedLevel = levels.includes(thinkingLevel) ? thinkingLevel : defaultLevel;
+      opts.thinking_level = resolvedLevel as ThinkingLevel;
     }
     return opts;
   }
@@ -294,8 +297,8 @@ export default function ChatPage() {
           streaming={streaming}
           disabled={false}
           placeholder={undefined}
-          reasoning={reasoning}
-          onReasoningChange={setReasoning}
+          thinkingLevel={thinkingLevel}
+          onThinkingLevelChange={setThinkingLevel}
           selectedProvider={selectedProvider}
           selectedModel={selectedModel}
           modelGroups={modelGroups}

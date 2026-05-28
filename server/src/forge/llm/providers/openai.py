@@ -27,6 +27,40 @@ from .base import LLM
 
 logger = logging.getLogger(__name__)
 
+_GENERIC_REASONING_LEVEL_MAP: dict[str, str] = {
+    "低": "low",
+    "中": "medium",
+    "高": "high",
+    "超高": "xhigh",
+    "标准": "medium",
+}
+
+_GENERIC_REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
+
+
+def _normalize_reasoning_level(value: Any) -> str | None:
+    """统一规范化思考强度文本, 兼容中英文."""
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if text in _GENERIC_REASONING_EFFORTS:
+        return text
+    return _GENERIC_REASONING_LEVEL_MAP.get(text)
+
+
+def _resolve_deepseek_effort(opts: dict[str, Any]) -> str | None:
+    """DeepSeek 专用强度映射: 高级别→high, 超高级别→max."""
+    effort = _normalize_reasoning_level(opts.get("reasoning_effort"))
+    if effort is None:
+        effort = _normalize_reasoning_level(opts.get("thinking_level"))
+    if effort is None:
+        return None
+    if effort in ("max", "xhigh"):
+        return "max"
+    return "high"
+
 
 def _log_llm_request(
     llm: OpenAICompatibleLLM,
@@ -125,10 +159,13 @@ class OpenAICompatibleLLM(LLM):
             kw["max_tokens"] = max_tokens
         if top_p is not None:
             kw["top_p"] = top_p
-        # reasoning_effort 只从 extra_options 读取 (per-request 前端传入)
+        # reasoning_effort / thinking_level 只从 extra_options 读取 (per-request 前端传入)
         opts = extra_options or {}
-        if opts.get("reasoning_effort"):
-            kw["reasoning_effort"] = opts["reasoning_effort"]
+        effort = _normalize_reasoning_level(opts.get("reasoning_effort"))
+        if effort is None:
+            effort = _normalize_reasoning_level(opts.get("thinking_level"))
+        if effort:
+            kw["reasoning_effort"] = effort
         return kw
 
     # ------------------------------------------------------------------
@@ -403,6 +440,10 @@ class DeepSeekLLM(OpenAICompatibleLLM):
             body["thinking"] = {"type": "enabled" if effective_thinking else "disabled"}
             if not effective_thinking:
                 kw.pop("reasoning_effort", None)
+            else:
+                effort = _resolve_deepseek_effort(opts)
+                if effort:
+                    kw["reasoning_effort"] = effort
         return kw
 
     def _messages_payload(self, messages: list) -> list[dict]:
@@ -520,3 +561,136 @@ class DashScopeCompatLLM(OpenAICompatibleLLM):
     @property
     def provider_name(self) -> str:
         return "dashscope"
+    
+
+@register_llm("mimo")
+class XiaoMiMIMOLLM(OpenAICompatibleLLM):
+    """小米 MIMO (OpenAI 兼容模式)."""
+
+    DEFAULT_BASE_URL = "https://api.xiaomimimo.com/v1"
+
+    @property
+    def provider_name(self) -> str:
+        return "mimo"
+    
+    def _build_kwargs(
+        self,
+        *,
+        model: str,
+        temperature: float | None,
+        max_tokens: int | None,
+        top_p: float | None = None,
+        thinking: bool | None = None,
+        extra_options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        kw = super()._build_kwargs(
+            model=model, temperature=temperature, max_tokens=max_tokens,
+            top_p=top_p, extra_options=extra_options
+        )
+        opts = extra_options or {}
+        effective_thinking = opts.get("thinking")
+        if effective_thinking is not None:
+            body = kw.setdefault("extra_body", {})
+            body["thinking"] = {"type": "enabled" if effective_thinking else "disabled"}
+        return kw
+
+    def _messages_payload(self, messages: list) -> list[dict]:
+        """发请求前把 Message.reasoning_content 塞回 payload (assistant 消息)."""
+        payload = super()._messages_payload(messages)
+        for orig, d in zip(messages, payload, strict=False):
+            if isinstance(orig, Message) and orig.extra_content:
+                d["reasoning_content"] = orig.extra_content
+        return payload
+
+    async def chat_with_tools_stream(
+        self,
+        messages: list,
+        tools: list[dict],
+        *,
+        model: str,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
+        tool_choice: str = "auto",
+        extra_options: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """DeepSeek thinking 模式的流式 tool calling.
+
+        chunk dict 在父类基础上多一个 reasoning_delta 字段, 携带思考链增量.
+        """
+        payload = self._messages_payload(messages)
+        kw = self._build_kwargs(
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            extra_options=extra_options,
+        )
+        _log_llm_request(self, payload, tools, kw)
+        try:
+            stream = self._create_chat_completion(
+                messages=payload,
+                stream=True,
+                tools=tools if tools else NOT_GIVEN,
+                tool_choice=tool_choice if tools else NOT_GIVEN,
+                **kw,
+            )
+        except (APIStatusError, APITimeoutError) as e:
+            raise RuntimeError(f"XiaoMiMIMOLLM tool stream 调用失败: {e}") from e
+
+        tc_buffer: dict[int, dict[str, str]] = {}
+        last_model: str | None = None
+
+        for chunk in stream:
+            last_model = chunk.model or last_model
+
+            if not chunk.choices:
+                if chunk.usage:
+                    yield {
+                        "content_delta": "",
+                        "reasoning_delta": "",
+                        "tool_calls": None,
+                        "finish_reason": None,
+                        "usage": chunk.usage.model_dump(),
+                        "model": last_model,
+                    }
+                continue
+
+            choice = chunk.choices[0]
+            delta = choice.delta
+            content_delta = (delta.content or "") if delta and delta.content else ""
+            reasoning_delta = getattr(delta, "reasoning_content", None) or "" if delta else ""
+
+            if delta and delta.tool_calls:
+                for tc_delta in delta.tool_calls:
+                    idx = tc_delta.index
+                    buf = tc_buffer.setdefault(idx, {"id": "", "name": "", "arguments_str": ""})
+                    if tc_delta.id:
+                        buf["id"] = tc_delta.id
+                    if tc_delta.function and tc_delta.function.name:
+                        buf["name"] = tc_delta.function.name
+                    if tc_delta.function and tc_delta.function.arguments:
+                        buf["arguments_str"] += tc_delta.function.arguments
+
+            finish_reason = choice.finish_reason
+            emitted_tcs: list[ToolCall] | None = None
+            if finish_reason == "tool_calls" and tc_buffer:
+                emitted_tcs = []
+                for idx in sorted(tc_buffer.keys()):
+                    buf = tc_buffer[idx]
+                    try:
+                        args = json.loads(buf["arguments_str"] or "{}")
+                    except json.JSONDecodeError:
+                        args = {"_raw": buf["arguments_str"]}
+                    emitted_tcs.append(ToolCall(id=buf["id"], name=buf["name"], arguments=args))
+                tc_buffer.clear()
+
+            yield {
+                "content_delta": content_delta,
+                "reasoning_delta": reasoning_delta,
+                "tool_calls": emitted_tcs,
+                "finish_reason": finish_reason,
+                "usage": chunk.usage.model_dump() if chunk.usage else None,
+                "model": last_model,
+            }

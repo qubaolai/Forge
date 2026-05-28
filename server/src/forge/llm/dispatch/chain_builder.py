@@ -174,7 +174,7 @@ async def _build_entries_from_cache(
         max_tokens=extra.get("max_tokens", model_detail.get("max_output_tokens", 4096)),
         top_p=extra.get("top_p"),
         thinking=extra.get("thinking"),
-        reasoning_effort=model_detail.get("thinking_default") or extra.get("reasoning_effort"),
+        reasoning_effort=extra.get("reasoning_effort"),
         thinking_budget=extra.get("thinking_budget"),
         top_k=extra.get("top_k"),
         base_url=provider_info.get("base_url"),

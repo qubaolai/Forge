@@ -18,14 +18,14 @@ interface UseChatStreamOptions {
 
 /** 后端 ChatCompletionIn.model_options 结构。
  *
- * provider / model 必传，reasoning_effort 仅 DeepSeek 有效。
+ * provider / model 必传；
+ * thinking 表示是否开启思考，thinking_level 表示统一强度档位。
  */
 export interface ModelOptions {
   provider: string;
   model: string;
-  reasoning_effort?: 'high' | 'max';  // DeepSeek
-  thinking?: boolean;                  // Anthropic
-  thinking_budget?: number;            // Anthropic budget_tokens
+  thinking?: boolean;
+  thinking_level?: 'standard' | 'low' | 'medium' | 'high' | 'xhigh';
 }
 
 /**

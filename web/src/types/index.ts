@@ -298,7 +298,8 @@ export interface ChatCompletionRequest {
   model_options: {
     provider: string;
     model: string;
-    reasoning_effort?: 'high' | 'max';
+    thinking?: boolean;
+    thinking_level?: 'standard' | 'low' | 'medium' | 'high' | 'xhigh';
   };
 }
 

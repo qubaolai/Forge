@@ -27,11 +27,9 @@ class ModelOrm(Base, BigIntPKMixin):
     supports_tools: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否支持工具调用")
     supports_images: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="是否支持图片识别")
     supports_thinking: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="是否支持思考模式")
-    thinking_type: Mapped[str | None] = mapped_column(
-        String(32), nullable=True, comment="reasoning_effort / enabled"
+    thinking_options: Mapped[list | None] = mapped_column(
+        JSON, nullable=True, comment='思考强度档位: ["standard","low","medium","high","xhigh"]'
     )
-    thinking_options: Mapped[list | None] = mapped_column(JSON, nullable=True, comment='["high","max"] 或 ["enabled"]')
-    thinking_default: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="默认思考值")
     extra_params: Mapped[dict | None] = mapped_column(
         JSON, nullable=True, comment="类型特定参数: dimension / batch_size / timeout / truncation ..."
     )

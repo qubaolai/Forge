@@ -118,7 +118,8 @@ export interface ModelInfo {
   context_window: number;
   supports_tools: boolean;
   supports_images: boolean;
-  thinking: { type: string; options?: string[]; default?: string } | null;
+  supports_thinking: boolean;
+  thinking: { options?: string[] | null; default?: string | null } | null;
 }
 
 export interface ModelGroup {

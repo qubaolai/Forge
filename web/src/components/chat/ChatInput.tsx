@@ -2,7 +2,7 @@ import { useRef, useState, KeyboardEvent } from 'react';
 import { Send, Square, Brain } from 'lucide-react';
 import type { ModelGroup } from '@/api';
 
-export type ReasoningEffort = 'high' | 'max';
+export type ThinkingLevel = 'standard' | 'low' | 'medium' | 'high' | 'xhigh';
 
 interface Props {
   onSend: (text: string) => void;
@@ -10,8 +10,8 @@ interface Props {
   disabled?: boolean;
   streaming?: boolean;
   placeholder?: string;
-  reasoning?: ReasoningEffort;
-  onReasoningChange?: (value: ReasoningEffort) => void;
+  thinkingLevel?: ThinkingLevel;
+  onThinkingLevelChange?: (value: ThinkingLevel) => void;
   // 模型选择
   selectedProvider: string;
   selectedModel: string;
@@ -21,9 +21,12 @@ interface Props {
   onThinkingChange: (enabled: boolean) => void;
 }
 
-const REASONING_LABELS: Record<ReasoningEffort, string> = {
-  high: '标准',
-  max: '深度',
+const THINKING_LEVEL_LABELS: Record<ThinkingLevel, string> = {
+  standard: '标准',
+  low: '低',
+  medium: '中',
+  high: '高',
+  xhigh: '超高',
 };
 
 export function ChatInput({
@@ -32,8 +35,8 @@ export function ChatInput({
   disabled,
   streaming,
   placeholder,
-  reasoning = 'high',
-  onReasoningChange,
+  thinkingLevel = 'standard',
+  onThinkingLevelChange,
   selectedProvider,
   selectedModel,
   modelGroups,
@@ -71,8 +74,12 @@ export function ChatInput({
     .find((group) => group.provider === selectedProvider)
     ?.models.find((m) => m.name === selectedModel);
   const thinkingMeta = currentModel?.thinking;
-  const showReasoningEffort = thinkingMeta?.type === 'reasoning_effort' && onReasoningChange;
-  const showThinkingToggle = thinkingMeta?.type === 'enabled';
+  const hasThinking = Boolean(currentModel?.supports_thinking);
+  const thinkingOptions = (thinkingMeta?.options || []).filter(Boolean) as string[];
+  const showThinkingLevel = hasThinking && thinkingOptions.length > 0 && onThinkingLevelChange;
+  const selectedThinkingLevel = (
+    thinkingOptions.includes(thinkingLevel) ? thinkingLevel : thinkingOptions[0]
+  ) as ThinkingLevel;
   const selectedValue = `${selectedProvider}::${selectedModel}`;
 
   return (
@@ -137,7 +144,7 @@ export function ChatInput({
                 </optgroup>
               ))}
             </select>
-            {showThinkingToggle && (
+            {hasThinking && (
               <label className="flex items-center gap-1 cursor-pointer text-gray-500">
                 <input
                   type="checkbox"
@@ -151,21 +158,21 @@ export function ChatInput({
           </div>
           <div className="flex items-center gap-2">
             <span>AI 回答可能不准确,请核实关键信息</span>
-            {showReasoningEffort && (
+            {showThinkingLevel && (
               <label
                 className="flex items-center gap-1.5 text-gray-500 hover:text-gray-700 cursor-pointer"
-                title="思考强度: 标准适用于大多数场景, 深度用于复杂推理"
+                title="思考强度: 标准/低/中/高/超高"
               >
                 <Brain size={13} />
                 <span>思考</span>
                 <select
-                  value={reasoning}
-                  onChange={(e) => onReasoningChange?.(e.target.value as ReasoningEffort)}
+                  value={selectedThinkingLevel}
+                  onChange={(e) => onThinkingLevelChange?.(e.target.value as ThinkingLevel)}
                   className="bg-transparent border-none outline-none cursor-pointer text-gray-700"
                 >
-                  {(thinkingMeta?.options || ['high', 'max']).map((v: string) => (
+                  {thinkingOptions.map((v: string) => (
                     <option key={v} value={v}>
-                      {REASONING_LABELS[v as ReasoningEffort] || v}
+                      {THINKING_LEVEL_LABELS[v as ThinkingLevel] || v}
                     </option>
                   ))}
                 </select>
