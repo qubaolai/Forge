@@ -246,6 +246,12 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
 
           if (e.type === 'message_resumed') {
             activeMessageIdRef.current = e.message_id;
+            // 续写开始 → 状态回到 streaming, 让停止按钮重新可用,
+            // 避免被旧的 aborted/partial 状态卡住.
+            setCurrent((prev) =>
+              prev ? { ...prev, status: 'streaming' as MessageStatus } : prev,
+            );
+            setStreaming(true);
             return;
           }
 
@@ -260,9 +266,11 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
             switch (e.type) {
               case 'delta':
                 next.content = (prev.content || '') + e.content;
+                next.status = 'streaming';
                 break;
               case 'reasoning_delta':
                 next.reasoning_content = (prev.reasoning_content || '') + e.content;
+                next.status = 'streaming';
                 break;
               case 'tool_call':
                 next.tool_calls = [...(prev.tool_calls || []), e.tool_call];

@@ -18,6 +18,7 @@ import asyncio
 import logging
 
 from forge.api.schemas.chat import ModelOptionsIn
+from forge.chat.model_meta import DEFAULT_CONTEXT_WINDOW, resolve_context_window
 from forge.chat.types import TurnContext
 from forge.infrastructure.database.database import get_session_factory
 from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
@@ -29,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # 当前 chat 路径固定使用 chat profile；任务模式走 /v1/runs。
 _DEFAULT_MODE = "chat"
-_DEFAULT_CONTEXT_WINDOW = 128_000
+_DEFAULT_CONTEXT_WINDOW = DEFAULT_CONTEXT_WINDOW
 
 
 class TurnPreparationError(Exception):
@@ -54,7 +55,14 @@ class TurnPreparer:
         trace_id: str,
         model_options: ModelOptionsIn | None = None,
     ) -> TurnContext:
-        """跑完所有 DB 准备工作, 返回 TurnContext."""
+        """跑完所有 DB 准备工作, 返回 TurnContext.
+
+        分段以避免在 DB 事务内做长耗时操作:
+          段1 (事务): 解析/新建 session, 判定是否需要重命名, commit.
+          段中 (无事务): 若需要 → 调 utility LLM 生成标题 (≤3s),
+                        持有 DB 连接的窗口缩到 0.
+          段2 (事务): 写 user_msg + assistant 占位, 必要时改名, commit.
+        """
         factory = get_session_factory()
         with span(
             "chat.prepare",
@@ -62,11 +70,11 @@ class TurnPreparer:
             session_hint=session_id or "<new>",
             input_len=len(message or ""),
         ) as s:
+            # ---- 段1: 会话解析 / 重命名判定 ----
             async with factory() as db:
                 sess_repo = ChatSessionRepository(db)
                 msg_repo = ChatMessageRepository(db)
 
-                # 1. session 解析 / 新建
                 is_new_session = session_id is None
                 if is_new_session:
                     session = await sess_repo.create(user_id=user_id)
@@ -79,22 +87,30 @@ class TurnPreparer:
                     session = existing_session
                 session_id_actual = session.id
 
-                # 2. 自动重命名
                 if is_new_session:
                     should_rename = True
                 else:
                     existing_count = await msg_repo.count_by_session(session_id_actual)
                     should_rename = existing_count == 0 and session.title == "新会话"
 
-                # 3. 持久化 user 消息
+                await db.commit()
+
+            # ---- 段中 (无事务): LLM 生成标题, 不占 DB 连接 ----
+            new_title: str | None = None
+            if should_rename:
+                new_title = await _make_title_with_utility_llm(message, model_options)
+
+            # ---- 段2: 写消息 + 必要时改名 ----
+            async with factory() as db:
+                sess_repo = ChatSessionRepository(db)
+                msg_repo = ChatMessageRepository(db)
+
                 user_msg = await msg_repo.add(
                     session_id=session_id_actual,
                     role="user",
                     content=message,
                     status="done",
                 )
-
-                # 4. 占位 assistant
                 asst_msg = await msg_repo.add(
                     session_id=session_id_actual,
                     role="assistant",
@@ -102,12 +118,10 @@ class TurnPreparer:
                     status="streaming",
                     parent_id=user_msg.id,
                 )
-
-                # 5. 重命名 (与消息一起原子提交)
-                new_title: str | None = None
-                if should_rename:
-                    new_title = await _make_title_with_utility_llm(message, model_options)
-                    await sess_repo.update_title(session, new_title)
+                if new_title:
+                    session_in_tx = await sess_repo.get_by_id(session_id_actual)
+                    if session_in_tx is not None:
+                        await sess_repo.update_title(session_in_tx, new_title)
 
                 await db.commit()
 
@@ -120,6 +134,12 @@ class TurnPreparer:
                 s.set("is_new_session", is_new_session)
                 s.set("renamed", new_title is not None)
 
+        model_options_dict = model_options.model_dump() if model_options else None
+        # 真实 context_window 取自 model 配置, 失败回落到默认.
+        # 影响 ContextAssembler.should_compact 的阈值判定.
+        context_window = await resolve_context_window(
+            model_options_dict, default=_DEFAULT_CONTEXT_WINDOW,
+        )
         ctx = TurnContext(
             user_id=user_id,
             user_name=user_name,
@@ -131,9 +151,9 @@ class TurnPreparer:
             is_new_session=is_new_session,
             new_title=new_title,
             trace_id=trace_id,
-            model_options=model_options.model_dump() if model_options else None,
+            model_options=model_options_dict,
             exclude_message_ids=(user_msg_id,),
-            context_window=_DEFAULT_CONTEXT_WINDOW,
+            context_window=context_window,
         )
         logger.info(
             "对话准备完成 session=%s user=%s message_id=%s new_session=%s input_len=%d",

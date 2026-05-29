@@ -82,6 +82,11 @@ class ChatTurnRun:
         self.store = ChatEventStore(message_id)
         self.broadcaster = Broadcaster()
         self.abort_event = asyncio.Event()
+        # subscribe 时,实际生效的回放下界 = max(last_seq, baseline_seq).
+        # 用途: resume 场景下旧 events.jsonl 已被前端消费过, 不应再重放.
+        # fresh resume 在 start_resume 里把它设成"resume 起跑时的 max seq".
+        # reattach 也可以由路由层补设, 防止断线后客户端无 last_seq 触发重放.
+        self.baseline_seq: int = 0
 
         self._task: asyncio.Task | None = None
         self._terminal_status: str | None = None
@@ -235,9 +240,12 @@ class ChatTurnRun:
         """
         # 先订阅 broadcaster, 防止"回放 → 实时"之间的事件丢失
         sub = self.broadcaster.subscribe()
+        # baseline_seq 兜底: resume / reattach 场景下, 客户端默认 last_seq=0
+        # 但旧 events.jsonl 已被前端消费, 重放会造成内容翻倍 + 过早终态事件.
+        effective_last_seq = max(last_seq, self.baseline_seq)
         try:
-            max_seen = last_seq
-            async for record in self.store.iter_events(after_seq=last_seq):
+            max_seen = effective_last_seq
+            async for record in self.store.iter_events(after_seq=effective_last_seq):
                 yield record
                 try:
                     s = int(record.get("seq", 0))

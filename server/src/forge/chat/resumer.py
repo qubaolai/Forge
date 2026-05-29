@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 
+from forge.chat.model_meta import DEFAULT_CONTEXT_WINDOW, resolve_context_window
 from forge.chat.types import ResumeState, TurnContext
 from forge.infrastructure.database.database import get_session_factory
 from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
@@ -295,6 +296,10 @@ class TurnResumer:
         # 渲染续写提示词: 含 suffix_anchor (上次末尾 80 字符) + 结构感知 (代码块/表格)
         resume_prompt = _render_resume_prompt(prev_content)
 
+        # 用与首轮一致的 context_window 解析逻辑, 续写过程中阈值判定才不会跳变.
+        context_window = await resolve_context_window(
+            db_model_options, default=DEFAULT_CONTEXT_WINDOW,
+        )
         ctx = TurnContext(
             user_id=user_id,
             user_name="",  # resume 时不再用 user_name (system 已渲染过), 留空
@@ -308,7 +313,7 @@ class TurnResumer:
             trace_id=trace_id,
             model_options=db_model_options,
             exclude_message_ids=(assistant_msg_id,),
-            context_window=128_000,
+            context_window=context_window,
         )
 
         resume = ResumeState(

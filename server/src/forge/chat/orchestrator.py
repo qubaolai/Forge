@@ -42,6 +42,7 @@ from forge.chat.turn_run import (
 )
 from forge.chat.types import ResumeState, TurnContext
 from forge.config.settings import get_settings
+from forge.core.content_merge import ResumeStreamDedup
 from forge.core.request_context import set_trace_id, set_user_id
 from forge.core.types.message import Message, ToolCall
 from forge.llm import GatewayBinding, GatewayLLMAdapter, get_llm_gateway
@@ -165,6 +166,11 @@ class TurnOrchestrator:
                 ctx, message
             ),
         )
+        # 关键: 把 baseline 设为 events.jsonl 当前 max seq,
+        # subscribe 只下发本轮 resume 启动后产生的事件 (从 message_resumed 起),
+        # 避免前端在已展示旧内容上再追加旧 delta 造成翻倍.
+        run.baseline_seq = await run.store.initialize_seq()
+
         supervisor = get_chat_supervisor()
         try:
             await supervisor.register(run)
@@ -289,8 +295,25 @@ class TurnOrchestrator:
             None,
             user_id=ctx.user_id,
         )
+
+        # 续写流实时去重: LLM 经常重复 prev_content 末尾几个字符 / 标点,
+        # SSE delta 原样推前端会出现"前后割裂". 这里在 emit 之前剥掉重叠区,
+        # 保证前端实时拼接与 finalizer 落库结果一致 (后者另走 strip_overlap).
+        dedup = ResumeStreamDedup(prev_state.prev_content or "")
         async for event in runner.run(ctx, messages, run.abort_event):
+            if event.type == "delta":
+                clean = dedup.feed(event.payload.get("content", ""))
+                if not clean:
+                    continue
+                clean_payload = {**event.payload, "content": clean}
+                await run.emit({"type": "delta", **clean_payload})
+                continue
             await run.emit(event.to_dict())
+
+        # flush: safety_buffer 里剩下的字符是确认非重叠的, 在结束时统一吐完.
+        tail = dedup.flush()
+        if tail:
+            await run.emit({"type": "delta", "content": tail})
 
         final_event = await self._finalizer.finalize(
             ctx, runner.result, build_result.meta, prev_state=prev_state,
@@ -300,9 +323,10 @@ class TurnOrchestrator:
 
         logger.info(
             "TurnRun 续写完成 session=%s message_id=%s finish_reason=%s "
-            "delta_content_len=%d duration_ms=%.1f",
+            "delta_content_len=%d dedup_stripped=%d duration_ms=%.1f",
             ctx.session_id, ctx.assistant_msg_id, runner.result.finish_reason,
             len(runner.result.content or ""),
+            dedup.dedup_chars,
             (time.perf_counter() - started_at) * 1000,
         )
         return _status_from_finish_reason(runner.result.finish_reason)

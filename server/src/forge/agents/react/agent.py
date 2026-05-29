@@ -466,6 +466,30 @@ class ReActAgent(BaseAgent):
                     results_by_id: dict[str, Message] = {}
                     i = 0
                     while i < len(step_tool_calls):
+                        # 阶段性 abort 检查: 用户中断信号到来时, 不再派发尚未启动
+                        # 的工具调用. 已在 flight 的工具不强行打断 (避免副作用),
+                        # 留给本步循环外的 finish_reason=aborted 兜底.
+                        if abort_event and abort_event.is_set():
+                            finish_reason = "aborted"
+                            logger.info(
+                                "工具循环检测到 abort, 跳过未派发工具 step=%d 剩余=%d",
+                                _step + 1, len(step_tool_calls) - i,
+                            )
+                            # 补 aborted 的 tool_result, 前端不再卡 running
+                            for skipped in step_tool_calls[i:]:
+                                _update_record(
+                                    accumulated_tool_calls, skipped.id,
+                                    "aborted", "用户中断, 工具未执行",
+                                )
+                                yield AgentEvent(
+                                    "tool_result",
+                                    {
+                                        "tool_call_id": skipped.id,
+                                        "result": "用户中断, 工具未执行",
+                                        "status": "aborted",
+                                    },
+                                )
+                            break
                         cur = step_tool_calls[i]
                         if self._executor.is_parallelism_safe(cur.name):
                             # 收齐一段连续 safe 工具
@@ -512,9 +536,12 @@ class ReActAgent(BaseAgent):
                                 yield ev
                             i += 1
 
-                    # 阶段 3: 把 tool 消息按 LLM 原始顺序追加到 messages
+                    # 阶段 3: 把 tool 消息按 LLM 原始顺序追加到 messages.
+                    # abort 路径下 results_by_id 可能缺末尾若干项, 跳过即可
+                    # (这一步用于喂下一轮 LLM, abort 后不会有下一轮).
                     for tc in step_tool_calls:
-                        messages.append(results_by_id[tc.id])
+                        if tc.id in results_by_id:
+                            messages.append(results_by_id[tc.id])
 
                     # 记录本步 tool_calls 给下一步 lifecycle.before_step 用
                     last_step_tool_calls = tuple(step_tool_calls)

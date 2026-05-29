@@ -141,6 +141,12 @@ async def chat_resume(
         if existing.user_id != user.user_id:
             return _sse_response(_single_error_stream("无权访问该会话", "40310"))
 
+        # reattach 同样需要 baseline 兜底: 前端 resume 入口默认 last_seq=0,
+        # 若不抬 baseline, 已落盘的旧 delta 会被回放, 与前端已展示内容叠加.
+        # 取调用瞬间的 store seq 即可: 后续新事件 seq 一定更大, broadcaster
+        # 会把它们推过来; subscribe 内部 max_seen 还能去重防边界双发.
+        existing.baseline_seq = max(existing.baseline_seq, existing.store.current_seq)
+
         async def reattach_stream():
             set_client_type(client_type)
             try:

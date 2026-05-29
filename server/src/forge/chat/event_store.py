@@ -152,5 +152,10 @@ class ChatEventStore:
     def dir(self) -> Path:
         return self._dir
 
+    @property
+    def current_seq(self) -> int:
+        """当前已知最大 seq (须先 initialize_seq 才反映磁盘历史)."""
+        return self._seq
+
 
 __all__ = ["ChatEventStore"]
