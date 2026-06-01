@@ -4,6 +4,7 @@ import { chatApi } from '@/api';
 import {
   ChatMessage,
   Citation,
+  ContextUsage,
   MessageStatus,
   SSEEvent,
   ToolCall,
@@ -38,6 +39,8 @@ export interface ModelOptions {
 export function useChatStream(options: UseChatStreamOptions = {}) {
   const [streaming, setStreaming] = useState(false);
   const [current, setCurrent] = useState<ChatMessage | null>(null);
+  // 当前会话的上下文占用快照 (分层), 由 SSE context_usage 事件更新
+  const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const ctrlRef = useRef<{ abort: () => void } | null>(null);
   // 后端 message_id (来自 message_start 事件), 用于调用 /chat/stop 停掉 LLM
   const activeMessageIdRef = useRef<string | null>(null);
@@ -105,6 +108,17 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
                 };
               });
               activeMessageIdRef.current = e.message_id;
+              return;
+            }
+
+            if (e.type === 'context_usage') {
+              // 上下文占用快照 (分层): 更新顶部圆环
+              setContextUsage({
+                context_window: e.context_window,
+                input_tokens: e.input_tokens,
+                total_ratio: e.total_ratio,
+                layers: e.layers,
+              });
               return;
             }
 
@@ -255,6 +269,16 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
             return;
           }
 
+          if (e.type === 'context_usage') {
+            setContextUsage({
+              context_window: e.context_window,
+              input_tokens: e.input_tokens,
+              total_ratio: e.total_ratio,
+              layers: e.layers,
+            });
+            return;
+          }
+
           if (e.type === 'compaction_started' || e.type === 'compaction_done') {
             if (import.meta.env.DEV) console.debug('[SSE]', e.type, e);
             return;
@@ -357,9 +381,10 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
     activeMessageIdRef.current = null;
     setStreaming(false);
     setCurrent(null);
+    setContextUsage(null);
   }, []);
 
-  return { send, abort, resume, reset, streaming, current };
+  return { send, abort, resume, reset, streaming, current, contextUsage };
 }
 
 function mergeCitations(existing: Citation[], incoming: Citation[]): Citation[] {

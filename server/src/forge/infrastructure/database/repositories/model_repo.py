@@ -57,6 +57,9 @@ class ModelRepository:
         res = await self.db.execute(stmt)
         return res.scalar_one_or_none()
 
+    async def get_by_id(self, model_db_id: int) -> ModelOrm | None:
+        return await self.db.get(ModelOrm, model_db_id)
+
     async def is_model_enabled(self, provider_name: str, model_name: str) -> bool:
         """联表查询：校验某 provider:model 是否已启用。"""
         stmt = (
@@ -249,5 +252,64 @@ class ModelRepository:
         )
         await self.db.execute(stmt)
         model.is_default = True
+        await self.db.flush()
+        return True
+
+    # ---- 管理端手动 CRUD ----
+
+    # 管理端允许更新的字段（不含 provider_id / model_id 等业务主键）
+    _ADMIN_UPDATABLE_FIELDS = frozenset({
+        "name", "display_name", "model_type", "context_window", "max_output_tokens",
+        "supports_tools", "supports_images", "supports_thinking", "thinking_options",
+        "extra_params",
+        "cost_tier", "priority", "is_enabled",
+    })
+
+    _NULLABLE_ADMIN_FIELDS = frozenset({"thinking_options", "extra_params"})
+
+    async def create(self, provider_id: int, data: dict) -> ModelOrm:
+        """管理端手动新增模型。"""
+        model = ModelOrm(
+            model_id=new_id("mdl"),
+            provider_id=provider_id,
+            name=data["name"],
+            display_name=data.get("display_name", ""),
+            model_type=data.get("model_type", "text"),
+            context_window=data.get("context_window", 128000),
+            max_output_tokens=data.get("max_output_tokens", 4096),
+            supports_tools=data.get("supports_tools", True),
+            supports_images=data.get("supports_images", False),
+            supports_thinking=data.get("supports_thinking", False),
+            thinking_options=data.get("thinking_options"),
+            extra_params=data.get("extra_params"),
+            cost_tier=data.get("cost_tier", "mid"),
+            is_enabled=data.get("is_enabled", True),
+            is_default=False,
+            priority=data.get("priority", 0),
+        )
+        self.db.add(model)
+        await self.db.flush()
+        return model
+
+    async def update_fields(self, model_id: str, data: dict) -> bool:
+        """管理端更新模型字段（仅 _ADMIN_UPDATABLE_FIELDS 内）。返回是否成功。"""
+        model = await self.get_by_model_id(model_id)
+        if not model:
+            return False
+        for field, value in data.items():
+            if field not in self._ADMIN_UPDATABLE_FIELDS:
+                continue
+            if value is None and field not in self._NULLABLE_ADMIN_FIELDS:
+                continue
+            setattr(model, field, value)
+        await self.db.flush()
+        return True
+
+    async def delete(self, model_id: str) -> bool:
+        """管理端删除模型。返回是否成功。"""
+        model = await self.get_by_model_id(model_id)
+        if not model:
+            return False
+        await self.db.delete(model)
         await self.db.flush()
         return True

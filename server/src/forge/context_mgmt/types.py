@@ -21,8 +21,31 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from forge.context.base import WorkflowContextLayer, WorkspaceContextLayer
 from forge.core.types.message import Message
+
+
+# ---------------------------------------------------------------------------
+# 0. 层叠上下文层 (从旧 forge/context/base.py 迁入).
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class WorkspaceContextLayer:
+    """注入 system 上下文的 workspace 层."""
+
+    workspace_id: str
+    root_path: str
+    assistant_prompt: str = ""
+    settings: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class WorkflowContextLayer:
+    """注入 system 上下文的 workflow 层."""
+
+    workflow_id: str
+    template_id: str
+    mode: str = "light"
+    role_artifacts: dict[str, Any] = field(default_factory=dict)
+    recent_events: tuple[dict[str, Any], ...] = ()
 
 
 # ---------------------------------------------------------------------------

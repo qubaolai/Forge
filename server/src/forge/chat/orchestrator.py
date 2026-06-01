@@ -61,6 +61,30 @@ def _status_from_finish_reason(finish_reason: str) -> str:
     return TERMINAL_OK
 
 
+def _context_usage_event(snapshot) -> dict:
+    """根据 ContextSnapshot.usage 构造前端可直接渲染的上下文占用事件 (含分层)。
+
+    数据全部取自组装产物, 不触发任何额外 token 计算 / LLM 调用。
+    """
+    usage = snapshot.usage
+    return {
+        "type": "context_usage",
+        "context_window": usage.context_window,
+        "input_tokens": usage.total_input_tokens,
+        "total_ratio": usage.total_ratio,
+        "layers": [
+            {
+                "name": layer.name,
+                "token_count": layer.token_count,
+                "ratio": layer.ratio,
+                "message_count": layer.message_count,
+                "truncated": layer.truncated,
+            }
+            for layer in usage.layers
+        ],
+    }
+
+
 class TurnOrchestrator:
     """无状态. start_turn / start_resume 创建并启动 ChatTurnRun.
 
@@ -201,12 +225,12 @@ class TurnOrchestrator:
             await run.emit(ev.to_dict())
 
         # 2. context 组装 + 主动压缩
-        build_result, system_prompt = await self._assembler.assemble(ctx)
-        if self._assembler.should_compact(build_result, ctx):
-            pre_tokens = build_result.meta.estimated_input_tokens
+        snapshot, system_prompt = await self._assembler.assemble(ctx)
+        if self._assembler.should_compact(snapshot, ctx):
+            pre_tokens = snapshot.usage.total_input_tokens
             trigger_reason = (
                 "history_truncated"
-                if build_result.meta.history_messages_dropped > 0
+                if snapshot.history_messages_dropped > 0
                 else "approaching_window"
             )
             await run.emit({
@@ -215,17 +239,20 @@ class TurnOrchestrator:
                 "estimated_tokens": pre_tokens,
                 "context_window": ctx.context_window,
             })
-            build_result, system_prompt, tokens_saved = (
-                await self._assembler.compact_and_reassemble(ctx, build_result)
+            snapshot, system_prompt, tokens_saved = (
+                await self._assembler.compact_and_reassemble(ctx, snapshot)
             )
-            compaction_ok = "compaction_failed" not in build_result.meta.degraded
+            compaction_ok = "compaction_failed" not in snapshot.degraded
             await run.emit({
                 "type": "compaction_done",
                 "tokens_saved": tokens_saved,
-                "estimated_tokens": build_result.meta.estimated_input_tokens,
-                "rebuild_count": build_result.meta.rebuild_count,
+                "estimated_tokens": snapshot.usage.total_input_tokens,
+                "rebuild_count": snapshot.rebuild_count,
                 "ok": compaction_ok,
             })
+
+        # 2.5 上下文占用快照 (分层) -- 复用组装产物, 不触发额外计算
+        await run.emit(_context_usage_event(snapshot))
 
         # 3. 跑 agent
         runner = await self._setup_runner(
@@ -234,12 +261,12 @@ class TurnOrchestrator:
             body.model_options.model_dump(),
             user_id=ctx.user_id,
         )
-        async for event in runner.run(ctx, build_result.messages, run.abort_event):
+        async for event in runner.run(ctx, snapshot.messages, run.abort_event):
             await run.emit(event.to_dict())
 
         # 4. finalize (写 DB)
         final_event = await self._finalizer.finalize(
-            ctx, runner.result, build_result.meta,
+            ctx, runner.result, snapshot,
         )
         if final_event is not None:
             await run.emit(final_event.to_dict())
@@ -286,8 +313,9 @@ class TurnOrchestrator:
                 ),
             )
 
-        build_result, system_prompt = await self._assembler.assemble(ctx)
-        messages = _inject_partial_into_messages(build_result.messages, prev_state)
+        snapshot, system_prompt = await self._assembler.assemble(ctx)
+        await run.emit(_context_usage_event(snapshot))
+        messages = _inject_partial_into_messages(snapshot.messages, prev_state)
 
         runner = await self._setup_runner(
             ctx.agent_mode,
@@ -316,7 +344,7 @@ class TurnOrchestrator:
             await run.emit({"type": "delta", "content": tail})
 
         final_event = await self._finalizer.finalize(
-            ctx, runner.result, build_result.meta, prev_state=prev_state,
+            ctx, runner.result, snapshot, prev_state=prev_state,
         )
         if final_event is not None:
             await run.emit(final_event.to_dict())

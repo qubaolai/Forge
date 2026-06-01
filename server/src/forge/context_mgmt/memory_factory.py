@@ -1,8 +1,7 @@
-"""ContextBuilder 装配入口.
+"""MemoryStore 装配入口（从旧 forge.context.factory 迁入）。
 
 约定:
-    - memory_store / token_counter 是 "长寿" 单例, 模块级缓存.
-    - history_repo 持有 DB session, 必须按请求 new (因此作为参数传入).
+    - memory_store 是 "长寿" 单例, 模块级缓存。
 
 记忆系统接入:
     settings.memory.enabled=true 且 DB 已初始化 -> CompositeMemoryStore(SummaryStore)
@@ -14,15 +13,9 @@ from __future__ import annotations
 import logging
 
 from forge.config.settings import get_settings
-
-from forge.context.base import ContextBuilder
-from forge.context.builder import CompositeContextBuilder
-
-from forge.infrastructure.storage import MessageStore
-from forge.memory.summary.store import SummaryStore
-from forge.llm.token_counter import TokenCounter, get_token_counter
 from forge.memory.base import MemoryStore
 from forge.memory.null import NullMemoryStore
+from forge.memory.summary.store import SummaryStore
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +23,9 @@ _DEFAULT_MEMORY_STORE: MemoryStore | None = None
 
 
 def get_memory_store() -> MemoryStore:
-    """返回全局 MemoryStore 单例.
+    """返回全局 MemoryStore 单例。
 
-    memory.enabled=false / DB 未初始化 -> NullMemoryStore (静默, 不抛).
+    memory.enabled=false / DB 未初始化 -> NullMemoryStore (静默, 不抛)。
     """
     global _DEFAULT_MEMORY_STORE
     if _DEFAULT_MEMORY_STORE is not None:
@@ -50,9 +43,7 @@ def get_memory_store() -> MemoryStore:
 
     # 尝试装 CompositeMemoryStore; DB 未初始化时降级
     try:
-        from forge.infrastructure.database.database import (
-            get_session_factory,
-        )
+        from forge.infrastructure.database.database import get_session_factory
         from forge.memory.composite import CompositeMemoryStore
 
         factory = get_session_factory()
@@ -68,26 +59,6 @@ def get_memory_store() -> MemoryStore:
 
 
 def reset_memory_store() -> None:
-    """单测用."""
+    """单测用。"""
     global _DEFAULT_MEMORY_STORE
     _DEFAULT_MEMORY_STORE = None
-
-
-def build_context_builder(
-    history_repo: MessageStore,
-    *,
-    memory_store: MemoryStore | None = None,
-    token_counter: TokenCounter | None = None,
-) -> ContextBuilder:
-    """组装一个 ContextBuilder.
-
-    Args:
-        history_repo: 当前请求持有的 MessageStore (含 DB session).
-        memory_store: 可选, 默认走 get_memory_store().
-        token_counter: 可选, 默认走 get_token_counter().
-    """
-    return CompositeContextBuilder(
-        history_repo=history_repo,
-        memory_store=memory_store or get_memory_store(),
-        token_counter=token_counter or get_token_counter(),
-    )

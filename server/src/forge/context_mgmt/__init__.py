@@ -15,8 +15,6 @@
     - meter/:     TokenMeter 包装
     - compaction/: 压缩子系统 (Trigger + Strategy + Controller)
     - guards/:    LoopGuard (从 chat/guards 物理移入)
-    - compat/:    渐进迁移兼容层
-
 阶段 0: 仅 protocols + types 骨架. 后续阶段逐步填充.
 """
 

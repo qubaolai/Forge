@@ -228,6 +228,73 @@ export interface ModelEndpoint {
 }
 
 // ============================================================================
+// 管理端 - 供应商 / 模型 / API-Key（供应商中心页）
+// ============================================================================
+
+// 供应商下的模型（管理视图）
+export interface ProviderModel {
+  id: number;
+  model_id: string;
+  name: string;
+  display_name: string;
+  model_type: string;        // text / embedding / reranker
+  context_window: number;
+  max_output_tokens: number;
+  supports_tools: boolean;
+  supports_images: boolean;
+  supports_thinking: boolean;
+  thinking_options: string[] | null;
+  extra_params: Record<string, unknown> | null;
+  is_enabled: boolean;
+  is_default: boolean;
+  priority: number;
+  cost_tier: string;         // cheap / mid / expensive
+}
+
+// 供应商 API-Key（脱敏，绝不含明文）
+export interface ProviderKey {
+  key_id: string;
+  key_fingerprint: string;
+  is_enabled: boolean;
+  weight: number;
+  cooldown_until: string | null;
+  failure_score: number;
+  last_error_at: string | null;
+}
+
+// 供应商（管理视图，含模型与 Key 数量）
+export interface ProviderAdmin {
+  id: number;
+  provider_id: string;
+  name: string;
+  impl: string;
+  base_url: string | null;
+  is_enabled: boolean;
+  priority: number;
+  key_count: number;
+  model_count: number;
+  models: ProviderModel[];
+}
+
+// 模型新增 / 更新载荷（字段全可选，对齐后端 ModelCreateIn / ModelUpdateIn）
+export interface ModelUpsert {
+  name?: string;
+  display_name?: string;
+  model_type?: string;
+  context_window?: number;
+  max_output_tokens?: number;
+  supports_tools?: boolean;
+  supports_images?: boolean;
+  supports_thinking?: boolean;
+  thinking_options?: string[] | null;
+  extra_params?: Record<string, unknown> | null;
+  cost_tier?: string;
+  priority?: number;
+  enabled?: boolean;
+  is_default?: boolean;
+}
+
+// ============================================================================
 // 会话与消息
 // ============================================================================
 
@@ -261,6 +328,23 @@ export interface MessageUsage {
   total_tokens: number;
 }
 
+// 单个上下文层的占用 (与后端 context_meta.layers 对齐)
+export interface ContextLayer {
+  name: string;            // system_prompt / workspace / facts / summary / dialogue / tool_results / current_input
+  token_count: number;
+  ratio: number;           // token_count / context_window
+  message_count?: number;
+  truncated?: boolean;
+}
+
+// 一次会话的上下文占用快照 (分层)
+export interface ContextUsage {
+  context_window: number;
+  input_tokens: number;
+  total_ratio: number;     // input_tokens / context_window
+  layers: ContextLayer[];
+}
+
 export interface ChatMessage {
   id: string;
   session_id: string;
@@ -277,6 +361,8 @@ export interface ChatMessage {
   reasoning_content?: string;
   // 思考累计墙钟毫秒, 仅 assistant 用 (DeepSeek thinking 等开启时才有)
   reasoning_duration_ms?: number;
+  // 上下文占用快照 (持久化, 仅 assistant 消息有值)
+  context_usage?: ContextUsage | null;
 }
 
 export interface ChatSession {
@@ -435,6 +521,7 @@ export type SSEEvent =
   | { type: 'citations'; citations: Citation[] }
   | { type: 'compaction_started'; reason: string; estimated_tokens: number; context_window: number }
   | { type: 'compaction_done'; tokens_saved: number; estimated_tokens: number; rebuild_count: number; ok: boolean }
+  | ({ type: 'context_usage' } & ContextUsage)
   | {
       type: 'done';
       usage: MessageUsage;

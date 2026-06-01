@@ -67,7 +67,7 @@ __all__ = [
 ]
 
 _APP = "assistant"
-_ENV_OVERRIDE = "ASSISTANT_HOME"
+_ENV_OVERRIDE = "FORGE_HOME"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

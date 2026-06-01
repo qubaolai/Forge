@@ -52,7 +52,7 @@ class KnowledgeSearchTool(Tool):
     name = "knowledge_search"
     description = (
         "在用户可访问的知识库 (KB) 中检索与问题相关的文档片段. "
-        "当用户问题涉及专业资料 / 产品文档 / 公司知识时优先调用. "
+        "当用户告知需要查询知识库时调用. "
         "kb_names 必填, 取值范围限定在系统提示中已列出的可用 KB 列表里, "
         "禁止臆造. 返回最相关的若干段落原文 + 来源标识, "
         "由模型基于片段回答并标注来源."
@@ -135,7 +135,7 @@ class KnowledgeSearchTool(Tool):
                     f"向量空间不兼容, 请分次检索 (每次只选用同一模型的 KB)"
                 )
 
-            kb_ids = [kb.id for kb in kbs]
+            kb_ids = [str(kb.id) for kb in kbs]
             doc_repo = KbDocumentRepository(db)
             doc_ids = await doc_repo.list_indexed_doc_ids(kb_ids)
             if not doc_ids:

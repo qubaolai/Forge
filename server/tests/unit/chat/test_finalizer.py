@@ -15,7 +15,7 @@ import pytest
 
 from forge.chat.finalizer import TurnFinalizer
 from forge.chat.types import RunResult, TurnContext
-from forge.context.base import BuildMeta
+from forge.context_mgmt.types import ContextSnapshot, ContextUsage, WindowBudget
 
 
 def _ctx() -> TurnContext:
@@ -34,9 +34,28 @@ def _ctx() -> TurnContext:
     )
 
 
-async def _collect(finalizer, ctx, result, meta, *, prev_state=None):
+def _snapshot(*, context_window: int = 8192, input_tokens: int = 0) -> ContextSnapshot:
+    """构造最小可用的 ContextSnapshot（finalizer 仅读 usage 等字段）。"""
+    return ContextSnapshot(
+        messages=[],
+        budget=WindowBudget(
+            context_window=context_window,
+            system_budget=0,
+            dialogue_budget=0,
+            tool_result_budget=0,
+        ),
+        usage=ContextUsage(
+            context_window=context_window,
+            total_input_tokens=input_tokens,
+            max_output_tokens=max(0, context_window - input_tokens),
+            total_ratio=(input_tokens / context_window) if context_window else 0.0,
+        ),
+    )
+
+
+async def _collect(finalizer, ctx, result, snapshot, *, prev_state=None):
     """跑 finalize，返回事件列表。"""
-    ev = await finalizer.finalize(ctx, result, meta, prev_state=prev_state)
+    ev = await finalizer.finalize(ctx, result, snapshot, prev_state=prev_state)
     return [ev] if ev else []
 
 
@@ -60,7 +79,7 @@ async def test_stop_yields_done_and_publishes() -> None:
         patch.object(TurnFinalizer, "_update_message", update),
         patch.object(TurnFinalizer, "_publish_turn_completed", publish),
     ):
-        events = await _collect(finalizer, _ctx(), result, BuildMeta())
+        events = await _collect(finalizer, _ctx(), result, _snapshot())
 
     assert len(events) == 1
     assert events[0].type == "done"
@@ -84,7 +103,7 @@ async def test_error_yields_error_no_publish() -> None:
         patch.object(TurnFinalizer, "_update_message", update),
         patch.object(TurnFinalizer, "_publish_turn_completed", publish),
     ):
-        events = await _collect(finalizer, _ctx(), result, BuildMeta())
+        events = await _collect(finalizer, _ctx(), result, _snapshot())
 
     assert events[0].type == "error"
     assert "LLM 503" in events[0].to_dict()["message"]
@@ -104,7 +123,7 @@ async def test_aborted_yields_task_partial_no_publish() -> None:
         patch.object(TurnFinalizer, "_update_message", update),
         patch.object(TurnFinalizer, "_publish_turn_completed", publish),
     ):
-        events = await _collect(finalizer, _ctx(), result, BuildMeta())
+        events = await _collect(finalizer, _ctx(), result, _snapshot())
 
     assert events[0].type == "task_partial"
     payload = events[0].to_dict()
@@ -128,7 +147,7 @@ async def test_partial_steps_yields_task_partial_no_publish() -> None:
         patch.object(TurnFinalizer, "_update_message", update),
         patch.object(TurnFinalizer, "_publish_turn_completed", publish),
     ):
-        events = await _collect(finalizer, _ctx(), result, BuildMeta())
+        events = await _collect(finalizer, _ctx(), result, _snapshot())
 
     assert events[0].type == "task_partial"
     payload = events[0].to_dict()
@@ -170,7 +189,7 @@ def test_context_meta_records_finish_reason_and_model_options() -> None:
     })
     result = RunResult(finish_reason="partial_steps")
 
-    meta = TurnFinalizer._build_context_meta(ctx, result, BuildMeta())
+    meta = TurnFinalizer._build_context_meta(ctx, result, _snapshot())
 
     assert meta["finish_reason"] == "partial_steps"
     assert meta["model_options"] == {

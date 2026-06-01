@@ -10,6 +10,25 @@ from forge.core.response import success
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
+def _derive_context_usage(context_meta: dict | None) -> dict | None:
+    """从落库的 context_meta 派生前端可渲染的上下文占用 (含分层)。
+
+    仅 assistant 消息的 context_meta 含 estimated_input_tokens / context_window,
+    其余消息返回 None。
+    """
+    cm = context_meta or {}
+    tok = cm.get("estimated_input_tokens")
+    cw = cm.get("context_window")
+    if not tok or not cw:
+        return None
+    return {
+        "input_tokens": tok,
+        "context_window": cw,
+        "total_ratio": cm.get("total_ratio") or (tok / cw),
+        "layers": cm.get("layers") or [],
+    }
+
+
 @router.get("")
 async def list_sessions(
     user: AuthenticatedUser,
@@ -70,9 +89,14 @@ async def list_messages(
 ):
     await svc.get_owned(session_id, user.user_id)  # 校验归属
     items, total = await svc.list_messages(session_id, page, page_size)
+    items_out = []
+    for i in items:
+        d = MessageOut.model_validate(i).model_dump(mode="json")
+        d["context_usage"] = _derive_context_usage(getattr(i, "context_meta", None))
+        items_out.append(d)
     return success(
         {
-            "items": [MessageOut.model_validate(i).model_dump(mode="json") for i in items],
+            "items": items_out,
             "total": total,
             "page": page,
             "page_size": page_size,

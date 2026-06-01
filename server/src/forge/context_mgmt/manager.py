@@ -136,7 +136,7 @@ def build_context_manager(
     from forge.context_mgmt.types import ContextMode
 
     if memory_store is None:
-        from forge.context.factory import get_memory_store
+        from forge.context_mgmt.memory_factory import get_memory_store
         memory_store = get_memory_store()
 
     builder = build_context_builder(

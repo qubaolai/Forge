@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom';
 import { RequireAuth, RequireRole } from '@/hooks/usePermission';
@@ -114,6 +114,21 @@ function TokenRefresher() {
   return null;
 }
 
+/** 角色感知的首页落地：管理员进管理后台，普通用户进对话。 */
+function HomeRedirect() {
+  const user = useAuthStore((s) => s.user);
+  const isAdmin = user?.role === 'admin' || user?.role === 'owner';
+  return <Navigate to={isAdmin ? '/admin/models' : '/chat'} replace />;
+}
+
+/** 普通用户专属路由：管理员一律重定向到管理后台（管理员不展示对话等页面）。 */
+function UserOnly({ children }: { children: ReactNode }) {
+  const user = useAuthStore((s) => s.user);
+  const isAdmin = user?.role === 'admin' || user?.role === 'owner';
+  if (isAdmin) return <Navigate to="/admin/models" replace />;
+  return <>{children}</>;
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -126,25 +141,28 @@ export default function App() {
             <Route path="/login" element={<LoginPage />} />
 
             <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
-              <Route index element={<Navigate to="/chat" replace />} />
+              <Route index element={<HomeRedirect />} />
 
-              <Route path="chat">
-                <Route index element={<ChatPage />} />
-                <Route path=":sessionId" element={<ChatPage />} />
+              {/* 普通用户路由：管理员一律重定向到管理后台 */}
+              <Route element={<UserOnly><Outlet /></UserOnly>}>
+                <Route path="chat">
+                  <Route index element={<ChatPage />} />
+                  <Route path=":sessionId" element={<ChatPage />} />
+                </Route>
+
+                <Route path="knowledge">
+                  <Route index element={<KnowledgeListPage />} />
+                  <Route path=":kbId" element={<KnowledgeDetailPage />} />
+                </Route>
+
+                <Route path="agents">
+                  <Route index element={<AgentListPage />} />
+                  <Route path="new" element={<AgentEditorPage />} />
+                  <Route path=":agentId" element={<AgentEditorPage />} />
+                </Route>
+
+                <Route path="settings/*" element={<SettingsPage />} />
               </Route>
-
-              <Route path="knowledge">
-                <Route index element={<KnowledgeListPage />} />
-                <Route path=":kbId" element={<KnowledgeDetailPage />} />
-              </Route>
-
-              <Route path="agents">
-                <Route index element={<AgentListPage />} />
-                <Route path="new" element={<AgentEditorPage />} />
-                <Route path=":agentId" element={<AgentEditorPage />} />
-              </Route>
-
-              <Route path="settings/*" element={<SettingsPage />} />
 
               <Route path="admin" element={<RequireRole roles={['owner', 'admin']}><Outlet /></RequireRole>}>
                 <Route path="users" element={<AdminUsersPage />} />

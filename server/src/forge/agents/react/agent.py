@@ -475,7 +475,7 @@ class ReActAgent(BaseAgent):
                                 "工具循环检测到 abort, 跳过未派发工具 step=%d 剩余=%d",
                                 _step + 1, len(step_tool_calls) - i,
                             )
-                            # 补 aborted 的 tool_result, 前端不再卡 running
+                            # 补 aborted 的 tool_result, 前端不卡 running
                             for skipped in step_tool_calls[i:]:
                                 _update_record(
                                     accumulated_tool_calls, skipped.id,

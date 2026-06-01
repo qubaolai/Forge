@@ -20,6 +20,46 @@ logger = logging.getLogger(__name__)
 EVENT_MODEL_CONFIG_CHANGED = "model_config_changed"
 
 
+def _key_fingerprint(api_key: str) -> str:
+    """生成脱敏指纹（仅展示/日志用，沿用 api_key 前缀约定，截到 12 字符内）。"""
+    head = (api_key or "")[:6]
+    return f"{head}***"[:12]
+
+
+def _model_to_dict(model) -> dict:
+    return {
+        "id": model.id,
+        "model_id": model.model_id,
+        "name": model.name,
+        "display_name": model.display_name,
+        "model_type": model.model_type,
+        "context_window": model.context_window,
+        "max_output_tokens": model.max_output_tokens,
+        "supports_tools": model.supports_tools,
+        "supports_images": model.supports_images,
+        "supports_thinking": model.supports_thinking,
+        "thinking_options": model.thinking_options,
+        "extra_params": model.extra_params,
+        "is_enabled": model.is_enabled,
+        "is_default": model.is_default,
+        "priority": model.priority,
+        "cost_tier": model.cost_tier,
+    }
+
+
+def _key_to_dict(key) -> dict:
+    """脱敏 Key 视图（绝不含明文/密文）。"""
+    return {
+        "key_id": key.key_id,
+        "key_fingerprint": key.key_fingerprint,
+        "is_enabled": bool(key.is_enabled),
+        "weight": key.weight,
+        "cooldown_until": key.cooldown_until.isoformat() if key.cooldown_until else None,
+        "failure_score": key.failure_score,
+        "last_error_at": key.last_error_at.isoformat() if key.last_error_at else None,
+    }
+
+
 class AdminModelService:
     """管理端模型配置编排。"""
 
@@ -39,11 +79,11 @@ class AdminModelService:
         provider_repo = ProviderRepository(self.db)
         model_repo = ModelRepository(self.db)
 
-        providers = await provider_repo.list_enabled()
+        providers = await provider_repo.list_all()
         result = []
         for p in providers:
             models = await model_repo.list_by_provider(p.id, enabled_only=False)
-            keys = await provider_repo.list_enabled_keys(p.id)
+            keys = await provider_repo.list_keys(p.id)
             result.append({
                 "id": p.id,
                 "provider_id": p.provider_id,
@@ -57,10 +97,18 @@ class AdminModelService:
                 "model_count": len(models),
                 "models": [
                     {
+                        "id": m.id,
                         "model_id": m.model_id,
                         "name": m.name,
                         "display_name": m.display_name,
                         "model_type": m.model_type,
+                        "context_window": m.context_window,
+                        "max_output_tokens": m.max_output_tokens,
+                        "supports_tools": m.supports_tools,
+                        "supports_images": m.supports_images,
+                        "supports_thinking": m.supports_thinking,
+                        "thinking_options": m.thinking_options,
+                        "extra_params": m.extra_params,
                         "is_enabled": m.is_enabled,
                         "is_default": m.is_default,
                         "priority": m.priority,
@@ -189,3 +237,185 @@ class AdminModelService:
             "timestamp": datetime.utcnow().isoformat(),
         })
         return {"model_id": model_id, "is_default": True}
+
+    async def get_model_by_id(self, model_db_id: int) -> dict:
+        """按数据库 id 获取模型详情。"""
+        from forge.infrastructure.database.repositories.model_repo import ModelRepository
+
+        model = await ModelRepository(self.db).get_by_id(model_db_id)
+        if not model:
+            raise ValueError(f"模型不存在: id={model_db_id}")
+        return _model_to_dict(model)
+
+    # ------------------------------------------------------------------
+    # 模型手动 CRUD
+    # ------------------------------------------------------------------
+
+    async def create_model(self, provider_name: str, data: dict) -> dict:
+        """管理端在某供应商下手动新增模型。"""
+        from forge.infrastructure.database.repositories.model_provider_repo import ProviderRepository
+        from forge.infrastructure.database.repositories.model_repo import ModelRepository
+
+        provider = await ProviderRepository(self.db).get_by_name(provider_name)
+        if not provider:
+            raise ValueError(f"供应商不存在: {provider_name!r}")
+        model = await ModelRepository(self.db).create(provider.id, data)
+        await self.db.commit()
+        await self._cache.reload_all(self.db)
+        await self._publish_model_event("model_created", provider.name, model.name, model.model_type)
+        return _model_to_dict(model)
+
+    async def update_model_fields(self, model_id: str, data: dict) -> dict:
+        """管理端更新模型（全字段，含 enabled / is_default）。"""
+        from forge.infrastructure.database.orm.model_provider_orm import ProviderOrm
+        from forge.infrastructure.database.repositories.model_repo import ModelRepository
+
+        model_repo = ModelRepository(self.db)
+        model = await model_repo.get_by_model_id(model_id)
+        if not model:
+            raise ValueError(f"模型不存在: {model_id!r}")
+
+        # is_default 单独处理（需取消同类型其他默认）
+        if data.get("is_default"):
+            await model_repo.set_default(model_id)
+
+        # 其余字段（enabled -> is_enabled）
+        fields = {k: v for k, v in data.items() if k != "is_default"}
+        if "enabled" in fields:
+            fields["is_enabled"] = fields.pop("enabled")
+        if fields:
+            await model_repo.update_fields(model_id, fields)
+
+        await self.db.commit()
+        await self._cache.reload_all(self.db)
+        provider = await self.db.get(ProviderOrm, model.provider_id)
+        await self._publish_model_event(
+            "model_updated", provider.name if provider else "unknown", model.name, model.model_type
+        )
+        return _model_to_dict(model)
+
+    async def delete_model(self, model_id: str) -> dict:
+        """管理端删除模型。"""
+        from forge.infrastructure.database.orm.model_provider_orm import ProviderOrm
+        from forge.infrastructure.database.repositories.model_repo import ModelRepository
+
+        model_repo = ModelRepository(self.db)
+        model = await model_repo.get_by_model_id(model_id)
+        if not model:
+            raise ValueError(f"模型不存在: {model_id!r}")
+        provider = await self.db.get(ProviderOrm, model.provider_id)
+        provider_name = provider.name if provider else "unknown"
+        model_name, model_type = model.name, model.model_type
+
+        await model_repo.delete(model_id)
+        await self.db.commit()
+        await self._cache.reload_all(self.db)
+        await self._publish_model_event("model_deleted", provider_name, model_name, model_type)
+        return {"model_id": model_id, "deleted": True}
+
+    # ------------------------------------------------------------------
+    # 供应商 API-Key CRUD
+    # ------------------------------------------------------------------
+
+    async def list_provider_keys(self, provider_name: str) -> list[dict]:
+        from forge.infrastructure.database.repositories.model_provider_repo import ProviderRepository
+
+        provider_repo = ProviderRepository(self.db)
+        provider = await provider_repo.get_by_name(provider_name)
+        if not provider:
+            raise ValueError(f"供应商不存在: {provider_name!r}")
+        keys = await provider_repo.list_keys(provider.id)
+        return [_key_to_dict(k) for k in keys]
+
+    async def create_provider_key(self, provider_name: str, api_key: str, weight: int = 1) -> dict:
+        from forge.core.crypto import encrypt
+        from forge.infrastructure.database.repositories.model_provider_repo import ProviderRepository
+
+        provider_repo = ProviderRepository(self.db)
+        provider = await provider_repo.get_by_name(provider_name)
+        if not provider:
+            raise ValueError(f"供应商不存在: {provider_name!r}")
+
+        key = await provider_repo.create_key(
+            provider.id,
+            ciphertext=encrypt(api_key),
+            fingerprint=_key_fingerprint(api_key),
+            weight=weight,
+        )
+        await self.db.commit()
+        await self._sync_provider_pool(provider)
+        await self._publish_key_event("provider_key_created", provider.name)
+        return _key_to_dict(key)
+
+    async def update_provider_key(
+        self, provider_name: str, key_id: str, *, enabled: bool | None, weight: int | None
+    ) -> dict:
+        from forge.infrastructure.database.repositories.model_provider_repo import ProviderRepository
+
+        provider_repo = ProviderRepository(self.db)
+        provider = await provider_repo.get_by_name(provider_name)
+        if not provider:
+            raise ValueError(f"供应商不存在: {provider_name!r}")
+        existing = await provider_repo.get_key(key_id)
+        if not existing or existing.provider_id != provider.id:
+            raise ValueError(f"Key 不存在: {key_id!r}")
+
+        key = await provider_repo.update_key(key_id, enabled=enabled, weight=weight)
+        await self.db.commit()
+        await self._sync_provider_pool(provider)
+        await self._publish_key_event("provider_key_updated", provider.name)
+        return _key_to_dict(key)
+
+    async def delete_provider_key(self, provider_name: str, key_id: str) -> dict:
+        from forge.infrastructure.database.repositories.model_provider_repo import ProviderRepository
+
+        provider_repo = ProviderRepository(self.db)
+        provider = await provider_repo.get_by_name(provider_name)
+        if not provider:
+            raise ValueError(f"供应商不存在: {provider_name!r}")
+        existing = await provider_repo.get_key(key_id)
+        if not existing or existing.provider_id != provider.id:
+            raise ValueError(f"Key 不存在: {key_id!r}")
+
+        await provider_repo.delete_key(key_id)
+        await self.db.commit()
+        await self._sync_provider_pool(provider)
+        await self._publish_key_event("provider_key_deleted", provider.name)
+        return {"key_id": key_id, "deleted": True}
+
+    # ------------------------------------------------------------------
+    # 内部工具
+    # ------------------------------------------------------------------
+
+    async def _sync_provider_pool(self, provider) -> dict:
+        """刷新 Redis 缓存 + 按当前已启用 Key 重整 LLMClientPool。"""
+        from forge.llm.client_pool import get_llm_pool
+
+        await self._cache.reload_all(self.db)
+        pool = get_llm_pool()
+        impl = provider.impl or provider.name
+        client_options = {"base_url": provider.base_url, "timeout": 30}
+        keys = await self._cache.get_keys(provider.name)
+        return pool.reconcile_provider(impl, keys, client_options)
+
+    async def _publish_model_event(
+        self, event_type: str, provider_name: str, model_name: str, model_type: str
+    ) -> None:
+        from datetime import datetime
+
+        await get_event_bus().publish(EVENT_MODEL_CONFIG_CHANGED, {
+            "type": event_type,
+            "provider": provider_name,
+            "model": model_name,
+            "model_type": model_type,
+            "timestamp": datetime.utcnow().isoformat(),
+        })
+
+    async def _publish_key_event(self, event_type: str, provider_name: str) -> None:
+        from datetime import datetime
+
+        await get_event_bus().publish(EVENT_MODEL_CONFIG_CHANGED, {
+            "type": event_type,
+            "provider": provider_name,
+            "timestamp": datetime.utcnow().isoformat(),
+        })

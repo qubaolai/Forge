@@ -1,4 +1,4 @@
-"""context.factory.get_memory_store 单测.
+"""context_mgmt.memory_factory.get_memory_store 单测.
 
 覆盖三条分支:
     1. memory.enabled=False -> NullMemoryStore
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from forge.context.factory import get_memory_store, reset_memory_store
+from forge.context_mgmt.memory_factory import get_memory_store, reset_memory_store
 from forge.memory.composite import CompositeMemoryStore
 from forge.memory.null import NullMemoryStore
 
@@ -31,14 +31,14 @@ def teardown_function(_):
 
 
 def test_disabled_returns_null() -> None:
-    with patch("forge.context.factory.get_settings", return_value=_settings(False)):
+    with patch("forge.context_mgmt.memory_factory.get_settings", return_value=_settings(False)):
         store = get_memory_store()
     assert isinstance(store, NullMemoryStore)
 
 
 def test_db_not_initialized_returns_null() -> None:
     with (
-        patch("forge.context.factory.get_settings", return_value=_settings(True)),
+        patch("forge.context_mgmt.memory_factory.get_settings", return_value=_settings(True)),
         patch(
             "forge.infrastructure.database.database.get_session_factory",
             side_effect=RuntimeError("Engine 尚未初始化"),
@@ -51,7 +51,7 @@ def test_db_not_initialized_returns_null() -> None:
 def test_db_ready_returns_composite() -> None:
     fake_factory = MagicMock()
     with (
-        patch("forge.context.factory.get_settings", return_value=_settings(True)),
+        patch("forge.context_mgmt.memory_factory.get_settings", return_value=_settings(True)),
         patch(
             "forge.infrastructure.database.database.get_session_factory",
             return_value=fake_factory,
@@ -62,7 +62,7 @@ def test_db_ready_returns_composite() -> None:
 
 
 def test_singleton_cached() -> None:
-    with patch("forge.context.factory.get_settings", return_value=_settings(False)):
+    with patch("forge.context_mgmt.memory_factory.get_settings", return_value=_settings(False)):
         a = get_memory_store()
         b = get_memory_store()
     assert a is b

@@ -51,6 +51,8 @@ class MessageOut(BaseModel):
     error_message: str | None = None
     reasoning_content: str | None = None  # 思考链 (DeepSeek thinking 等), 仅 assistant
     reasoning_duration_ms: int | None = None  # 思考累计墙钟毫秒, 仅 assistant
+    # 上下文占用快照 (分层), 仅 assistant 消息有值; 由 context_meta 派生, 供前端持久化展示
+    context_usage: dict | None = None
     created_at: datetime
 
 

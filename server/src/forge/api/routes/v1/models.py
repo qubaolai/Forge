@@ -5,6 +5,7 @@
     GET  /models?provider=xxx 按供应商筛选
 
 管理接口（需 AdminUser）:
+    GET  /models/{id}         按数据库 id 查询模型详情
     PUT  /models/{model_id}   切换启用状态  {enabled: true/false}
     POST /models/{model_id}/set-default  设为默认模型
 """
@@ -12,6 +13,7 @@
 from fastapi import APIRouter, Depends, Query
 
 from forge.api.dependencies import AdminUser, DbSession, get_model_cache
+from forge.api.schemas.admin import ModelUpdateIn
 from forge.core.exceptions import NotFound
 from forge.core.response import success
 
@@ -137,33 +139,65 @@ async def list_models(
 # ==================================================================
 # 管理接口 — 需 AdminUser
 # ==================================================================
-@router.put("/models/{model_id}")
-async def update_model(
-    model_id: str,
-    body: dict,  # {enabled: bool, is_default: bool, priority: int, ...}
+@router.get("/models/{id}")
+async def get_model_detail(
+    id: int,
     admin: AdminUser,
     db: DbSession,
     model_cache=Depends(get_model_cache),
 ):
-    """更新模型配置（启用/禁用/设默认/优先级）。"""
+    """按数据库 id 查询模型详情（用于编辑前拉取最新配置）。"""
     from forge.api.services.admin_model_service import AdminModelService
     from forge.llm.model_config_cache import ModelConfigCache
 
     cache = model_cache if isinstance(model_cache, ModelConfigCache) else ModelConfigCache.get_global()
     svc = AdminModelService(db, cache)
+    try:
+        result = await svc.get_model_by_id(id)
+    except ValueError as e:
+        raise NotFound(str(e), code=40461) from e
+    return success(result)
 
-    if "enabled" in body:
-        try:
-            result = await svc.toggle_model(model_id, body["enabled"])
-        except ValueError as e:
-            raise NotFound(str(e), code=40461) from e
-        return success(result)
 
-    if body.get("is_default"):
-        try:
-            result = await svc.set_default_model(model_id)
-        except ValueError as e:
-            raise NotFound(str(e), code=40461) from e
-        return success(result)
+@router.put("/models/{model_id}")
+async def update_model(
+    model_id: str,
+    body: ModelUpdateIn,
+    admin: AdminUser,
+    db: DbSession,
+    model_cache=Depends(get_model_cache),
+):
+    """更新模型配置（全字段：启停 / 设默认 / 上下文窗口 / 能力 / 优先级等）。"""
+    from forge.api.services.admin_model_service import AdminModelService
+    from forge.llm.model_config_cache import ModelConfigCache
 
-    raise NotFound(f"不支持的更新字段: {list(body.keys())}", code=40061)
+    cache = model_cache if isinstance(model_cache, ModelConfigCache) else ModelConfigCache.get_global()
+    svc = AdminModelService(db, cache)
+    data = body.model_dump(exclude_unset=True)
+    if not data:
+        raise NotFound("更新内容为空", code=40061)
+    try:
+        result = await svc.update_model_fields(model_id, data)
+    except ValueError as e:
+        raise NotFound(str(e), code=40461) from e
+    return success(result)
+
+
+@router.delete("/models/{model_id}")
+async def delete_model(
+    model_id: str,
+    admin: AdminUser,
+    db: DbSession,
+    model_cache=Depends(get_model_cache),
+):
+    """删除模型。"""
+    from forge.api.services.admin_model_service import AdminModelService
+    from forge.llm.model_config_cache import ModelConfigCache
+
+    cache = model_cache if isinstance(model_cache, ModelConfigCache) else ModelConfigCache.get_global()
+    svc = AdminModelService(db, cache)
+    try:
+        result = await svc.delete_model(model_id)
+    except ValueError as e:
+        raise NotFound(str(e), code=40461) from e
+    return success(result)

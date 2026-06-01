@@ -1,6 +1,7 @@
-import { useRef, useState, KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, KeyboardEvent } from 'react';
 import { Send, Square, Brain } from 'lucide-react';
 import type { ModelGroup } from '@/api';
+import { cn } from '@/lib/utils';
 
 export type ThinkingLevel = 'standard' | 'low' | 'medium' | 'high' | 'xhigh';
 
@@ -12,6 +13,8 @@ interface Props {
   placeholder?: string;
   thinkingLevel?: ThinkingLevel;
   onThinkingLevelChange?: (value: ThinkingLevel) => void;
+  // 外部预填文本（如点击示例提示词），写入输入框并聚焦
+  prefill?: string;
   // 模型选择
   selectedProvider: string;
   selectedModel: string;
@@ -37,6 +40,7 @@ export function ChatInput({
   placeholder,
   thinkingLevel = 'standard',
   onThinkingLevelChange,
+  prefill,
   selectedProvider,
   selectedModel,
   modelGroups,
@@ -53,6 +57,18 @@ export function ChatInput({
     ta.style.height = 'auto';
     ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
   }
+
+  // 外部预填（点击示例提示词）：写入输入框并聚焦
+  useEffect(() => {
+    if (!prefill) return;
+    setValue(prefill);
+    const ta = textareaRef.current;
+    if (ta) {
+      ta.focus();
+      requestAnimationFrame(autoResize);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill]);
 
   function handleSubmit() {
     const text = value.trim();
@@ -145,40 +161,46 @@ export function ChatInput({
               ))}
             </select>
             {hasThinking && (
-              <label className="flex items-center gap-1 cursor-pointer text-gray-500">
-                <input
-                  type="checkbox"
-                  checked={thinkingEnabled}
-                  onChange={(e) => onThinkingChange(e.target.checked)}
-                  className="rounded"
-                />
-                <span>思考</span>
-              </label>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <span>AI 回答可能不准确,请核实关键信息</span>
-            {showThinkingLevel && (
-              <label
-                className="flex items-center gap-1.5 text-gray-500 hover:text-gray-700 cursor-pointer"
-                title="思考强度: 标准/低/中/高/超高"
-              >
-                <Brain size={13} />
-                <span>思考</span>
-                <select
-                  value={selectedThinkingLevel}
-                  onChange={(e) => onThinkingLevelChange?.(e.target.value as ThinkingLevel)}
-                  className="bg-transparent border-none outline-none cursor-pointer text-gray-700"
+              <div className="flex items-center gap-1.5">
+                {/* 思考开关（药丸式） */}
+                <button
+                  type="button"
+                  onClick={() => onThinkingChange(!thinkingEnabled)}
+                  className={cn(
+                    'flex items-center gap-1 rounded-full border px-2 py-0.5 transition-colors',
+                    thinkingEnabled
+                      ? 'border-orange-200 bg-orange-50 text-orange-600'
+                      : 'border-gray-200 text-gray-400 hover:text-gray-600',
+                  )}
+                  title={thinkingEnabled ? '已开启思考' : '已关闭思考'}
                 >
-                  {thinkingOptions.map((v: string) => (
-                    <option key={v} value={v}>
-                      {THINKING_LEVEL_LABELS[v as ThinkingLevel] || v}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  <Brain size={13} />
+                  <span>思考</span>
+                </button>
+                {/* 思考强度（分段控件）：仅开启且模型支持档位时显示 */}
+                {thinkingEnabled && showThinkingLevel && (
+                  <div className="flex items-center gap-0.5 rounded-full bg-gray-100 p-0.5">
+                    {thinkingOptions.map((v) => (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => onThinkingLevelChange?.(v as ThinkingLevel)}
+                        className={cn(
+                          'rounded-full px-2 py-0.5 text-[11px] transition-colors',
+                          selectedThinkingLevel === v
+                            ? 'bg-white text-gray-800 shadow-sm'
+                            : 'text-gray-500 hover:text-gray-700',
+                        )}
+                      >
+                        {THINKING_LEVEL_LABELS[v as ThinkingLevel] || v}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
           </div>
+          <span className="shrink-0 pl-2">AI 回答可能不准确,请核实关键信息</span>
         </div>
       </div>
     </div>

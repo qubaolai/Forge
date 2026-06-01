@@ -32,6 +32,7 @@ import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+from abc import ABC
 
 from forge.core.types.message import Message, ToolCall
 
@@ -57,7 +58,7 @@ class StepContext:
     """单步 LLM 调用前传给 lifecycle 的快照."""
 
     step_index: int  # 0-based
-    max_steps: int  # 配置的 safety net 上限
+    max_steps: int  # 配置的 safety step 上限
     messages_count: int  # 当前 messages 列表长度
     last_step_tool_calls: tuple[ToolCall, ...] = ()
     accumulated_usage: dict[str, int] = field(default_factory=dict)
@@ -117,7 +118,7 @@ class RunResult:
 # ---------------------------------------------------------------------------
 # 协议
 # ---------------------------------------------------------------------------
-class AgentLifecycle(Protocol):
+class AgentLifecycle(ABC):
     """Agent 生命周期扩展协议. 所有方法都有默认 no-op.
 
     实现方按需覆写; 不必继承, 满足 Protocol 即可.
@@ -157,7 +158,7 @@ class AgentLifecycle(Protocol):
 # ---------------------------------------------------------------------------
 # 空实现 (兜底)
 # ---------------------------------------------------------------------------
-class NoopLifecycle:
+class NoopLifecycle(AgentLifecycle):
     """没有任何副作用的 lifecycle, 用于不需要 lifecycle 的场景."""
 
     async def on_start(self, ctx: RunContext) -> None:
@@ -190,7 +191,7 @@ class NoopLifecycle:
 # ---------------------------------------------------------------------------
 # 组合器
 # ---------------------------------------------------------------------------
-class MultiLifecycle:
+class MultiLifecycle(AgentLifecycle):
     """把多个 lifecycle 串成一个.
 
     语义:

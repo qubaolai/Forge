@@ -14,7 +14,7 @@ from dataclasses import asdict
 
 from forge.agents.base import AgentEvent
 from forge.chat.types import ResumeState, RunResult, TurnContext
-from forge.context.base import BuildMeta
+from forge.context_mgmt.types import ContextSnapshot
 from forge.core.content_merge import strip_overlap
 from forge.infrastructure.database.database import get_session_factory
 from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
@@ -30,7 +30,7 @@ class TurnFinalizer:
         self,
         ctx: TurnContext,
         result: RunResult,
-        build_meta: BuildMeta,
+        snapshot: ContextSnapshot,
         *,
         prev_state: ResumeState | None = None,
     ) -> AgentEvent | None:
@@ -45,7 +45,7 @@ class TurnFinalizer:
                 result = self._merge_with_prev(result, prev_state)
 
             status = self._status_for(result.finish_reason)
-            await self._update_message(ctx, result, build_meta, status)
+            await self._update_message(ctx, result, snapshot, status)
 
             s.set("finish_reason", result.finish_reason)
             s.set("status", status)
@@ -130,7 +130,7 @@ class TurnFinalizer:
         状态:
             done     - 最终完成, 不可继续
             error    - 不可恢复, 不可继续
-            aborted  - 用户主动停, 可继续 (R6 /chat/resume)
+            aborted  - 用户主动停, 可继续 (/chat/resume)
             partial  - 系统软上限触发, 可继续
         """
         if finish_reason == "error":
@@ -146,7 +146,7 @@ class TurnFinalizer:
         self,
         ctx: TurnContext,
         result: RunResult,
-        build_meta: BuildMeta,
+        snapshot: ContextSnapshot,
         status: str,
     ) -> None:
         factory = get_session_factory()
@@ -160,7 +160,7 @@ class TurnFinalizer:
                     status=status,
                     tool_calls=result.tool_calls or None,
                     usage=result.usage or None,
-                    context_meta=self._build_context_meta(ctx, result, build_meta),
+                    context_meta=self._build_context_meta(ctx, result, snapshot),
                     reasoning_content=result.reasoning_content,
                     reasoning_duration_ms=result.reasoning_duration_ms,
                     error_message=result.error_message,
@@ -171,11 +171,32 @@ class TurnFinalizer:
     def _build_context_meta(
         ctx: TurnContext,
         result: RunResult,
-        build_meta: BuildMeta,
+        snapshot: ContextSnapshot,
     ) -> dict:
-        """构造落库元信息，供 resume 恢复模型与状态。"""
-        meta = asdict(build_meta)
-        meta["finish_reason"] = result.finish_reason
+        """构造落库元信息：上下文占用(分层) + resume 恢复所需字段。
+
+        - 上下文占用 (estimated_input_tokens / context_window / layers) 供前端展示;
+        - model_options / finish_reason 供 resume 恢复模型与状态 (resumer 读取)。
+        """
+        usage = snapshot.usage
+        meta: dict = {
+            # ---- 上下文占用 (Task1: 分层) ----
+            "estimated_input_tokens": usage.total_input_tokens,
+            "context_window": usage.context_window,
+            "max_output_tokens": usage.max_output_tokens,
+            "total_ratio": usage.total_ratio,
+            "layers": [asdict(layer) for layer in usage.layers],
+            # ---- 历史 / 降级统计 ----
+            "history_messages_used": snapshot.history_messages_used,
+            "history_messages_dropped": snapshot.history_messages_dropped,
+            "summary_included": snapshot.summary_included,
+            "facts_included": snapshot.facts_included,
+            "compaction_performed": snapshot.compaction_performed,
+            "rebuild_count": snapshot.rebuild_count,
+            "degraded": list(snapshot.degraded),
+            # ---- resume 恢复用 ----
+            "finish_reason": result.finish_reason,
+        }
         if ctx.model_options:
             meta["model_options"] = dict(ctx.model_options)
         return meta

@@ -19,8 +19,21 @@ from forge.chat.finalizer import TurnFinalizer
 from forge.core.content_merge import strip_overlap
 from forge.chat.orchestrator import _inject_partial_into_messages
 from forge.chat.types import ResumeState, RunResult, TurnContext
-from forge.context.base import BuildMeta
+from forge.context_mgmt.types import ContextSnapshot, ContextUsage, WindowBudget
 from forge.core.types.message import Message
+
+
+def _snapshot() -> ContextSnapshot:
+    """构造最小可用的 ContextSnapshot（finalize 仅透传给被 mock 的 _update_message）。"""
+    return ContextSnapshot(
+        messages=[],
+        budget=WindowBudget(
+            context_window=8192, system_budget=0, dialogue_budget=0, tool_result_budget=0,
+        ),
+        usage=ContextUsage(
+            context_window=8192, total_input_tokens=0, max_output_tokens=8192, total_ratio=0.0,
+        ),
+    )
 
 
 def _resume_state(
@@ -197,7 +210,7 @@ async def test_finalize_with_prev_state_writes_merged_content() -> None:
         patch.object(TurnFinalizer, "_update_message", update),
         patch.object(TurnFinalizer, "_publish_turn_completed", publish),
     ):
-        ev = await finalizer.finalize(_ctx(), new_result, BuildMeta(), prev_state=prev)
+        ev = await finalizer.finalize(_ctx(), new_result, _snapshot(), prev_state=prev)
         if ev:
             events.append(ev)
 

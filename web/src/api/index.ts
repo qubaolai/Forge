@@ -2,7 +2,8 @@ import { apiClient } from './client';
 import {
   Agent, AuthTokens, ChatMessage, ChatSession, KnowledgeBase,
   KnowledgeDocument, DocumentChunk, LoginPayload, LoginResponse,
-  ModelEndpoint, PaginatedData, PaginationParams, RetrievalResult,
+  ModelEndpoint, ModelUpsert, PaginatedData, PaginationParams,
+  ProviderAdmin, ProviderKey, ProviderModel, RetrievalResult,
   RetrieveRequest, ToolDefinition, User, AuditLog,
 } from '@/types';
 
@@ -95,13 +96,43 @@ export const toolsApi = {
   list: () => apiClient.get<ToolDefinition[]>('/tools'),
 };
 
+// 仅保留 list（agent 编辑器的 ModelTab / PreviewPanel 仍在用）。
+// 管理端的模型/供应商配置改用下方 providersApi / modelsAdminApi / providerKeysApi。
 export const modelsApi = {
   list: () => apiClient.get<ModelEndpoint[]>('/models'),
-  create: (payload: Partial<ModelEndpoint> & { api_key?: string }) =>
-    apiClient.post<ModelEndpoint>('/models', payload),
-  update: (id: string, payload: Partial<ModelEndpoint> & { api_key?: string }) =>
-    apiClient.patch<ModelEndpoint>(`/models/${id}`, payload),
-  remove: (id: string) => apiClient.delete<void>(`/models/${id}`),
+};
+
+// ---- 管理端：供应商（不支持新增供应商，仅启停 + 读取） ----
+export const providersApi = {
+  listAdmin: () => apiClient.get<ProviderAdmin[]>('/providers/admin'),
+  toggle: (name: string, enabled: boolean) =>
+    apiClient.put<{ provider: string; enabled: boolean }>(`/providers/${name}`, { enabled }),
+};
+
+// ---- 管理端：模型增删改查 ----
+export const modelsAdminApi = {
+  detail: (id: number) =>
+    apiClient.get<ProviderModel>(`/models/${id}`),
+  create: (provider: string, payload: ModelUpsert) =>
+    apiClient.post<ProviderModel>(`/providers/${provider}/models`, payload),
+  update: (modelId: string, payload: ModelUpsert) =>
+    apiClient.put<ProviderModel>(`/models/${modelId}`, payload),
+  toggle: (modelId: string, enabled: boolean) =>
+    apiClient.put<ProviderModel>(`/models/${modelId}`, { enabled }),
+  setDefault: (modelId: string) =>
+    apiClient.put<ProviderModel>(`/models/${modelId}`, { is_default: true }),
+  remove: (modelId: string) => apiClient.delete<void>(`/models/${modelId}`),
+};
+
+// ---- 管理端：供应商 API-Key 增删改查 ----
+export const providerKeysApi = {
+  list: (provider: string) => apiClient.get<ProviderKey[]>(`/providers/${provider}/keys`),
+  create: (provider: string, apiKey: string, weight = 1) =>
+    apiClient.post<ProviderKey>(`/providers/${provider}/keys`, { api_key: apiKey, weight }),
+  update: (provider: string, keyId: string, payload: { enabled?: boolean; weight?: number }) =>
+    apiClient.put<ProviderKey>(`/providers/${provider}/keys/${keyId}`, payload),
+  remove: (provider: string, keyId: string) =>
+    apiClient.delete<void>(`/providers/${provider}/keys/${keyId}`),
 };
 
 export const auditApi = {

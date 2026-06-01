@@ -115,7 +115,6 @@ CREATE TABLE IF NOT EXISTS models (
     is_enabled       TINYINT      NOT NULL DEFAULT 1 COMMENT '启用标识',
     is_default       TINYINT      NOT NULL DEFAULT 0 COMMENT '是否该供应商的默认模型',
     priority         INT          NOT NULL DEFAULT 0 COMMENT '同类型内优先级',
-    last_synced_at   DATETIME     NULL COMMENT '最后 API 同步时间',
     is_stale         TINYINT      NOT NULL DEFAULT 0 COMMENT 'API 不再返回时标记',
     created_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',

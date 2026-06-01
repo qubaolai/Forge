@@ -7,8 +7,11 @@ import { useChatStream } from '@/hooks/useChatStream';
 import { MessageList } from '@/components/chat/MessageList';
 import { ChatInput, ThinkingLevel } from '@/components/chat/ChatInput';
 import { CitationPanel } from '@/components/chat/CitationPanel';
+import { ContextUsageRing } from '@/components/chat/ContextUsageRing';
+import { ChatWelcome } from '@/components/chat/ChatWelcome';
 import { PanelRight } from 'lucide-react';
 import type { ModelOptions } from '@/hooks/useChatStream';
+import type { ContextUsage } from '@/types';
 
 export default function ChatPage() {
   const { sessionId } = useParams();
@@ -37,6 +40,7 @@ export default function ChatPage() {
   const [selectedCitation, setSelectedCitation] = useState<number | null>(null);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>('standard');
   const [thinkingEnabled, setThinkingEnabled] = useState(true);
+  const [prefill, setPrefill] = useState('');
 
   // 模型选择
   const [selectedProvider, setSelectedProvider] = useState('anthropic');
@@ -81,7 +85,7 @@ export default function ChatPage() {
     return null;
   }, [modelGroups, selectedProvider, selectedModel]);
 
-  const { send, abort, resume, reset, streaming, current } = useChatStream({
+  const { send, abort, resume, reset, streaming, current, contextUsage } = useChatStream({
     onComplete: () => {
       qc.invalidateQueries({ queryKey: ['session-messages', sessionId] });
       qc.invalidateQueries({ queryKey: ['sessions'] });
@@ -122,6 +126,7 @@ export default function ChatPage() {
     setPendingUser([]);
     setSelectedCitation(null);
     setShowPanel(true);
+    setPrefill('');
     reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
@@ -172,6 +177,16 @@ export default function ChatPage() {
     }
     return [];
   }, [messages]);
+
+  // 上下文占用: 实时 SSE 优先, 否则回退到最后一条带 context_usage 的 assistant 消息 (持久化展示)
+  const displayUsage = useMemo<ContextUsage | null>(() => {
+    if (contextUsage) return contextUsage;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === 'assistant' && m.context_usage) return m.context_usage;
+    }
+    return null;
+  }, [contextUsage, messages]);
 
   function buildModelOptions(): ModelOptions {
     const opts: ModelOptions = { provider: selectedProvider, model: selectedModel };
@@ -255,15 +270,18 @@ export default function ChatPage() {
               )}
             </div>
           </div>
-          {!isNew && !showPanel && currentCitations.length > 0 && (
-            <button
-              onClick={() => setShowPanel(true)}
-              className="text-xs text-gray-500 hover:text-gray-900 flex items-center gap-1"
-            >
-              <PanelRight size={14} />
-              引用 {currentCitations.length}
-            </button>
-          )}
+          <div className="flex shrink-0 items-center gap-3">
+            {!isNew && !showPanel && currentCitations.length > 0 && (
+              <button
+                onClick={() => setShowPanel(true)}
+                className="text-xs text-gray-500 hover:text-gray-900 flex items-center gap-1"
+              >
+                <PanelRight size={14} />
+                引用 {currentCitations.length}
+              </button>
+            )}
+            <ContextUsageRing usage={displayUsage} />
+          </div>
         </div>
 
         {showLoading ? (
@@ -271,9 +289,7 @@ export default function ChatPage() {
             加载中…
           </div>
         ) : showEmptyHint ? (
-          <div className="flex-1 flex items-center justify-center text-gray-300 text-sm select-none">
-            输入消息开始对话
-          </div>
+          <ChatWelcome onPick={(t) => setPrefill(t)} />
         ) : (
           <MessageList
             key={sessionId || 'new'}
@@ -291,6 +307,7 @@ export default function ChatPage() {
           placeholder={undefined}
           thinkingLevel={thinkingLevel}
           onThinkingLevelChange={setThinkingLevel}
+          prefill={prefill}
           selectedProvider={selectedProvider}
           selectedModel={selectedModel}
           modelGroups={modelGroups}

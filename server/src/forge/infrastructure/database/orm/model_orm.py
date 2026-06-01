@@ -37,7 +37,6 @@ class ModelOrm(Base, BigIntPKMixin):
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="启用标识")
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="是否该供应商的默认模型")
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="同类型内优先级")
-    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="最后 API 同步时间")
     is_stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="API 不再返回时标记")
 
     __table_args__ = table_args(

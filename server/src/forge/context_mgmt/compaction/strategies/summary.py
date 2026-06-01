@@ -22,7 +22,7 @@ from forge.context_mgmt.types import CompactionResult, ContextSnapshot
 logger = logging.getLogger(__name__)
 
 
-class SummaryCompaction:
+class SummaryCompaction():
     """基于 SummaryService 的摘要压缩."""
 
     def __init__(self, summary_service=None) -> None:
