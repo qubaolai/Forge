@@ -206,14 +206,15 @@ class MessageAssembler:
             ratio=sys_tokens / cw if cw else 0.0,
         ))
 
-        # 2. workspace 层 (合并多个 chunk)
+        # 2. workspace 层 (合并多个 chunk) — chat 模式无 workspace_context 时不记录
         ws_chunks = chunks.get("workspace", [])
-        layers.append(LayerUsage(
-            name="workspace",
-            token_count=workspace_tokens,
-            ratio=workspace_tokens / cw if cw else 0.0,
-            message_count=len(ws_chunks),
-        ))
+        if workspace_tokens > 0:
+            layers.append(LayerUsage(
+                name="workspace",
+                token_count=workspace_tokens,
+                ratio=workspace_tokens / cw if cw else 0.0,
+                message_count=len(ws_chunks),
+            ))
 
         # 3. facts 层
         facts_chunk = self._first_chunk(chunks, "facts")

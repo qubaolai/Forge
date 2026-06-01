@@ -87,15 +87,18 @@ class HistoryProvider(ContentProvider):
         )
         return [chunk]
 
+    # aborted / error 消息不应带入 LLM 上下文
+    _SKIP_STATUSES = frozenset({"aborted", "error", "streaming"})
+
     @staticmethod
     def _rows_to_history_messages(
         rows, exclude: set[str]
     ) -> list[HistoryMessage]:
         """ChatMessageView -> HistoryMessage 列表.
 
-        仅保留 role in (user, assistant) 且 content 非空,
-        与现有 CompositeContextBuilder._orm_to_messages 等价.
+        仅保留 role in (user, assistant)、content 非空、且 status 为正常终态。
         """
+        skip = HistoryProvider._SKIP_STATUSES
         out: list[HistoryMessage] = []
         for idx, r in enumerate(rows):
             if r.id in exclude:
@@ -103,6 +106,8 @@ class HistoryProvider(ContentProvider):
             if r.role not in ("user", "assistant"):
                 continue
             if not r.content:
+                continue
+            if getattr(r, "status", None) in skip:
                 continue
             out.append(
                 HistoryMessage(

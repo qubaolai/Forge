@@ -1,17 +1,15 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { ContextUsage } from '@/types';
 
-/** 上下文层名 -> 中文标签 */
-const LAYER_LABELS: Record<string, string> = {
-  system_prompt: '系统提示',
-  workspace: '工作区',
-  facts: '记忆事实',
-  summary: '对话摘要',
-  dialogue: '对话历史',
-  tool_results: '工具结果',
-  workflow_step: '工作流步骤',
-  current_input: '本轮输入',
-};
+/** chat 模式展示的上下文层 (不含工作区与工作流) */
+const STANDARD_LAYERS: { name: string; label: string }[] = [
+  { name: 'system_prompt', label: '系统提示' },
+  { name: 'facts',         label: '记忆事实' },
+  { name: 'summary',       label: '对话摘要' },
+  { name: 'dialogue',      label: '对话历史' },
+  { name: 'tool_results',  label: '工具结果' },
+  { name: 'current_input', label: '本轮输入' },
+];
 
 function fmtTokens(n: number): string {
   if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k';
@@ -43,7 +41,12 @@ export function ContextUsageRing({ usage }: { usage: ContextUsage | null }) {
   const circ = 2 * Math.PI * r;
   const offset = circ * (1 - ratio);
 
-  const layers = (usage.layers || []).filter((l) => l.token_count > 0);
+  // 始终展示全部 8 个标准层, 无数据时补 0
+  const layerMap = new Map((usage.layers || []).map((l) => [l.name, l]));
+  const layers = STANDARD_LAYERS.map(({ name, label }) => {
+    const d = layerMap.get(name);
+    return { name, label, token_count: d?.token_count ?? 0, ratio: d?.ratio ?? 0 };
+  });
 
   return (
     <DropdownMenu.Root>
@@ -105,26 +108,22 @@ export function ContextUsageRing({ usage }: { usage: ContextUsage | null }) {
             />
           </div>
           <div className="space-y-1.5">
-            {layers.length === 0 ? (
-              <div className="text-xs text-gray-400">暂无分层数据</div>
-            ) : (
-              layers.map((l) => {
-                const lpct = Math.round((l.ratio || 0) * 1000) / 10;
-                return (
-                  <div
-                    key={l.name}
-                    className="flex items-center justify-between text-xs"
-                  >
-                    <span className="text-gray-600">
-                      {LAYER_LABELS[l.name] || l.name}
-                    </span>
-                    <span className="tabular-nums text-gray-400">
-                      {fmtTokens(l.token_count)} · {lpct}%
-                    </span>
-                  </div>
-                );
-              })
-            )}
+            {layers.map((l) => {
+              const lpct = Math.round((l.ratio || 0) * 1000) / 10;
+              return (
+                <div
+                  key={l.name}
+                  className="flex items-center justify-between text-xs"
+                >
+                  <span className={l.token_count > 0 ? 'text-gray-600' : 'text-gray-300'}>
+                    {l.label}
+                  </span>
+                  <span className={`tabular-nums ${l.token_count > 0 ? 'text-gray-400' : 'text-gray-300'}`}>
+                    {fmtTokens(l.token_count)} · {lpct}%
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>

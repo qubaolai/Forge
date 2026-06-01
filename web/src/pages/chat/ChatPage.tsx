@@ -179,14 +179,29 @@ export default function ChatPage() {
   }, [messages]);
 
   // 上下文占用: 实时 SSE 优先, 否则回退到最后一条带 context_usage 的 assistant 消息 (持久化展示)
+  // context_window 强制使用前端当前选中模型的值, 确保占比与下拉框一致
   const displayUsage = useMemo<ContextUsage | null>(() => {
-    if (contextUsage) return contextUsage;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (m.role === 'assistant' && m.context_usage) return m.context_usage;
-    }
-    return null;
-  }, [contextUsage, messages]);
+    const base = (() => {
+      if (contextUsage) return contextUsage;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m.role === 'assistant' && m.context_usage) return m.context_usage;
+      }
+      return null;
+    })();
+    if (!base) return null;
+    const cw = currentModelMeta?.context_window || base.context_window;
+    if (cw === base.context_window) return base;
+    return {
+      ...base,
+      context_window: cw,
+      total_ratio: cw > 0 ? base.input_tokens / cw : 0,
+      layers: base.layers.map((l) => ({
+        ...l,
+        ratio: cw > 0 ? l.token_count / cw : 0,
+      })),
+    };
+  }, [contextUsage, messages, currentModelMeta]);
 
   function buildModelOptions(): ModelOptions {
     const opts: ModelOptions = { provider: selectedProvider, model: selectedModel };
