@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ async def run_digest_task(session_id: str) -> None:
     from forge.config.settings import get_settings
     from forge.context_mgmt.digest.store import DigestStore
     from forge.context_mgmt.meter.token_meter import get_token_meter
-    from forge.core.types.message import Message
+    from forge.core.types.message import Message, Role
     from forge.infrastructure.database.database import get_session_factory, init_engine
     from forge.infrastructure.database.repositories.chat_message_repo import (
         ChatMessageRepository,
@@ -88,7 +88,7 @@ async def run_digest_task(session_id: str) -> None:
         content = row.content or ""
         if not content or len(content.encode("utf-8")) <= min_tokens:
             continue
-        approx_tokens = meter.count_messages([Message(role=row.role, content=content)])
+        approx_tokens = meter.count_messages([Message(role=cast(Role, row.role), content=content)])
         if approx_tokens <= min_tokens:
             continue
         source_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()

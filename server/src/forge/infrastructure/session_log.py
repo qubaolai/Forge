@@ -35,7 +35,6 @@ from pathlib import Path
 from typing import Any
 
 from forge.config import paths
-
 from forge.infrastructure.jsonl import JsonlLog
 
 __all__ = [

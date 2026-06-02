@@ -11,7 +11,7 @@ subscriber 抛错:
 
 注意:
     - 跨进程场景 (worker 进程要收到 web 进程的事件) 需要换 RedisPubSubEventBus
-      或 KafkaEventBus, 接口 (EventBus Protocol) 保持不变.
+      或 KafkaEventBus, 接口 (EventBus ABC) 保持不变.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ import logging
 import threading
 
 from forge.infrastructure.event_bus.base import (
+    EventBus,
     EventHandler,
     EventPayload,
     Unsubscribe,
@@ -30,7 +31,7 @@ from forge.infrastructure.event_bus.base import (
 logger = logging.getLogger(__name__)
 
 
-class InProcessEventBus:
+class InProcessEventBus(EventBus):
     """进程内 pub/sub. 单实例, 用 RLock 保护 subscriber 表突变."""
 
     def __init__(self) -> None:

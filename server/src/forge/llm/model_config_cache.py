@@ -36,7 +36,7 @@ _KEY_READY = "forge:model:ready:v1"
 class ModelConfigCache:
     """Redis 缓存的模型配置读写封装。"""
 
-    _global: "ModelConfigCache | None" = None
+    _global: ModelConfigCache | None = None
     _global_lock = threading.Lock()
 
     def __init__(self, redis: RedisClient) -> None:
@@ -44,7 +44,7 @@ class ModelConfigCache:
         self._ready = False
 
     @classmethod
-    def get_global(cls, redis: RedisClient | None = None) -> "ModelConfigCache":
+    def get_global(cls, redis: RedisClient | None = None) -> ModelConfigCache:
         with cls._global_lock:
             if cls._global is not None:
                 return cls._global

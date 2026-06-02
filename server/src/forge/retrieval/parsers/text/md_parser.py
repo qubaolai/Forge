@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 from forge.core.types import Element, ElementType
+from forge.retrieval.parsers.parser_base import BaseParser
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ CODE_FENCE_PATTERN = re.compile(r"^```")
 TABLE_SEP_PATTERN = re.compile(r"^\s*\|?[\s:|-]+\|?\s*$")
 
 
-class MdParser:
+class MdParser(BaseParser):
     """Markdown 文档解析器."""
 
     def parse(self, file_path: Path) -> list[Element]:

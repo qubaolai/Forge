@@ -165,7 +165,7 @@ class ModelRepository:
                 "last_synced_at": now,
                 "is_stale": False,
             }
-            stmt = mysql_insert(ModelOrm.__table__).values(**insert_values)
+            stmt = mysql_insert(ModelOrm).values(**insert_values)
             update_values = {
                 field: insert_values[field]
                 for field in self._SYNC_UPDATABLE_FIELDS
@@ -186,7 +186,6 @@ class ModelRepository:
             for field in self._SYNC_UPDATABLE_FIELDS:
                 if field in model_data:
                     setattr(existing, field, model_data[field])
-            existing.last_synced_at = now
             existing.is_stale = False
             await self.db.flush()
             return existing, False

@@ -14,25 +14,27 @@ Stage 2 装 NoForgetting (永远 alive, 永不 prune), 零行为. Stage 3+ 视�
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Protocol
 
 from forge.memory.base import Fact
 
 
-class ForgettingPolicy(Protocol):
+class ForgettingPolicy(ABC):
     """sync 即可 -- 纯本地计算, 不应触发 IO."""
 
+    @abstractmethod
     def is_alive(self, fact: Fact, now: datetime) -> bool:
         """召回时调用. False 表示 "对当前对话不可见", 但 DB 行可能还在."""
         ...
 
+    @abstractmethod
     def should_prune(self, fact: Fact, now: datetime) -> bool:
         """定时任务调用. True 表示可以物理删除."""
         ...
 
 
-class NoForgetting:
+class NoForgetting(ForgettingPolicy):
     """记忆永久保留, 召回永远可见. Stage 2 默认."""
 
     def is_alive(self, fact: Fact, now: datetime) -> bool:

@@ -15,8 +15,6 @@ from forge.chat.assembler import ContextAssembler
 from forge.chat.tools import resolve_chat_tools
 from forge.config.domains.agent_profiles import (
     AgentProfile,
-    AgentProfilesConfig,
-    ModelProfiles,
 )
 from forge.tools.base import Tool
 

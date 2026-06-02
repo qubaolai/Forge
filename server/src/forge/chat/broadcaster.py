@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import suppress
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -80,10 +81,8 @@ class Broadcaster:
         queue: asyncio.Queue = asyncio.Queue(maxsize=self._queue_size)
         sub = BroadcasterSubscriber(self, queue)
         if self._closed:
-            try:
+            with suppress(asyncio.QueueFull):
                 queue.put_nowait(_CLOSE_SENTINEL)
-            except asyncio.QueueFull:
-                pass
             return sub
         self._subscribers.append(sub)
         return sub
@@ -126,17 +125,13 @@ class Broadcaster:
                         sub._queue.get_nowait()
                 except asyncio.QueueEmpty:
                     pass
-                try:
+                with suppress(asyncio.QueueFull):
                     sub._queue.put_nowait(_CLOSE_SENTINEL)
-                except asyncio.QueueFull:
-                    pass
         # 不立即清空 _subscribers — 让 unsubscribe 自己清, 避免迭代时修改
 
     def _remove_subscriber(self, sub: BroadcasterSubscriber) -> None:
-        try:
+        with suppress(ValueError):
             self._subscribers.remove(sub)
-        except ValueError:
-            pass
 
 
 __all__ = ["Broadcaster", "BroadcasterSubscriber"]

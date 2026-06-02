@@ -25,6 +25,7 @@ import logging
 from typing import Any
 
 from forge.agents.lifecycle import (
+    NoopLifecycle,
     RunContext,
     RunResult,
     StepContext,
@@ -42,7 +43,7 @@ _ARGUMENTS_PREVIEW_LIMIT = 200
 _ARTIFACT_SUMMARY_LIMIT = 200
 
 
-class RunStorePersistenceLifecycle:
+class RunStorePersistenceLifecycle(NoopLifecycle):
     """把 lifecycle 事件落到 RunStore.
 
     Args:

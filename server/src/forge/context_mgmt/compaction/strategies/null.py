@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from forge.context_mgmt.protocols import CompactionStrategy
 from forge.context_mgmt.types import CompactionResult, ContextSnapshot
 
 
-class NullCompaction:
+class NullCompaction(CompactionStrategy):
     """什么都不做, 始终返回 success=False."""
 
     @property

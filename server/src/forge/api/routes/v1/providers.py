@@ -81,8 +81,8 @@ async def toggle_provider(
     svc = _admin_service(db, model_cache)
     try:
         result = await svc.toggle_provider(provider_name, body.enabled)
-    except ValueError as e:
-        raise NotFound(str(e), code=40460)
+    except ValueError as exc:
+        raise NotFound(str(exc), code=40460) from exc
     return success(result)
 
 

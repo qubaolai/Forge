@@ -21,10 +21,10 @@ from __future__ import annotations
 
 from collections import deque
 
-from forge.chat.guards.base import Guidance, LoopState
+from forge.chat.guards.base import Guidance, LoopGuard, LoopState
 
 
-class StuckDetector:
+class StuckDetector(LoopGuard):
     """无跨 turn 共享. Runner 每 turn 构造一次."""
 
     def __init__(self, *, warn_at: int = 3, force_at: int = 5) -> None:

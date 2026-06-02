@@ -12,9 +12,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, Mapping
+from typing import Literal
 
 # 分段类型: 文章段落 (摘要) 或 代码块 (骨架)
 SegmentKind = Literal["prose", "code"]

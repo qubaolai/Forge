@@ -13,6 +13,8 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from forge.observability.tracing.tracer import Span
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,7 +33,7 @@ def build_otel_tracer(service_name: str, endpoint: str):
     trace.set_tracer_provider(provider)
     otel_tracer = trace.get_tracer(service_name)
 
-    class _OtelSpan:
+    class _OtelSpan(Span):
         def __init__(self, span):
             self._span = span
 

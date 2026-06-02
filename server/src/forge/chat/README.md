@@ -25,7 +25,7 @@ chat/
 ├── llm_selection.py    ← build_llm_chain_for_agent: agent.model_id → LLMFallbackChain
 ├── preparer.py         ← TurnPreparer: DB 校验 + user_msg 持久化 + assistant 占位
 ├── assembler.py        ← ContextAssembler: system_prompt 渲染 + ctx 构建 + 主动压缩 (R2)
-├── runner.py           ← AgentRunner Protocol + ReActRunner + mode 注册表
+├── runner.py           ← AgentRunner ABC + ReActRunner + mode 注册表
 ├── guards/             ← LoopGuard 框架: StepSafetyNet / StuckDetector / TokenBudget / WallClock
 ├── finalizer.py        ← TurnFinalizer: 落库 + 发终态事件 + publish turn.completed
 ├── resumer.py          ← TurnResumer: aborted/partial 消息回滚 streaming + 抓快照
@@ -244,7 +244,7 @@ aggregate: 多 guard 的 guidance 文本拼到 inject_system_messages
 
 | 需求 | 改哪里 |
 |---|---|
-| 新增 agent mode (plan-execute / supervisor) | 实现 `AgentRunner` Protocol 的新类, `@register_runner("xxx")` 注册. orchestrator + 路由零改动 |
+| 新增 agent mode (plan-execute / supervisor) | 继承 `AgentRunner` ABC 并实现抽象方法, `@register_runner("xxx")` 注册. orchestrator + 路由零改动 |
 | 新增 LoopGuard (eg "禁止某 tool 连调") | 在 `chat/guards/` 加新文件, 注册到 `runner._default_guard_factories`. ReActAgent 零改动 |
 | 修改主动压缩触发条件 | `assembler.should_compact` 这一个方法; orchestrator 不动 |
 | 修改终态事件协议 | `finalizer._done_event / _error_event / _partial_event` 这一处 |

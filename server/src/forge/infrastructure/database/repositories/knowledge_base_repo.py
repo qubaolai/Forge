@@ -21,6 +21,7 @@ from forge.infrastructure.database.orm.knowledge_base_orm import (
     KnowledgeBaseOrm,
 )
 from forge.infrastructure.database.repositories.base import BaseRepository
+from forge.infrastructure.storage.data_protocols import KnowledgeBaseStore
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ def _to_int(value: str | int | None) -> int | None:
         return None
 
 
-class KnowledgeBaseRepository(BaseRepository):
+class KnowledgeBaseRepository(BaseRepository, KnowledgeBaseStore):
     """知识库 CRUD + 按名/权限查询."""
 
     def __init__(self, session: AsyncSession):

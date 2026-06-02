@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable, Iterable
-from typing import Protocol
 
 from forge.agents.base import AgentEvent
 from forge.agents.lifecycle import AgentLifecycle, MultiLifecycle, RunContext
@@ -61,11 +61,12 @@ def _default_guard_factories(runtime: WorkspaceRuntimeSettings) -> list[GuardFac
     ]
 
 
-class AgentRunner(Protocol):
+class AgentRunner(ABC):
     """所有 agent mode 的统一执行接口."""
 
     result: RunResult
 
+    @abstractmethod
     def run(
         self,
         ctx: TurnContext,

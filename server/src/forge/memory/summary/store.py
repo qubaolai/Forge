@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from forge.infrastructure.database.orm.session_summary_orm import (
     SessionSummaryOrm,
 )
+from forge.infrastructure.storage.data_protocols import SummaryStore as SummaryStoreBase
 from forge.memory.base import MemoryStoreError, Summary
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,7 @@ def _to_int(value: str | int | None) -> int | None:
         return None
 
 
-class SummaryStore:
+class SummaryStore(SummaryStoreBase):
     """会话摘要持久化. 长寿单例, 并发安全 (每方法自有 session)."""
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]):

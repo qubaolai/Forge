@@ -1,6 +1,6 @@
 """组合 MemoryStore: 把 SummaryStore + (将来) FactStore 拼成完整 MemoryStore.
 
-实现 MemoryStore Protocol:
+实现 MemoryStore ABC:
     get_summary    -> SummaryStore.get
     recall_facts   -> Stage 2 永远返回 []; Stage 3 接入 FactStore
 
@@ -11,13 +11,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from forge.memory.base import Fact, FactRecallRequest, Summary
+from forge.memory.base import Fact, FactRecallRequest, MemoryStore, Summary
 
 if TYPE_CHECKING:
     from forge.infrastructure.storage import SummaryStore
 
 
-class CompositeMemoryStore:
+class CompositeMemoryStore(MemoryStore):
     """Stage 2: 只接 SummaryStore. PR #5 加 FactStore 参数."""
 
     def __init__(self, summary_store: SummaryStore) -> None:

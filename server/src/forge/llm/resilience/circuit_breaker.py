@@ -18,7 +18,7 @@ Key 粒度: (impl, api_key, model)
 Strategy 抽象 (Phase 6 切 Redis):
     - CircuitBreakerStrategy: 调用方依赖的抽象, 决定"这个 key 当前是否要短路"
     - InProcessCircuitBreaker: 默认实现, 进程内 state (重启重置)
-    - 后续 RedisCircuitBreaker (Phase 6) 实现同 Protocol, 状态存 Redis Hash + TTL
+    - 后续 RedisCircuitBreaker (Phase 6) 继承同一 ABC, 状态存 Redis Hash + TTL
       多实例共享熔断状态, 上层 LLMDispatcher 调用代码零改动.
 """
 
@@ -27,10 +27,11 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal, Protocol, runtime_checkable
+from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -62,26 +63,30 @@ BreakerKey = tuple[str, str, str]
 """(impl, api_key, model)"""
 
 
-@runtime_checkable
-class CircuitBreakerStrategy(Protocol):
+class CircuitBreakerStrategy(ABC):
     """熔断器策略接口.
 
     调用方 (LLMDispatcher) 只通过此接口判定一个 key 是否短路、记录成功/失败.
     具体状态机 (进程内 / Redis) 由实现决定.
     """
 
+    @abstractmethod
     def is_open(self, key: BreakerKey) -> bool:
         """当前 key 是否要短路."""
         ...
 
+    @abstractmethod
     def record_success(self, key: BreakerKey) -> None: ...
 
+    @abstractmethod
     def record_failure(self, key: BreakerKey) -> None: ...
 
+    @abstractmethod
     def reset(self, key: BreakerKey | None = None) -> None:
         """重置指定 key (或全部). 测试 / 运维用."""
         ...
 
+    @abstractmethod
     def snapshot(self) -> dict[str, str]:
         """返回所有 key 的状态快照, 给 /metrics 或 admin 用."""
         ...
@@ -236,9 +241,9 @@ class InProcessCircuitBreaker(CircuitBreakerStrategy):
                 for breaker in self._breakers.values():
                     breaker.reset()
             else:
-                breaker = self._breakers.get(key)
-                if breaker is not None:
-                    breaker.reset()
+                selected = self._breakers.get(key)
+                if selected is not None:
+                    selected.reset()
 
     def snapshot(self) -> dict[str, str]:
         with self._lock:

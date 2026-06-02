@@ -71,7 +71,7 @@ class TimeTool(Tool):
     }
     parallelism_safe = True
 
-    def arun(self, args: dict[str, Any]) -> dict[str, Any]:
+    def run(self, args: dict[str, Any]) -> dict[str, Any]:
         tz_name = str(args.get("timezone") or "").strip()
         output = str(args.get("output") or "all").strip().lower()
         fmt = str(args.get("format") or _DEFAULT_FMT)

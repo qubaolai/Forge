@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import logging
 
-from forge.context_mgmt.compaction.trigger.explicit import ExplicitTrigger
 from forge.context_mgmt.protocols import (
     CompactionError,
     CompactionStrategy,

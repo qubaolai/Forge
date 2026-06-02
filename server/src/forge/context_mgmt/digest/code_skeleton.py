@@ -123,7 +123,7 @@ def _extract_signatures(
 def _heuristic_skeleton(label: str, code: str) -> str:
     """无 tree-sitter 时的降级: 标签 + 前若干行 + 总行数。"""
     lines = code.split("\n")
-    head = [ln for ln in lines[:_HEURISTIC_HEAD_LINES]]
+    head = list(lines[:_HEURISTIC_HEAD_LINES])
     preview = "\n".join(head)
     more = max(0, len(lines) - len(head))
     suffix = f"\n... (共 {len(lines)} 行, 余 {more} 行折叠; 用 read_message 回读)" if more else ""

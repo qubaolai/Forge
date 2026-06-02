@@ -1,4 +1,4 @@
-"""任务队列: Protocol + 实现 + 全局单例工厂.
+"""任务队列: ABC + 实现 + 全局单例工厂.
 
 单机模式默认 `LocalTaskQueue` (同进程异步执行).
 如需兼容旧 Celery worker, 可设置 `ASSISTANT_TASK_QUEUE_BACKEND=celery`.

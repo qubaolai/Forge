@@ -51,9 +51,11 @@ class _FakePool:
 
 
 class _Settings:
-    class llm:
+    class Llm:
         max_retries = 0
         retry_backoff_seconds = 0.0
+
+    llm = Llm()
 
 
 def test_build_chain_requires_ready_cache(monkeypatch) -> None:

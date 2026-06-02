@@ -1,4 +1,4 @@
-"""ChatSession 仓储 — MySQL 实现 SessionStore Protocol。
+"""ChatSession 仓储 — MySQL 实现 SessionStore ABC。
 
 会话 ID 与 user_id 均为雪花 ID; 对外以字符串 (str(id)) 暴露, 内部按 BIGINT 查询。
 """
@@ -10,7 +10,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from forge.infrastructure.database.orm.chat_session_orm import ChatSessionOrm
-from forge.infrastructure.storage.data_protocols import SessionView
+from forge.infrastructure.storage.data_protocols import SessionStore, SessionView
 
 
 def _to_int(value: str | int | None) -> int | None:
@@ -23,7 +23,7 @@ def _to_int(value: str | int | None) -> int | None:
         return None
 
 
-class ChatSessionRepository:
+class ChatSessionRepository(SessionStore):
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
@@ -75,7 +75,10 @@ class ChatSessionRepository:
             .values(title=title, updated_at=datetime.now(UTC))
         )
         await self.db.flush()
-        return await self.get_by_id(session.id)
+        updated = await self.get_by_id(session.id)
+        if updated is None:
+            raise RuntimeError(f"session 更新后不存在: {session.id}")
+        return updated
 
     async def delete(self, session: SessionView) -> None:
         await self.db.execute(

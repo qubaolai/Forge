@@ -73,7 +73,9 @@ class AdminModelService:
 
     async def list_providers(self) -> list[dict]:
         """列出所有供应商及其模型。"""
-        from forge.infrastructure.database.repositories.model_provider_repo import ProviderRepository
+        from forge.infrastructure.database.repositories.model_provider_repo import (
+            ProviderRepository,
+        )
         from forge.infrastructure.database.repositories.model_repo import ModelRepository
 
         provider_repo = ProviderRepository(self.db)
@@ -127,7 +129,9 @@ class AdminModelService:
         """
         from datetime import datetime
 
-        from forge.infrastructure.database.repositories.model_provider_repo import ProviderRepository
+        from forge.infrastructure.database.repositories.model_provider_repo import (
+            ProviderRepository,
+        )
         from forge.llm.client_pool import get_llm_pool
 
         provider_repo = ProviderRepository(self.db)
@@ -253,7 +257,9 @@ class AdminModelService:
 
     async def create_model(self, provider_name: str, data: dict) -> dict:
         """管理端在某供应商下手动新增模型。"""
-        from forge.infrastructure.database.repositories.model_provider_repo import ProviderRepository
+        from forge.infrastructure.database.repositories.model_provider_repo import (
+            ProviderRepository,
+        )
         from forge.infrastructure.database.repositories.model_repo import ModelRepository
 
         provider = await ProviderRepository(self.db).get_by_name(provider_name)
@@ -318,7 +324,9 @@ class AdminModelService:
     # ------------------------------------------------------------------
 
     async def list_provider_keys(self, provider_name: str) -> list[dict]:
-        from forge.infrastructure.database.repositories.model_provider_repo import ProviderRepository
+        from forge.infrastructure.database.repositories.model_provider_repo import (
+            ProviderRepository,
+        )
 
         provider_repo = ProviderRepository(self.db)
         provider = await provider_repo.get_by_name(provider_name)
@@ -329,7 +337,9 @@ class AdminModelService:
 
     async def create_provider_key(self, provider_name: str, api_key: str, weight: int = 1) -> dict:
         from forge.core.crypto import encrypt
-        from forge.infrastructure.database.repositories.model_provider_repo import ProviderRepository
+        from forge.infrastructure.database.repositories.model_provider_repo import (
+            ProviderRepository,
+        )
 
         provider_repo = ProviderRepository(self.db)
         provider = await provider_repo.get_by_name(provider_name)
@@ -350,7 +360,9 @@ class AdminModelService:
     async def update_provider_key(
         self, provider_name: str, key_id: str, *, enabled: bool | None, weight: int | None
     ) -> dict:
-        from forge.infrastructure.database.repositories.model_provider_repo import ProviderRepository
+        from forge.infrastructure.database.repositories.model_provider_repo import (
+            ProviderRepository,
+        )
 
         provider_repo = ProviderRepository(self.db)
         provider = await provider_repo.get_by_name(provider_name)
@@ -367,7 +379,9 @@ class AdminModelService:
         return _key_to_dict(key)
 
     async def delete_provider_key(self, provider_name: str, key_id: str) -> dict:
-        from forge.infrastructure.database.repositories.model_provider_repo import ProviderRepository
+        from forge.infrastructure.database.repositories.model_provider_repo import (
+            ProviderRepository,
+        )
 
         provider_repo = ProviderRepository(self.db)
         provider = await provider_repo.get_by_name(provider_name)

@@ -7,10 +7,9 @@ from __future__ import annotations
 
 import logging
 
-from forge.context_mgmt.protocols import ContentProviderError, TokenMeter
+from forge.context_mgmt.protocols import ContentProvider, ContentProviderError, TokenMeter
 from forge.context_mgmt.types import ContentChunk, ContextRequest
 from forge.memory.base import FactRecallRequest, MemoryStore, MemoryStoreError
-from forge.context_mgmt.protocols import ContentProvider
 
 logger = logging.getLogger(__name__)
 

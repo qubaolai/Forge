@@ -41,7 +41,7 @@ from forge.agents.hitl import (
     DecisionRegistry,
     get_decision_registry,
 )
-from forge.agents.lifecycle import RunContext, StepContext, ToolCallVeto
+from forge.agents.lifecycle import NoopLifecycle, RunContext, StepContext, ToolCallVeto
 from forge.core.types.message import Message, ToolCall
 from forge.infrastructure.run_store import RunStore
 
@@ -83,7 +83,7 @@ def validate_workflow_template(tpl: dict[str, Any]) -> None:
             )
 
 
-class WorkflowLifecycle:
+class WorkflowLifecycle(NoopLifecycle):
     """Workflow 模式主 lifecycle.
 
     Args:

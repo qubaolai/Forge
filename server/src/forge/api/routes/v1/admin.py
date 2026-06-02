@@ -22,7 +22,7 @@ _EVENT = "model_config_changed"
 
 def _sse(event: dict) -> bytes:
     data = json.dumps(event, ensure_ascii=False, default=str)
-    return f"event: {_EVENT}\ndata: {data}\n\n".encode("utf-8")
+    return f"event: {_EVENT}\ndata: {data}\n\n".encode()
 
 
 @router.get("/admin/events", tags=["admin:events"])
@@ -60,7 +60,7 @@ async def admin_events(
                 try:
                     payload = await asyncio.wait_for(queue.get(), timeout=30.0)
                     yield _sse(payload)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield _sse({"type": "heartbeat", "timestamp": datetime.utcnow().isoformat()})
         finally:
             unsubscribe()

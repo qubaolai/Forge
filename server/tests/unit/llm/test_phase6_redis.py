@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from forge.llm import LLMResponse
 from forge.llm.caching.exact_cache import RedisExactCache
 from forge.llm.inbound_rate_limiter import RedisInboundRateLimiter
 from forge.llm.pipeline.dedup import (
-    IdempotencyOutcome,
     RedisIdempotencyStore,
 )
 

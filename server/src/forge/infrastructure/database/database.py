@@ -9,7 +9,6 @@
 
 from collections.abc import AsyncGenerator
 
-from forge.config.settings import get_settings
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -17,6 +16,8 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+
+from forge.config.settings import get_settings
 
 # ---------- 全局引擎 / 会话工厂 ----------
 _engine: AsyncEngine | None = None

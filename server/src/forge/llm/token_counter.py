@@ -1,7 +1,7 @@
 """Token 计数: ContextBuilder 预算控制用.
 
 提供:
-    - TokenCounter Protocol: 业务层只用这个
+    - TokenCounter ABC:      业务层只用这个
     - TiktokenCounter:        基于 tiktoken
     - HeuristicCounter:       基于字符数
     - get_token_counter():    工厂, 自动降级
@@ -13,9 +13,8 @@
 
 from __future__ import annotations
 
-from abc import ABC
 import logging
-from typing import Protocol
+from abc import ABC, abstractmethod
 
 from forge.core.types.message import Message
 
@@ -23,13 +22,15 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Protocol
+# ABC
 # ---------------------------------------------------------------------------
 class TokenCounter(ABC):
     """所有方法必须线程安全 / 协程安全 (无内部可变状态或自带锁)."""
 
+    @abstractmethod
     def count_text(self, text: str) -> int: ...
 
+    @abstractmethod
     def count_messages(self, messages: list[Message]) -> int:
         """估算一组消息的 prompt token 数 (含 role / 分隔符开销)."""
         ...

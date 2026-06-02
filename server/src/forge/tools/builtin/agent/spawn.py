@@ -118,10 +118,9 @@ def resolve_subagent_tools(role_allowed_tools: tuple[str, ...]) -> list[Tool]:
 
 
 async def _default_subagent_runner(target_role: str, task: str, max_steps: int) -> str:
-    from forge.config.settings import get_settings
-
     from forge.agents.react.agent import ReActAgent
     from forge.agents.roles import get_agent_role, resolve_runtime_model_id
+    from forge.config.settings import get_settings
     from forge.llm import GatewayBinding, GatewayLLMAdapter, get_llm_gateway
     from forge.prompts import get_registry
 

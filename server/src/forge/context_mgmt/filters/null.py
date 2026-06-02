@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from forge.context_mgmt.types import ContextMode, HistoryMessage
 from forge.context_mgmt.protocols import HistoryFilter
+from forge.context_mgmt.types import ContextMode, HistoryMessage
 
 
 class NullFilter(HistoryFilter):

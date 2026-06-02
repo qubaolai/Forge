@@ -25,7 +25,7 @@ class ContextDigestSettings(BaseSettings):
     min_tokens: int = 8000
 
     @model_validator(mode="after")
-    def _clamp_min_tokens(self) -> "ContextDigestSettings":
+    def _clamp_min_tokens(self) -> ContextDigestSettings:
         """保证 min_tokens <= per_message_token_cap。
 
         否则处于 (cap, min_tokens] 之间的消息会被读时折叠却永远不被 digest,

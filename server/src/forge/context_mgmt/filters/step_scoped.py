@@ -7,8 +7,9 @@
 
 from __future__ import annotations
 
-from forge.context_mgmt.types import ContextMode, HistoryMessage
 from forge.context_mgmt.protocols import HistoryFilter
+from forge.context_mgmt.types import ContextMode, HistoryMessage
+
 
 class StepScopedFilter(HistoryFilter):
     """按 step 隔离历史消息 (workflow 模式默认).

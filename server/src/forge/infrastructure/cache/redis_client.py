@@ -23,7 +23,7 @@ class RedisClient:
         data = await client.get_json("key")  # -> dict | None
     """
 
-    _instances: dict[str, "RedisClient"] = {}
+    _instances: dict[str, RedisClient] = {}
     _instances_lock = threading.Lock()
 
     def __init__(self, redis_url: str) -> None:

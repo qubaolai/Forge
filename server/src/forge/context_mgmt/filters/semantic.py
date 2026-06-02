@@ -1,7 +1,7 @@
 """SemanticFilter: 按向量相似度过滤历史消息.
 
 设计:
-    - 依赖一个 RelevanceScorer Protocol (本文件内部定义), 接受 query + messages,
+    - 依赖一个 RelevanceScorer ABC (本文件内部定义), 接受 query + messages,
       返回每条消息的相似度得分.
     - score < min_score 的消息被剔除.
     - Scorer 失败时降级为 RecentFilter (保留全部), 并记到 degraded.
@@ -14,8 +14,9 @@
 from __future__ import annotations
 
 import logging
-from abc import ABC
+from abc import ABC, abstractmethod
 
+from forge.context_mgmt.protocols import HistoryFilter
 from forge.context_mgmt.types import ContextMode, HistoryMessage
 from forge.retrieval.embedders.base import Embedder
 
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 class RelevanceScorer(ABC):
     """计算 query 与每条 history 消息的相似度."""
 
+    @abstractmethod
     async def score(
         self,
         query: str,
@@ -41,7 +43,7 @@ class NullScorer(RelevanceScorer):
         self, query: str, messages: list[HistoryMessage]
     ) -> list[float]:
         return [1.0] * len(messages)
-    
+
 class EmbeddingScorer(RelevanceScorer):
     """ 向量计算消息列表, 返回每个消息的得分 """
 
@@ -62,7 +64,7 @@ class EmbeddingScorer(RelevanceScorer):
             return np.dot(a, b) / (
                 np.linalg.norm(a) * np.linalg.norm(b)
             )
-        
+
         doc_vecs = self._embedder.embed_documents(docs)
         scores = []
         for vec in doc_vecs:
@@ -71,7 +73,7 @@ class EmbeddingScorer(RelevanceScorer):
         return scores
 
 
-class SemanticFilter:
+class SemanticFilter(HistoryFilter):
     """按相似度阈值过滤 history."""
 
     def __init__(
@@ -101,7 +103,7 @@ class SemanticFilter:
             return messages
 
         out: list[HistoryMessage] = []
-        for msg, score in zip(messages, scores):
+        for msg, score in zip(messages, scores, strict=False):
             msg.relevance_score = score
             if score >= self._min_score:
                 out.append(msg)

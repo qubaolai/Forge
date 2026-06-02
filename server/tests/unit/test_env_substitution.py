@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import pytest
+
 from forge.config.settings import _expand_env
 
 

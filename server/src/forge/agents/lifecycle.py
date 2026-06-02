@@ -19,7 +19,7 @@ ReActAgent 的所有扩展点统一通过 AgentLifecycle 暴露; mode (chat / pl
     on_error                     -> 终态异常完成
 
 设计原则:
-    - 所有 hook 默认 no-op; 实现方只覆写关心的子集.
+    - AgentLifecycle 的 hook 全部抽象; 选择性实现继承 NoopLifecycle 后只覆写关心的子集.
     - resolve_tools / before_tool_call 多 lifecycle "首个非 None 胜出",
       避免互相覆盖.
     - 其他 hook 全部 lifecycle 都调一次, 副作用各自负责.
@@ -29,10 +29,10 @@ ReActAgent 的所有扩展点统一通过 AgentLifecycle 暴露; mode (chat / pl
 from __future__ import annotations
 
 import logging
+from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Protocol
-from abc import ABC
+from typing import Any
 
 from forge.core.types.message import Message, ToolCall
 
@@ -119,25 +119,30 @@ class RunResult:
 # 协议
 # ---------------------------------------------------------------------------
 class AgentLifecycle(ABC):
-    """Agent 生命周期扩展协议. 所有方法都有默认 no-op.
+    """Agent 生命周期扩展 ABC.
 
-    实现方按需覆写; 不必继承, 满足 Protocol 即可.
+    直接子类必须实现全部 hook; 选择性实现应继承 NoopLifecycle.
     """
 
+    @abstractmethod
     async def on_start(self, ctx: RunContext) -> None: ...
 
+    @abstractmethod
     async def resolve_tools(self, step: StepContext) -> list[dict] | None:
         """每步前调. 返回 None = 沿用 agent 默认 tool_schemas;
         返回 list = 本步替换为该 schemas (动态工具集核心).
         """
         return None
 
+    @abstractmethod
     async def before_step(self, step: StepContext) -> StepDecision | None:
         """每步前调. 返回 None = 不引导; 返回 StepDecision 决定注入 / 强制纯文本."""
         return None
 
+    @abstractmethod
     async def after_step(self, step: StepContext, outcome: StepOutcome) -> None: ...
 
+    @abstractmethod
     async def before_tool_call(
         self, tc: ToolCall, step: StepContext
     ) -> ToolCallVeto | None:
@@ -146,12 +151,15 @@ class AgentLifecycle(ABC):
         """
         return None
 
+    @abstractmethod
     async def on_tool_result(self, tc: ToolCall, msg: Message) -> Message | None:
         """工具执行后调. 返回 None = 不改; 返回 Message = 替换 (持久化层用此把大产物落 artifact)."""
         return None
 
+    @abstractmethod
     async def on_complete(self, result: RunResult) -> None: ...
 
+    @abstractmethod
     async def on_error(self, exc: BaseException, partial: RunResult) -> None: ...
 
 

@@ -1,4 +1,4 @@
-"""事件总线: Protocol + 进程内实现 + 全局单例工厂.
+"""事件总线: ABC + 进程内实现 + 全局单例工厂.
 
 future: 跨进程场景 (Redis Pub/Sub / Kafka) 时, get_event_bus() 内部按 settings
 分发到对应实现, 业务侧 import 不变.

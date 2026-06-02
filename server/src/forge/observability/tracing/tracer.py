@@ -14,24 +14,27 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
 
-class Span(Protocol):
+class Span(ABC):
     """span 抽象, 业务只用 set / set_error 两个方法."""
 
+    @abstractmethod
     def set(self, key: str, value) -> None: ...
+
+    @abstractmethod
     def set_error(self, exc: BaseException) -> None: ...
 
 
 # ----------------------------------------------------------------------
 # No-op 实现
 # ----------------------------------------------------------------------
-class _NoopSpan:
+class _NoopSpan(Span):
     def set(self, key: str, value) -> None:
         pass
 
@@ -48,7 +51,7 @@ class _NoopTracer:
 # ----------------------------------------------------------------------
 # 简易日志型 tracer (中间方案, 不需要 OTel 也能看到 trace 结构)
 # ----------------------------------------------------------------------
-class _LoggingSpan:
+class _LoggingSpan(Span):
     def __init__(self, name: str, attrs: dict) -> None:
         self.name = name
         self.attrs = dict(attrs)

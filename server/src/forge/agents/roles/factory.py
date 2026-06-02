@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from threading import Lock
 
+
 @dataclass(frozen=True)
 class AgentRole:
     name: str

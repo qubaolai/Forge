@@ -16,7 +16,6 @@ celery 命令会 import 本模块, 拿模块级 ``app`` 符号; 所以本模块�
 from __future__ import annotations
 
 from forge.config.settings import get_settings
-
 from forge.infrastructure.queue.celery_queue import build_celery_app
 
 _settings = get_settings()

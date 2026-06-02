@@ -8,11 +8,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from forge.infrastructure.queue.base import TaskQueue
+
 logger = logging.getLogger(__name__)
 
 
-class NullTaskQueue:
-    """符合 TaskQueue Protocol. 任何 submit 只记 INFO."""
+class NullTaskQueue(TaskQueue):
+    """TaskQueue ABC 的空实现. 任何 submit 只记 INFO."""
 
     def submit(self, task_name: str, **kwargs: Any) -> None:
         logger.info("NullTaskQueue.submit (无 worker): task=%s kwargs=%s", task_name, kwargs)

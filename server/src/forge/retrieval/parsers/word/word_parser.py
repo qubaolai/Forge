@@ -18,6 +18,7 @@ from docx.text.paragraph import Paragraph
 
 from forge.core.types import Element, ElementMetadata, ElementType
 from forge.retrieval.common.format_profile import FormatProfile
+from forge.retrieval.parsers.parser_base import BaseParser
 
 from .numbering_restorer import HeadingTextResolver
 from .style_detector import HeuristicTitleDetector
@@ -66,7 +67,7 @@ CODE_TEXT_PATTERNS = [
 
 
 # TODO 注意系统层配置文件要控制debug开关
-class WordParser:
+class WordParser(BaseParser):
     """Word 文档解析器.
 
     输出标准化的 Element 列表, 下游 chunker 无需感知格式细节.

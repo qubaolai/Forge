@@ -1,8 +1,7 @@
 """Model ORM — 模型信息表（统一存储 text / embedding / reranker 等类型）。"""
 
-from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Index, Integer, JSON, String, Text
+from sqlalchemy import JSON, BigInteger, Boolean, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base

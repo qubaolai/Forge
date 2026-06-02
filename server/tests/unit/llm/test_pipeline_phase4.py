@@ -10,6 +10,8 @@ from forge.llm import LLMRequest, LLMResponse
 from forge.llm.caching.exact_cache import InProcessLRUCache, make_cache_key
 from forge.llm.inbound_rate_limiter import (
     InboundRateLimitExceeded,
+)
+from forge.llm.inbound_rate_limiter import (
     InProcessInboundRateLimiter as InboundRateLimiter,
 )
 from forge.llm.pipeline.cache import (
@@ -19,6 +21,8 @@ from forge.llm.pipeline.cache import (
 from forge.llm.pipeline.dedup import (
     DedupCompleteMiddleware,
     DeduplicationMiddleware,
+)
+from forge.llm.pipeline.dedup import (
     InProcessIdempotencyStore as IdempotencyStore,
 )
 from forge.llm.pipeline.rate_limit import InboundRateLimitMiddleware
@@ -207,9 +211,8 @@ async def test_dedup_no_key_passes_through():
 # ----------------------------------------------------------------------
 async def test_bulkhead_admits_within_limit():
     bk = ProviderBulkhead(max_concurrent_per_provider=2)
-    async with bk.guard("openai"):
-        async with bk.guard("openai"):
-            pass
+    async with bk.guard("openai"), bk.guard("openai"):
+        pass
 
 
 async def test_bulkhead_rejects_over_limit():
@@ -229,10 +232,9 @@ async def test_bulkhead_disabled_passes():
 
 async def test_bulkhead_isolates_providers():
     bk = ProviderBulkhead(max_concurrent_per_provider=1)
-    async with bk.guard("openai"):
+    async with bk.guard("openai"), bk.guard("anthropic"):
         # 不同 provider 互不影响
-        async with bk.guard("anthropic"):
-            pass
+        pass
 
 
 # ----------------------------------------------------------------------

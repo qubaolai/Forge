@@ -372,10 +372,12 @@ async def _setup_llm_gateway_runtime(settings, redis_client) -> None:
     use_redis = redis_client is not None and await redis_client.ping()
     if rl_cfg.enabled:
         from forge.llm.inbound_rate_limiter import (
+            InboundRateLimiter,
             InProcessInboundRateLimiter,
             RedisInboundRateLimiter,
             set_inbound_rate_limiter,
         )
+        limiter: InboundRateLimiter
         if use_redis:
             limiter = RedisInboundRateLimiter(
                 redis_client,

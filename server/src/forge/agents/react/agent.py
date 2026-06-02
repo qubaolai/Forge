@@ -20,7 +20,7 @@ from collections.abc import (
     AsyncIterator,
     Iterable,
 )
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 from forge.agents.base import AgentEvent, AgentResult, BaseAgent
 from forge.agents.lifecycle import (
@@ -28,44 +28,18 @@ from forge.agents.lifecycle import (
     RunContext,
     RunResult,
     StepContext,
-    StepDecision,
     StepOutcome,
 )
 from forge.core.request_context import current_client_type
 from forge.core.types.errors import AgentMaxStepsError
 from forge.core.types.message import Message, ToolCall
+from forge.llm.contracts import ToolCallingLLM
 from forge.observability.tracing.tracer import span
 from forge.prompts import get_registry
 from forge.tools.executor import ToolExecutor, get_default_executor
 from forge.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
-
-
-class ToolCallingLLM(Protocol):
-    """ReAct 只依赖已绑定模型配置的 tool-calling facade."""
-
-    async def chat_with_tools(
-        self,
-        messages: list[Message],
-        tools: list[dict],
-        *,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        tool_choice: str = "auto",
-        extra_options: dict[str, Any] | None = None,
-    ) -> dict: ...
-
-    def chat_with_tools_stream(
-        self,
-        messages: list[Message],
-        tools: list[dict],
-        *,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        tool_choice: str = "auto",
-        extra_options: dict[str, Any] | None = None,
-    ) -> AsyncIterator[dict[str, Any]]: ...
 
 
 def _default_system_prompt() -> str:

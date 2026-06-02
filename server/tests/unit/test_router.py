@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 from forge.config.domains.llm import ModelCapabilities, ModelConfig
-
 from forge.llm.router import (
     Candidate,
     CompositeRouter,

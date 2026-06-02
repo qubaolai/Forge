@@ -1,13 +1,13 @@
 """/auth 路由。"""
 
-from typing import Annotated
+from typing import Annotated, Literal, cast
 
-from forge.config.settings import get_settings
 from fastapi import APIRouter, Cookie, Response
 
 from forge.api.dependencies import AuthenticatedUser
 from forge.api.schemas.auth import ChangePasswordIn, LoginIn, LoginOut, RefreshOut, UserOut
 from forge.api.services.auth_service import AuthServiceDep
+from forge.config.settings import get_settings
 from forge.core.exceptions import Unauthorized
 from forge.core.response import success
 from forge.core.security import verify_password
@@ -21,6 +21,10 @@ REFRESH_COOKIE_PATH = "/api/v1/auth"
 settings = get_settings()
 
 
+def _cookie_samesite() -> Literal["lax", "strict", "none"] | None:
+    return cast(Literal["lax", "strict", "none"] | None, settings.app.auth.cookie_samesite)
+
+
 def _set_refresh_cookie(response: Response, token: str, max_age: int) -> None:
     response.set_cookie(
         key=REFRESH_COOKIE_NAME,
@@ -29,7 +33,7 @@ def _set_refresh_cookie(response: Response, token: str, max_age: int) -> None:
         path=REFRESH_COOKIE_PATH,
         httponly=True,
         secure=settings.app.auth.cookie_secure,
-        samesite=settings.app.auth.cookie_samesite,
+        samesite=_cookie_samesite(),
     )
 
 
@@ -39,7 +43,7 @@ def _clear_refresh_cookie(response: Response) -> None:
         path=REFRESH_COOKIE_PATH,
         httponly=True,
         secure=settings.app.auth.cookie_secure,
-        samesite=settings.app.auth.cookie_samesite,
+        samesite=_cookie_samesite(),
     )
 
 

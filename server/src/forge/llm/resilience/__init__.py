@@ -1,6 +1,6 @@
 """LLM 弹性模块: 熔断 + 重试 + (Phase 4) 舱壁隔离.
 
-所有子模块都暴露 Strategy Protocol, 默认实现是进程内版本.
+所有子模块都暴露 Strategy ABC, 默认实现是进程内版本.
 Phase 6 切换 Redis-backed 实现时, 调用方代码零改动.
 """
 

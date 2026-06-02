@@ -6,11 +6,11 @@
 
 from __future__ import annotations
 
-from forge.memory.base import Fact, FactRecallRequest, Summary
+from forge.memory.base import Fact, FactRecallRequest, MemoryStore, Summary
 
 
-class NullMemoryStore:
-    """符合 MemoryStore Protocol (鸭子类型, 无需显式继承)."""
+class NullMemoryStore(MemoryStore):
+    """MemoryStore ABC 的空实现."""
 
     async def get_summary(
         self,

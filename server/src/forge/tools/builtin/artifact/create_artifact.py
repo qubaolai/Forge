@@ -15,7 +15,6 @@ from forge.tools.base import Tool
 from forge.tools.registry import register_tool
 from forge.utils.id_generator import new_id
 
-
 _ALLOWED_KINDS: tuple[str, ...] = (
     "report",
     "patch_set",

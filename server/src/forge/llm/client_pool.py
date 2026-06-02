@@ -9,9 +9,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
 
 from .providers.base import LLM
 
@@ -29,14 +29,15 @@ class _KeyEntry:
     current_weight: int = 0
 
 
-class KeySelectionStrategy(Protocol):
+class KeySelectionStrategy(ABC):
     """Key 选择策略扩展点。"""
 
+    @abstractmethod
     def select(self, entries: list[_KeyEntry]) -> _KeyEntry | None:
         """从可用 Key 中选择一个。"""
 
 
-class WeightedRoundRobinStrategy:
+class WeightedRoundRobinStrategy(KeySelectionStrategy):
     """平滑加权轮询，避免简单排序导致高权重 Key 长期独占。"""
 
     def select(self, entries: list[_KeyEntry]) -> _KeyEntry | None:

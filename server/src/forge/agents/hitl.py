@@ -137,14 +137,14 @@ class DecisionRegistry:
                             expired.append(token)
                 for token in expired:
                     with self._lock:
-                        item = self._items.get(token)
-                        if item and item.decided is None:
+                        expired_item = self._items.get(token)
+                        if expired_item and expired_item.decided is None:
                             # 标记拒绝, 唤醒等待方
-                            item.decided = Decision(
+                            expired_item.decided = Decision(
                                 approved=False,
                                 feedback="决策超时 (TTL 到达)",
                             )
-                            item.event.set()
+                            expired_item.event.set()
                             logger.info("HITL 决策超时 token=%s", token)
                     # 不立即 remove: 让 caller 读到 timeout 状态后再 remove
             except asyncio.CancelledError:

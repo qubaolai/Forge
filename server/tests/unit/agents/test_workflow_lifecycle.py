@@ -16,7 +16,6 @@ import pytest
 
 from forge.agents.hitl import (
     Decision,
-    DecisionRegistry,
     reset_decision_registry,
 )
 from forge.agents.lifecycle import RunContext, StepContext

@@ -1,7 +1,7 @@
-"""上下文管理系统的所有扩展点 Protocol.
+"""上下文管理系统的所有扩展点 ABC.
 
 设计原则:
-    - 每个 Protocol 只暴露最小接口, 不强迫实现方承担不相关的职责.
+    - 每个 ABC 只暴露最小接口, 不强迫实现方承担不相关的职责.
     - async 为主 (IO 操作), 纯计算用 sync.
     - 失败语义统一: 业务失败抛特定异常 (ContentProviderError / CompactionError),
       调用方负责捕获降级.
@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from abc import ABC
+from abc import ABC, abstractmethod
 
 from forge.context_mgmt.types import (
     CompactionResult,
@@ -38,8 +38,10 @@ from forge.core.types.message import Message
 class TokenMeter(ABC):
     """线程 / 协程安全 (无可变状态)."""
 
+    @abstractmethod
     def count_text(self, text: str) -> int: ...
 
+    @abstractmethod
     def count_messages(self, messages: list[Message]) -> int:
         """估算一组消息的 prompt token 数 (含 role / 分隔符开销)."""
         ...
@@ -51,6 +53,7 @@ class TokenMeter(ABC):
 class BudgetPolicy(ABC):
     """无状态. 同一实例可并发使用."""
 
+    @abstractmethod
     def allocate(self, request: ContextRequest) -> WindowBudget: ...
 
 
@@ -69,9 +72,11 @@ class ContentProvider(ABC):
         - 该 Provider 不适用 -> 返回 [] (例如 SummaryProvider 在 enable_summary=False 时)
     """
 
+    @abstractmethod
     async def provide(self, request: ContextRequest) -> list[ContentChunk]: ...
 
     @property
+    @abstractmethod
     def name(self) -> str:
         """唯一标识. 失败时写入 snapshot.degraded 用此名."""
         ...
@@ -108,6 +113,7 @@ class HistoryFilter(ABC):
         - StepScopedFilter: 只返回本 step 的消息 (workflow 模式)
     """
 
+    @abstractmethod
     async def filter(
         self,
         messages: list[HistoryMessage],
@@ -129,6 +135,7 @@ class ToolResultPolicy(ABC):
         - SummarizingPolicy: LLM 摘要 (workflow 默认)
     """
 
+    @abstractmethod
     def process(
         self,
         tool_name: str,
@@ -140,6 +147,7 @@ class ToolResultPolicy(ABC):
         ...
 
     @property
+    @abstractmethod
     def name(self) -> str: ...
 
 
@@ -149,9 +157,11 @@ class ToolResultPolicy(ABC):
 class CompactionTrigger(ABC):
     """判断是否应触发压缩, 与执行逻辑无关."""
 
+    @abstractmethod
     def should_compact(self, snapshot: ContextSnapshot) -> bool: ...
 
     @property
+    @abstractmethod
     def name(self) -> str: ...
 
 
@@ -166,6 +176,7 @@ class CompactionStrategy(ABC):
         - 业务上无需压缩 (如已没有可压缩内容) -> 返回 CompactionResult(success=False, failure_reason=...)
     """
 
+    @abstractmethod
     async def compact(
         self,
         session_id: str,
@@ -173,6 +184,7 @@ class CompactionStrategy(ABC):
     ) -> CompactionResult: ...
 
     @property
+    @abstractmethod
     def name(self) -> str: ...
 
 

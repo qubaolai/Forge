@@ -81,7 +81,7 @@ class LLMGateway:
         *,
         pre_middlewares: list[PreMiddleware] | None = None,
         post_middlewares: list[PostMiddleware] | None = None,
-    ) -> "LLMGateway":
+    ) -> LLMGateway:
         """构建 LLMGateway. 不传 middleware 则使用默认 Pre/Post 链."""
         pipeline = PipelineRunner(
             pre_middlewares=pre_middlewares,
@@ -437,7 +437,7 @@ class LLMGateway:
                     candidates.append((provider_name, mc))
         return candidates
 
-    async def _build_dispatcher_for(self, req: LLMRequest) -> "LLMDispatcher":
+    async def _build_dispatcher_for(self, req: LLMRequest) -> LLMDispatcher:
         """根据 LLMRequest 选择 provider/model, 构造 LLMDispatcher."""
         if req.task_type == "utility":
             # Utility 走 3 级回落链, 不经 Router

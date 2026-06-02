@@ -25,6 +25,9 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
+from forge.core.types.message import Message
+
+from .contracts import ToolCallingLLM
 from .gateway import LLMGateway
 from .providers.base import ChatChunk, ChatMessage, ChatResult
 from .request import LLMRequest
@@ -58,7 +61,7 @@ class GatewayBinding:
 
     def make_request(
         self,
-        messages: list[ChatMessage],
+        messages: list[ChatMessage] | list[Message],
         *,
         tools: list[dict] | None = None,
         tool_choice: str = "auto",
@@ -94,7 +97,7 @@ class GatewayBinding:
         )
 
 
-class GatewayLLMAdapter:
+class GatewayLLMAdapter(ToolCallingLLM):
     """适配 ToolCallingLLM 协议, 让 ReActAgent / Summarizer 透明走 LLMGateway.
 
     暴露 4 个方法 (与原 LLMDispatcher / LLMFallbackChain 同名):
@@ -170,7 +173,7 @@ class GatewayLLMAdapter:
     # ------------------------------------------------------------------
     async def chat_with_tools(
         self,
-        messages: list[ChatMessage],
+        messages: list[Message],
         tools: list[dict],
         *,
         temperature: float | None = None,
@@ -203,7 +206,7 @@ class GatewayLLMAdapter:
     # ------------------------------------------------------------------
     async def chat_with_tools_stream(
         self,
-        messages: list[ChatMessage],
+        messages: list[Message],
         tools: list[dict],
         *,
         temperature: float | None = None,

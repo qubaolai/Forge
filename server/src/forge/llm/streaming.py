@@ -51,10 +51,10 @@ class FirstTokenTimeoutError(TimeoutError):
 
 async def _next_sync_or_async(iterator: Iterator[T] | AsyncIterator[T]) -> T:
     """从同步/异步迭代器拿下一个元素 (兼容 dispatcher 当前的混合实现)."""
-    if hasattr(iterator, "__anext__"):
-        return await iterator.__anext__()  # type: ignore[union-attr]
+    if isinstance(iterator, AsyncIterator):
+        return await iterator.__anext__()
     try:
-        return next(iterator)  # type: ignore[arg-type]
+        return next(iterator)
     except StopIteration as e:
         raise StopAsyncIteration from e
 
@@ -73,20 +73,20 @@ async def stream_with_first_token_timeout(
             _next_sync_or_async(stream),
             timeout=first_token_timeout_s,
         )
-    except asyncio.TimeoutError as e:
+    except TimeoutError as e:
         raise FirstTokenTimeoutError(
             f"首 Token 超时: {first_token_timeout_s:.1f}s 内未收到响应"
         ) from e
-    except (StopIteration, StopAsyncIteration) as e:
+    except (StopIteration, StopAsyncIteration):
         # 空流也算"未拿到首 Token", 但不是超时, 让上层按 empty_stream 处理
         raise
 
     yield first
-    if hasattr(stream, "__anext__"):
-        async for chunk in stream:  # type: ignore[union-attr]
+    if isinstance(stream, AsyncIterator):
+        async for chunk in stream:
             yield chunk
     else:
-        for chunk in stream:  # type: ignore[assignment]
+        for chunk in stream:
             yield chunk
 
 
@@ -97,7 +97,7 @@ async def with_total_timeout(
     """非流式调用的总超时包装."""
     try:
         return await asyncio.wait_for(coro, timeout=total_timeout_s)
-    except asyncio.TimeoutError as e:
+    except TimeoutError as e:
         raise TimeoutError(
             f"LLM 调用总超时: {total_timeout_s:.1f}s 内未完成"
         ) from e

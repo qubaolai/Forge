@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from forge.context_mgmt.protocols import ContentProviderError, TokenMeter, ContentProvider
+from forge.context_mgmt.protocols import ContentProvider, ContentProviderError, TokenMeter
 from forge.context_mgmt.types import ContentChunk, ContextRequest
 from forge.memory.base import MemoryStore, MemoryStoreError
 

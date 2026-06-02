@@ -12,14 +12,15 @@ severity 语义:
 多个 Guard 同时生效时, Runner 把它们的 guidance 合并; 任一是 force_stop ->
 本步 force_text_only.
 
-Guards 是无状态的 Protocol; 具体实现可以有内部 state (eg StuckDetector
+Guards 通过 ABC 约束; 具体实现可以有内部 state (eg StuckDetector
 的滑窗), 但要按 turn 创建新实例避免跨 turn 污染.
 """
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Literal
 
 Severity = Literal["hint", "warning", "force_stop"]
 
@@ -49,9 +50,10 @@ class Guidance:
     severity: Severity = "hint"
 
 
-class LoopGuard(Protocol):
+class LoopGuard(ABC):
     """LoopGuard 通用接口. 每个 turn 实例化一次, 内部可有 state."""
 
+    @abstractmethod
     async def before_step(self, state: LoopState) -> Guidance | None:
         """每一步 LLM 调用前被问一次.
 

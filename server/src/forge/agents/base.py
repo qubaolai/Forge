@@ -43,7 +43,7 @@ class BaseAgent(ABC):
     @abstractmethod
     async def run(self, user_input: str, *, history: list[Message] | None = None) -> AgentResult: ...
 
-    async def stream(
+    def stream(
         self,
         user_input: str,
         *,

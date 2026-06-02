@@ -16,13 +16,13 @@ from __future__ import annotations
 
 import logging
 
-from forge.context_mgmt.protocols import CompactionError
+from forge.context_mgmt.protocols import CompactionError, CompactionStrategy
 from forge.context_mgmt.types import CompactionResult, ContextSnapshot
 
 logger = logging.getLogger(__name__)
 
 
-class SummaryCompaction():
+class SummaryCompaction(CompactionStrategy):
     """基于 SummaryService 的摘要压缩."""
 
     def __init__(self, summary_service=None) -> None:
@@ -46,7 +46,6 @@ class SummaryCompaction():
     ) -> CompactionResult:
         from forge.memory.summary.service import InfrastructureError
 
-        pre_tokens = snapshot.usage.total_input_tokens
         try:
             await self._get_service().summarize_session(session_id, workspace_id=None)
         except InfrastructureError as exc:

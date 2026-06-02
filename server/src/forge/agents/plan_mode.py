@@ -30,7 +30,7 @@ from forge.agents.hitl import (
     DecisionRegistry,
     get_decision_registry,
 )
-from forge.agents.lifecycle import RunContext, StepContext, ToolCallVeto
+from forge.agents.lifecycle import NoopLifecycle, RunContext, StepContext, ToolCallVeto
 from forge.core.types.message import Message, ToolCall
 from forge.infrastructure.run_store import RunStore
 
@@ -49,7 +49,7 @@ def set_plan_mode(value: bool) -> None:
     PLAN_MODE.set(value)
 
 
-class PlanModeLifecycle:
+class PlanModeLifecycle(NoopLifecycle):
     """Plan Mode 主 lifecycle.
 
     Args:

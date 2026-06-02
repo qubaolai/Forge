@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 
 import pytest
-from forge.config import paths
 
+from forge.config import paths
 from forge.workspace import load_workspace_context
 
 

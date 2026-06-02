@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from forge.chat.model_meta import DEFAULT_CONTEXT_WINDOW, resolve_context_window
 from forge.chat.types import ResumeState, TurnContext
@@ -353,7 +354,7 @@ def _extract_model_options(context_meta: dict) -> dict | None:
     model = raw.get("model")
     if not isinstance(provider, str) or not isinstance(model, str):
         return None
-    out = {"provider": provider, "model": model}
+    out: dict[str, Any] = {"provider": provider, "model": model}
     if "thinking" in raw:
         out["thinking"] = raw.get("thinking")
     if isinstance(raw.get("thinking_level"), str):

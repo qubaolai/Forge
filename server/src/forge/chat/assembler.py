@@ -13,10 +13,9 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from forge.config.settings import get_settings
-
 from forge.chat.kb_resolver import fetch_kb_list
 from forge.chat.types import TurnContext
+from forge.config.settings import get_settings
 from forge.context_mgmt.builder.factory import build_context_builder
 from forge.context_mgmt.compaction.controller import CompactionController
 from forge.context_mgmt.compaction.strategies.summary import SummaryCompaction

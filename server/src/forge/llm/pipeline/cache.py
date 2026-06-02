@@ -34,9 +34,7 @@ def _should_cache(req: LLMRequest) -> bool:
         return False
     if req.tools:
         return False
-    if not req.preferred_provider or not req.preferred_model:
-        return False
-    return True
+    return bool(req.preferred_provider and req.preferred_model)
 
 
 def _cache_key_for(req: LLMRequest) -> str:

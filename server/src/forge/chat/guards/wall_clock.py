@@ -14,10 +14,10 @@
 
 from __future__ import annotations
 
-from forge.chat.guards.base import Guidance, LoopState
+from forge.chat.guards.base import Guidance, LoopGuard, LoopState
 
 
-class WallClockGuard:
+class WallClockGuard(LoopGuard):
     DEFAULT_SOFT_LIMIT = 120.0
     DEFAULT_WARN_LIMIT = 180.0
     DEFAULT_HARD_LIMIT = 240.0

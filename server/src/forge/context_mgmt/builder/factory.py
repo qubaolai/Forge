@@ -16,10 +16,10 @@ from typing import Any
 
 from forge.context_mgmt.budget.policy import DefaultBudgetPolicy
 from forge.context_mgmt.builder.content_gatherer import ContentGatherer
-from forge.context_mgmt.digest.policy import DigestPolicy
 from forge.context_mgmt.builder.context_builder import DefaultContextBuilder
 from forge.context_mgmt.builder.message_assembler import MessageAssembler
 from forge.context_mgmt.builder.prompt_renderer import PromptRenderer
+from forge.context_mgmt.digest.policy import DigestPolicy
 from forge.context_mgmt.filters.hybrid import HybridFilter
 from forge.context_mgmt.filters.null import NullFilter
 from forge.context_mgmt.filters.recent import RecentFilter

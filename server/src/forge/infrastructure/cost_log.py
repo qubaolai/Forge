@@ -31,8 +31,8 @@ from pathlib import Path
 from typing import Any
 
 from forge.config import paths
-
 from forge.infrastructure.jsonl import JsonlLog
+from forge.infrastructure.storage.data_protocols import CostStore
 
 __all__ = ["CostEntry", "CostLog", "default_cost_log"]
 
@@ -83,7 +83,7 @@ class CostEntry:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class CostLog:
+class CostLog(CostStore):
     """cost.jsonl 领域 wrapper.
 
     单进程内追加 + 按需读聚合. 写性能不是瓶颈 (LLM 调用频率 ~秒级);

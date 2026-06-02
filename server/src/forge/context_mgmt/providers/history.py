@@ -19,10 +19,10 @@ from typing import Any
 from forge.context_mgmt.digest.policy import DigestPolicy
 from forge.context_mgmt.digest.types import DigestLookup
 from forge.context_mgmt.protocols import (
+    ContentProvider,
     HistoryFilter,
     TokenMeter,
     ToolResultPolicy,
-    ContentProvider
 )
 from forge.context_mgmt.types import (
     ContentChunk,

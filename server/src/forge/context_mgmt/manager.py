@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 from forge.context_mgmt.builder.context_builder import DefaultContextBuilder
 from forge.context_mgmt.compaction.controller import CompactionController
@@ -151,10 +151,7 @@ def build_context_manager(
     )
 
     if compaction_strategy is None:
-        if mode == ContextMode.CHAT:
-            compaction_strategy = SummaryCompaction()
-        else:
-            compaction_strategy = NullCompaction()
+        compaction_strategy = SummaryCompaction() if mode == ContextMode.CHAT else NullCompaction()
     if compaction_trigger is None:
         compaction_trigger = ThresholdTrigger(DEFAULT_THRESHOLD)
 

@@ -1,6 +1,6 @@
 """ChatMessage ORM — 聊天消息表。"""
 
-from sqlalchemy import BigInteger, Index, Integer, JSON, String, Text
+from sqlalchemy import JSON, BigInteger, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base

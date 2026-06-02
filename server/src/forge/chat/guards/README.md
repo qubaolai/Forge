@@ -13,7 +13,7 @@ R3 把 `max_steps` 从 **5 → 50**, 配合本目录的 4 个 LoopGuard 做软�
 ## LoopGuard 通用契约
 
 ```python
-class LoopGuard(Protocol):
+class LoopGuard(ABC):
     async def before_step(self, state: LoopState) -> Guidance | None: ...
 ```
 
@@ -169,7 +169,7 @@ def _make_before_step_bridge(self, guards, run_started_at):
 
 ### 新增一个 Guard
 
-1. 在 `chat/guards/` 加 `your_guard.py`, 实现 `LoopGuard` Protocol
+1. 在 `chat/guards/` 加 `your_guard.py`, 继承 `LoopGuard` ABC
 2. 在 `chat/guards/__init__.py` re-export
 3. 在 `chat/runner.py:_default_guard_factories` 加一行
 

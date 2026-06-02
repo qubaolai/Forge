@@ -46,17 +46,15 @@ class SummaryService:
             InfrastructureError: LLM 初始化 / DB 写入失败.
         """
         from forge.config.settings import get_settings
-
         from forge.infrastructure.database.database import (
             get_session_factory,
             init_engine,
         )
-
         from forge.infrastructure.database.repositories.chat_message_repo import (
             ChatMessageRepository,
         )
-        from forge.memory.summary.store import SummaryStore
         from forge.llm import get_llm_gateway
+        from forge.memory.summary.store import SummaryStore
         from forge.memory.summary.summarizer import Summarizer
 
         init_engine()  # 幂等, worker 进程也安全

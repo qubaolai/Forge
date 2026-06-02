@@ -3,7 +3,7 @@
 设计:
     - 进程内默认 (InProcessInboundRateLimiter): 单机部署, 零额外依赖
     - Redis 增强 (RedisInboundRateLimiter, Phase 6): 多实例共享限流状态, ZADD/ZCOUNT
-    - 调用方通过 InboundRateLimiter Protocol 调用, 实现可热切换
+    - 调用方通过 InboundRateLimiter ABC 调用, 实现可热切换
 
 降级语义:
     - rpm/tpm 任一未配置 (None) 即不限制对应维度
@@ -17,9 +17,9 @@ import logging
 import threading
 import time
 import uuid
+from abc import ABC, abstractmethod
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +45,17 @@ class RateCheckResult:
     retry_after: float = 0.0
 
 
-@runtime_checkable
-class InboundRateLimiter(Protocol):
+class InboundRateLimiter(ABC):
     """限流器策略接口."""
 
     @property
+    @abstractmethod
     def enabled(self) -> bool: ...
 
+    @abstractmethod
     async def check(self, user_id: str, *, estimated_tokens: int = 0) -> RateCheckResult: ...
 
+    @abstractmethod
     async def reset(self, user_id: str | None = None) -> None: ...
 
 
@@ -66,7 +68,7 @@ class _UserBucket:
     """(timestamp, token_count) — TPM 用."""
 
 
-class InProcessInboundRateLimiter:
+class InProcessInboundRateLimiter(InboundRateLimiter):
     """per-user 滑动窗口入站限流器 (进程内). 默认实现."""
 
     def __init__(
@@ -135,7 +137,7 @@ class InProcessInboundRateLimiter:
                 self._buckets.pop(user_id or "", None)
 
 
-class RedisInboundRateLimiter:
+class RedisInboundRateLimiter(InboundRateLimiter):
     """Redis ZSET 滑动窗口限流器 (Phase 6).
 
     Key 形态:
@@ -239,11 +241,8 @@ class RedisInboundRateLimiter:
 
     async def reset(self, user_id: str | None = None) -> None:
         """实际删除 Redis key. user_id=None 时仅删除调用方传入的 anon 桶."""
-        if user_id is None:
-            # Redis 端不支持安全的"按前缀全部删除" (KEYS/SCAN 大 key 风险), 这里仅清空 anon
-            uid = "_anon"
-        else:
-            uid = user_id or "_anon"
+        # Redis 端不支持安全的"按前缀全部删除" (KEYS/SCAN 大 key 风险), 这里仅清空 anon
+        uid = "_anon" if user_id is None else user_id or "_anon"
         keys = [self._RPM_KEY.format(uid=uid), self._TPM_KEY.format(uid=uid)]
         try:
             await self._redis.delete(*keys)

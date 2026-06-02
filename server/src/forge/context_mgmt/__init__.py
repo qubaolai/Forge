@@ -4,7 +4,7 @@
 压缩子系统完全解耦可独立触发, 三种模式 (chat / task / workflow) 通过扩展点切换.
 
 子模块:
-    - protocols:  所有扩展点 Protocol
+    - protocols:  所有扩展点 ABC
     - types:      统一值对象 (ContextRequest / ContextSnapshot / ...)
     - manager:    ContextManager 统一入口 + build_context_manager() 工厂
     - builder/:   上下文构建 (Fork-Join 并行)
@@ -56,7 +56,7 @@ __all__ = [
     "ContentChunk",
     "HistoryMessage",
     "CompactionResult",
-    # Protocol
+    # ABC
     "TokenMeter",
     "BudgetPolicy",
     "ContentProvider",

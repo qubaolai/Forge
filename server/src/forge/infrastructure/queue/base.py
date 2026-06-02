@@ -11,12 +11,14 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from abc import ABC, abstractmethod
+from typing import Any
 
 
-class TaskQueue(Protocol):
+class TaskQueue(ABC):
     """异步任务派发. 长寿单例, 并发安全."""
 
+    @abstractmethod
     def submit(self, task_name: str, **kwargs: Any) -> None:
         """把任务交给后端 worker. 不等结果, 不抛业务异常.
 

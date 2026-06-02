@@ -27,7 +27,7 @@ chat 完成一轮 → 触发摘要 →
 
 ```text
 queue/
-├── base.py             ← TaskQueue Protocol (submit only)
+├── base.py             ← TaskQueue ABC (submit only)
 ├── null.py             ← NullTaskQueue
 ├── local_store.py      ← tasks.db 持久化状态机
 ├── local.py            ← LocalTaskQueue (默认)
@@ -40,7 +40,7 @@ queue/
 ## 协议契约
 
 ```python
-class TaskQueue(Protocol):
+class TaskQueue(ABC):
     def submit(self, task_name: str, **kwargs: Any) -> None: ...
 ```
 

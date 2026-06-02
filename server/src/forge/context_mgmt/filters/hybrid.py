@@ -18,8 +18,8 @@ import logging
 from collections import OrderedDict
 
 from forge.context_mgmt.filters.semantic import SemanticFilter
-from forge.context_mgmt.types import ContextMode, HistoryMessage
 from forge.context_mgmt.protocols import HistoryFilter
+from forge.context_mgmt.types import ContextMode, HistoryMessage
 
 logger = logging.getLogger(__name__)
 

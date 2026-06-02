@@ -20,8 +20,10 @@ import json
 import logging
 import threading
 import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+
+from forge.infrastructure.cache.redis_client import RedisClient
 
 from ..request import LLMRequest, LLMResponse
 from .base import PostMiddleware, PreMiddleware
@@ -50,16 +52,19 @@ class IdempotencyOutcome:
     """In-process 实现的等待用. Redis 实现为 None (调用方走轮询)."""
 
 
-@runtime_checkable
-class IdempotencyStore(Protocol):
+class IdempotencyStore(ABC):
     """幂等存储策略接口."""
 
+    @abstractmethod
     async def begin(self, key: str) -> IdempotencyOutcome: ...
 
+    @abstractmethod
     async def finish_success(self, key: str, resp: LLMResponse) -> None: ...
 
+    @abstractmethod
     async def finish_failure(self, key: str) -> None: ...
 
+    @abstractmethod
     async def wait_for(self, key: str, *, timeout: float) -> LLMResponse | None:
         """等待原调用完成. 超时返回 None."""
         ...
@@ -73,7 +78,7 @@ class _IdemEntry:
 
 
 @dataclass
-class InProcessIdempotencyStore:
+class InProcessIdempotencyStore(IdempotencyStore):
     """进程内 idempotency store."""
 
     _entries: dict[str, _IdemEntry] = field(default_factory=dict)
@@ -122,13 +127,13 @@ class InProcessIdempotencyStore:
             return None
         try:
             await asyncio.wait_for(entry.event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
         return entry.result
 
 
 @dataclass
-class RedisIdempotencyStore:
+class RedisIdempotencyStore(IdempotencyStore):
     """Redis-backed idempotency store. 多实例共享.
 
     Key 形态:
@@ -143,8 +148,7 @@ class RedisIdempotencyStore:
     wait_for(): 轮询 GET, 直到拿到 JSON 或超时
     """
 
-    redis_client: object
-    """RedisClient 实例 (鸭子类型)."""
+    redis_client: RedisClient
 
     ttl_seconds: int = int(_TTL_SECONDS)
     poll_interval: float = _POLL_INTERVAL

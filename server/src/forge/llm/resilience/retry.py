@@ -9,7 +9,7 @@
 Strategy 抽象 (per-provider 差异化):
     - RetryPolicy: 调用方依赖的抽象, 决定"这个异常要不要重试 / 等多久"
     - KeywordRetryPolicy: 默认实现, 按异常 msg 关键词匹配
-    - 后续可加 ProviderAwareRetryPolicy 等, 实现同 Protocol, 调用方零改动.
+    - 后续可加 ProviderAwareRetryPolicy 等, 继承同一 ABC, 调用方零改动.
 """
 
 from __future__ import annotations
@@ -18,9 +18,10 @@ import asyncio
 import logging
 import random
 import re
+from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Protocol, TypeVar, runtime_checkable
+from typing import TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -65,14 +66,15 @@ class RetryResult:
     retry_after_seconds: float | None = None
 
 
-@runtime_checkable
-class RetryPolicy(Protocol):
+class RetryPolicy(ABC):
     """重试策略接口."""
 
     max_attempts: int
 
+    @abstractmethod
     def is_retryable(self, exc: BaseException) -> bool: ...
 
+    @abstractmethod
     def backoff_delay(self, attempt: int, exc: BaseException) -> float:
         """返回第 attempt 次重试前应该等待的秒数."""
         ...

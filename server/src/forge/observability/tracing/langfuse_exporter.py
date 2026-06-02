@@ -13,6 +13,8 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from forge.observability.tracing.tracer import Span
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,7 +28,7 @@ def build_langfuse_tracer(public_key: str, secret_key: str, host: str):
         host=host or "https://cloud.langfuse.com",
     )
 
-    class _LFSpan:
+    class _LFSpan(Span):
         def __init__(self, span):
             self._span = span
             self._attrs: dict = {}

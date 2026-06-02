@@ -40,7 +40,7 @@ from forge.infrastructure.database.repositories.kb_document_chunk_repo import (
     KbDocumentChunkRepository,
 )
 
-# KbDocumentChunkRepository 不在 S6.5 7 Protocol 内, 暂保留直接 import.
+# KbDocumentChunkRepository 不在 S6.5 7 个 Store ABC 内, 暂保留直接 import.
 from forge.infrastructure.database.repositories.kb_document_repo import (
     KbDocumentRepository,
 )
@@ -106,7 +106,7 @@ class KbIngestService:
         """
         kb_repo = KnowledgeBaseRepository(session)
         doc_repo = KbDocumentRepository(session)
-        chunk_repo = KbDocumentChunkRepository(session)  # 不在 S6.5 Protocol 内
+        chunk_repo = KbDocumentChunkRepository(session)  # 不在 S6.5 Store ABC 内
 
         # 0. embedding_model 一致性: 首次入库回填, 后续严格校验
         try:

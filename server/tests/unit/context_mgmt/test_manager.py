@@ -107,7 +107,7 @@ async def test_usage_cache_populated_after_build():
     assert cached is not None
     assert cached.total_input_tokens == snapshot.usage.total_input_tokens
     # layer 列表完整 (7 个标准层 + tool_results)
-    layer_names = [l.name for l in cached.layers]
+    layer_names = [layer.name for layer in cached.layers]
     assert layer_names == [
         "system_prompt", "workspace", "facts", "summary",
         "dialogue", "tool_results", "current_input",

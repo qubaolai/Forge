@@ -16,10 +16,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from forge.chat.finalizer import TurnFinalizer
-from forge.core.content_merge import strip_overlap
 from forge.chat.orchestrator import _inject_partial_into_messages
 from forge.chat.types import ResumeState, RunResult, TurnContext
 from forge.context_mgmt.types import ContextSnapshot, ContextUsage, WindowBudget
+from forge.core.content_merge import strip_overlap
 from forge.core.types.message import Message
 
 

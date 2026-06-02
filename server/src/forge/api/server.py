@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-from forge.config.settings import get_settings
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -23,6 +22,7 @@ from forge.api.middleware.client_type import ClientTypeMiddleware
 from forge.api.middleware.error_handler import ErrorHandlerMiddleware
 from forge.api.middleware.tracing import TracingMiddleware
 from forge.api.routes.router import api_router
+from forge.config.settings import get_settings
 from forge.core.exceptions import register_exception_handlers
 
 

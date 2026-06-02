@@ -48,7 +48,7 @@
 按序精读：
 
 1. [agent.py:92](server/src/forge/agents/react/agent.py:92) `ReActAgent.__init__` —— 构造：工具集来源（自定义 vs ToolRegistry 全集）、默认 schema 缓存、executor 注入。
-2. [agent.py:45](server/src/forge/agents/react/agent.py:45) `ToolCallingLLM` Protocol —— agent 只依赖这个抽象，**不直接依赖 LLM 网关**（解耦点）。
+2. [contracts.py](server/src/forge/llm/contracts.py) `ToolCallingLLM` ABC —— agent 只依赖这个抽象，**不直接依赖 LLM 网关**（解耦点）。
 3. [agent.py:188](server/src/forge/agents/react/agent.py:188) `stream()` —— 主流式循环，**逐行读完这个方法**。重点抓这几个坐标：
    - [agent.py:248](server/src/forge/agents/react/agent.py:248) `for _step in range(self._max_steps)` —— 主循环骨架
    - [agent.py:264](server/src/forge/agents/react/agent.py:264) `resolve_tools` —— 本步用哪份工具 schema（动态工具集入口）
@@ -78,7 +78,7 @@
 
 1. 文件头 docstring（[lifecycle.py:1](server/src/forge/agents/lifecycle.py:1)）—— 设计意图：所有扩展点统一暴露、默认 no-op、异常隔离。
 2. [lifecycle.py:44](server/src/forge/agents/lifecycle.py:44) 起的 6 个 dataclass —— `RunContext` / `StepContext` / `StepDecision` / `StepOutcome` / `ToolCallVeto` / `RunResult`。这些是 hook 的输入输出契约。
-3. [lifecycle.py:120](server/src/forge/agents/lifecycle.py:120) `AgentLifecycle` Protocol —— 8 个 hook 的语义（尤其注意每个返回值「None 代表什么」）。
+3. [lifecycle.py:120](server/src/forge/agents/lifecycle.py:120) `AgentLifecycle` ABC —— 8 个 hook 的语义，以及 `NoopLifecycle` 如何支持按需覆写。
 4. [lifecycle.py:193](server/src/forge/agents/lifecycle.py:193) `MultiLifecycle` —— **本阶段的高潮**。三种合并策略：
    - 「首个非 None 胜出」：[lifecycle.py:223](server/src/forge/agents/lifecycle.py:223) `resolve_tools` / [lifecycle.py:234](server/src/forge/agents/lifecycle.py:234) `before_step` / [lifecycle.py:252](server/src/forge/agents/lifecycle.py:252) `before_tool_call`
    - 「pipeline 累计」：[lifecycle.py:267](server/src/forge/agents/lifecycle.py:267) `on_tool_result`
@@ -134,7 +134,7 @@
 
 1. [server/src/forge/llm/gateway.py:1](server/src/forge/llm/gateway.py:1) 文件头 —— 一眼看清调用链：Pre → Dispatcher → Provider → Post。
 2. [gateway.py:54](server/src/forge/llm/gateway.py:54) `LLMGateway` —— 业务层唯一入口。
-3. `server/src/forge/llm/binding.py` `GatewayLLMAdapter` —— 把网关包装成 `ToolCallingLLM` facade（阶段 1 见过的 Protocol）。**这就是内核与网关的解耦缝合点**。
+3. `server/src/forge/llm/binding.py` `GatewayLLMAdapter` —— 显式继承 `ToolCallingLLM` ABC，把网关包装成 agent facade。**这就是内核与网关的解耦缝合点**。
 
 **自检**：能解释「ReActAgent 为什么不知道自己在用哪个 provider」——它只持有 `ToolCallingLLM`，provider / 路由 / 熔断 / fallback 全在网关里，对它透明。
 

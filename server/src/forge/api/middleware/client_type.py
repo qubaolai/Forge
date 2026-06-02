@@ -10,9 +10,8 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from forge.core.request_context import (
-    CLIENT_TYPE_HEADER,
-    ClientType,
     _CLIENT_TYPE,
+    CLIENT_TYPE_HEADER,
     infer_client_type,
 )
 

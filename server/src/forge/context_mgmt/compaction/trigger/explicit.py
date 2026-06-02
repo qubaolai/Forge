@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from forge.context_mgmt.protocols import CompactionTrigger
 from forge.context_mgmt.types import ContextSnapshot
 
 
-class ExplicitTrigger:
+class ExplicitTrigger(CompactionTrigger):
     """显式触发, 不做任何判断."""
 
     @property

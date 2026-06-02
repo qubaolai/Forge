@@ -5,7 +5,7 @@
 source_hash 用于判 stale (如 regenerate 重写了同一 message)。
 """
 
-from sqlalchemy import BigInteger, Index, Integer, JSON, String
+from sqlalchemy import JSON, BigInteger, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base

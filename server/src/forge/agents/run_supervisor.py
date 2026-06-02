@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from contextlib import suppress
 
 from forge.agents.run_orchestrator import RunOrchestrator
 
@@ -43,7 +44,12 @@ class RunSupervisor:
             self._active[orchestrator.run_id] = orchestrator
 
         task = orchestrator.schedule()
-        task.add_done_callback(lambda _t, rid=orchestrator.run_id: self._on_done(rid))
+        run_id = orchestrator.run_id
+
+        def _remove_finished(_task: asyncio.Task) -> None:
+            self._on_done(run_id)
+
+        task.add_done_callback(_remove_finished)
         return task
 
     def get(self, run_id: str) -> RunOrchestrator | None:
@@ -59,10 +65,8 @@ class RunSupervisor:
         task = orch.task
         if task is not None and not task.done():
             task.cancel()
-            try:
+            with suppress(asyncio.CancelledError, Exception):
                 await task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
         return True
 
     async def shutdown(self) -> None:
@@ -79,10 +83,8 @@ class RunSupervisor:
             task = orch.task
             if task is None:
                 continue
-            try:
+            with suppress(asyncio.CancelledError, Exception):
                 await task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
         with self._lock:
             self._active.clear()
 

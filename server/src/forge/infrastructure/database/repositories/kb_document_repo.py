@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from forge.infrastructure.database.orm.kb_document_orm import KbDocumentOrm
 from forge.infrastructure.database.repositories.base import BaseRepository
+from forge.infrastructure.storage.data_protocols import KbDocumentStore
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ def _to_int(value: str | int | None) -> int | None:
         return None
 
 
-class KbDocumentRepository(BaseRepository):
+class KbDocumentRepository(BaseRepository, KbDocumentStore):
     """KB 文档 CRUD + 状态机."""
 
     def __init__(self, session: AsyncSession):

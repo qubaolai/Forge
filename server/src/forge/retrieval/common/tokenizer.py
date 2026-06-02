@@ -121,6 +121,7 @@ class JiebaTokenizer(Tokenizer):
         super().__init__(config)
         # 延迟 import: 让没装 jieba 的开发环境也能 import 本模块
         import logging
+
         import jieba
 
         # jieba 在 __init__.py 里给自己的 logger 加了一个 StreamHandler(stderr)，

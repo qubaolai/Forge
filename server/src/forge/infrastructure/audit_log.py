@@ -45,8 +45,8 @@ from pathlib import Path
 from typing import Any
 
 from forge.config import paths
-
 from forge.infrastructure.jsonl import JsonlLog
+from forge.infrastructure.storage.data_protocols import AuditStore
 
 __all__ = ["AuditEntry", "AuditLog", "default_audit_log"]
 
@@ -95,7 +95,7 @@ class AuditEntry:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class AuditLog:
+class AuditLog(AuditStore):
     """audit.jsonl 领域 wrapper.
 
     单进程内追加 + 按需读. 写性能不是瓶颈 (危险工具调用频率 << LLM 调用);

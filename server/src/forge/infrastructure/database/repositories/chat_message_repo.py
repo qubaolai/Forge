@@ -1,4 +1,4 @@
-"""ChatMessage 仓储 — MySQL 实现 MessageStore Protocol。
+"""ChatMessage 仓储 — MySQL 实现 MessageStore ABC。
 
 ID 统一为雪花主键; 对外以字符串 (str(id)) 暴露, 内部按 BIGINT 查询。
 session_id / parent_id 直接是雪花 FK, 无需业务 ID ↔ 主键的来回解析。
@@ -12,7 +12,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from forge.infrastructure.database.orm.chat_message_orm import ChatMessageOrm
-from forge.infrastructure.storage.data_protocols import ChatMessageView
+from forge.infrastructure.storage.data_protocols import ChatMessageView, MessageStore
 
 
 def _to_int(value: str | int | None) -> int | None:
@@ -25,13 +25,13 @@ def _to_int(value: str | int | None) -> int | None:
         return None
 
 
-class ChatMessageRepository:
+class ChatMessageRepository(MessageStore):
     """MySQL-backed chat message storage，cursor-based 分页。"""
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    # ---- MessageStore Protocol ----
+    # ---- MessageStore ABC ----
     async def list_by_session(
         self, session_id: str, page: int, page_size: int
     ) -> tuple[Sequence[ChatMessageView], int]:
@@ -211,7 +211,10 @@ class ChatMessageRepository:
             .values(**values)
         )
         await self.db.flush()
-        return await self.get_by_id(msg.id)
+        updated = await self.get_by_id(msg.id)
+        if updated is None:
+            raise RuntimeError(f"message 更新后不存在: {msg.id}")
+        return updated
 
     async def delete_by_id(self, message_id: str) -> bool:
         mid = _to_int(message_id)

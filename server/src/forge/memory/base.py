@@ -1,8 +1,8 @@
-"""记忆系统的对外契约: Protocol + 数据类型.
+"""记忆系统的对外契约: ABC + 数据类型.
 
 MemoryStore 是 ContextBuilder 的依赖: 提供 "取摘要" 和 "召回事实" 两个读接口.
 写接口 (保存摘要、写入事实) 由后台任务直接调用具体 Store (SummaryStore /
-FactStore), 不走这个 Protocol -- 避免 Protocol 膨胀成 "什么都有的大接口".
+FactStore), 不走这个 ABC -- 避免抽象膨胀成 "什么都有的大接口".
 
 设计原则:
     - ContextBuilder 视 MemoryStore 为 best-effort:
@@ -13,9 +13,10 @@ FactStore), 不走这个 Protocol -- 避免 Protocol 膨胀成 "什么都有的�
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, Protocol
+from typing import Literal
 
 # ---------------------------------------------------------------------------
 # 1. 数据类型
@@ -71,11 +72,12 @@ class MemoryStoreError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# 3. Protocol: ContextBuilder 只用这两个读方法
+# 3. ABC: ContextBuilder 只用这两个读方法
 # ---------------------------------------------------------------------------
-class MemoryStore(Protocol):
+class MemoryStore(ABC):
     """无状态. 同一实例可并发处理多个请求."""
 
+    @abstractmethod
     async def get_summary(
         self,
         session_id: str,
@@ -92,6 +94,7 @@ class MemoryStore(Protocol):
         """
         ...
 
+    @abstractmethod
     async def recall_facts(self, request: FactRecallRequest) -> list[Fact]:
         """按语义召回用户长期事实.
 

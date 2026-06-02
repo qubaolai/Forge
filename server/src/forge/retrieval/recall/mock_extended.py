@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Protocol
+from abc import ABC, abstractmethod
 
 from .vector_recall import VectorRecall
 
@@ -24,15 +24,16 @@ logger = logging.getLogger(__name__)
 # ----------------------------------------------------------------------
 # 改写器协议: 真实场景这里换成 LLM 客户端
 # ----------------------------------------------------------------------
-class QueryRewriter(Protocol):
+class QueryRewriter(ABC):
     """Query 改写器协议. 真实实现可以是 LLM / 规则引擎."""
 
+    @abstractmethod
     def rewrite(self, query: str) -> str:
         """把原 query 改写为更适合检索的形式."""
         ...
 
 
-class MockQueryRewriter:
+class MockQueryRewriter(QueryRewriter):
     """Mock 改写器:
     - 给 query 加 "解释一下" 前缀, 模拟把口语化的疑问句改成陈述句
     - 真实 HyDE 应该是用 LLM 生成假想答案, 这里只是示意改写"形态"

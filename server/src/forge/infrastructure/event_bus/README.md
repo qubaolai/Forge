@@ -30,7 +30,7 @@ audit.hooks:  subscribe("turn.completed", ...)   ← 互不感知
 
 ```
 event_bus/
-├── base.py          ← EventBus Protocol + EventHandler / EventPayload 类型
+├── base.py          ← EventBus ABC + EventHandler / EventPayload 类型
 ├── in_process.py    ← InProcessEventBus: asyncio.create_task fire-and-forget
 ├── kafka.py         ← (扩展点, placeholder) Kafka 实现
 ├── redis_pubsub.py  ← (扩展点, placeholder) Redis Pub/Sub 实现
@@ -40,7 +40,7 @@ event_bus/
 ## 协议契约
 
 ```python
-class EventBus(Protocol):
+class EventBus(ABC):
     def subscribe(self, event_name: str, handler: EventHandler) -> None: ...
     async def publish(self, event_name: str, payload: EventPayload) -> None: ...
 

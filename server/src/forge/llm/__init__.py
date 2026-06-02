@@ -11,7 +11,7 @@
 
 底层组件 (一般无需直接使用):
     - registry: register_llm / build_llm_client / list_providers / split_provider_model
-    - pipeline: PipelineRunner + Pre/Post Middleware Protocol
+    - pipeline: PipelineRunner + Pre/Post Middleware ABC
 """
 
 from .binding import GatewayBinding, GatewayLLMAdapter

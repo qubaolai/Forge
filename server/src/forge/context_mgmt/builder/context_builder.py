@@ -23,7 +23,7 @@ from forge.observability.tracing.tracer import span
 logger = logging.getLogger(__name__)
 
 
-class DefaultContextBuilder():
+class DefaultContextBuilder:
     """Fork-Join 并行的上下文构建器."""
 
     def __init__(

@@ -93,9 +93,9 @@ on_complete / on_error           终态       agent.py:564 / agent.py:599
 
 定义文件：[lifecycle.py](server/src/forge/agents/lifecycle.py)
 
-### 3.1 协议（Protocol）
+### 3.1 抽象契约（ABC）
 
-[lifecycle.py:120](server/src/forge/agents/lifecycle.py:120) `class AgentLifecycle(Protocol)`，8 个 hook，**全部默认 no-op**，实现方按需覆写、无需继承：
+[lifecycle.py:120](server/src/forge/agents/lifecycle.py:120) `class AgentLifecycle(ABC)`，8 个 hook **全部抽象**。需要按需覆写的实现继承 `NoopLifecycle`，由其提供默认 no-op：
 
 | Hook | 签名 | 返回语义 | 典型用途 |
 |------|------|---------|---------|
@@ -240,7 +240,7 @@ LLMRequest
 
 - 中间件可插拔：[gateway.py:76](server/src/forge/llm/gateway.py:76) `from_settings` 接受自定义 Pre/Post 链
 - Provider 动态注册：`llm/registry.py` + `llm/providers/`
-- 对 agent 的适配：`GatewayLLMAdapter`（[binding.py](server/src/forge/llm/binding.py)）把网关包装成 `chat_with_tools_stream` facade，`ReActAgent` 只依赖这个 Protocol（[agent.py:45](server/src/forge/agents/react/agent.py:45) `ToolCallingLLM`）。
+- 对 agent 的适配：`GatewayLLMAdapter`（[binding.py](server/src/forge/llm/binding.py)）把网关包装成 `chat_with_tools_stream` facade，`ReActAgent` 只依赖 `ToolCallingLLM` ABC（[contracts.py](server/src/forge/llm/contracts.py)）。
 
 ---
 
@@ -294,7 +294,7 @@ LLMRequest
 ├─────────────────────────────────────────────────────────────────┤
 │ Runner 层   ReActRunner.from_profile (装配 lifecycle 组合)         │
 ├─────────────────────────────────────────────────────────────────┤
-│ 扩展点层    AgentLifecycle (Protocol) + MultiLifecycle (组合器)    │
+│ 扩展点层    AgentLifecycle (ABC) + MultiLifecycle (组合器)         │
 │   ├─ GuardLifecycleAdapter (LoopGuard 收编)                        │
 │   ├─ PlanModeLifecycle      (动态工具集 + HITL)                    │
 │   ├─ WorkflowLifecycle      (phase 流水线 + gate HITL)             │
@@ -355,4 +355,3 @@ Logging/Tracing → PromptRegistry → ToolRegistry+AGENT_ROLES
 | 路由聚合 | [router.py](server/src/forge/api/routes/router.py) |
 </content>
 </invoke>
-

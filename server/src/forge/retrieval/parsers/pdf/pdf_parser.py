@@ -12,11 +12,12 @@ from pypdf import PdfReader
 
 from forge.core.types import Element, ElementType
 from forge.core.types.element import ElementMetadata
+from forge.retrieval.parsers.parser_base import BaseParser
 
 logger = logging.getLogger(__name__)
 
 
-class PdfParser:
+class PdfParser(BaseParser):
     """PDF 文档解析器."""
 
     def parse(self, file_path: Path) -> list[Element]:

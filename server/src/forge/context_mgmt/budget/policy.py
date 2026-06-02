@@ -8,8 +8,8 @@
 
 from __future__ import annotations
 
-from forge.context_mgmt.types import ContextMode, ContextRequest, WindowBudget
 from forge.context_mgmt.protocols import BudgetPolicy
+from forge.context_mgmt.types import ContextMode, ContextRequest, WindowBudget
 
 
 class DefaultBudgetPolicy(BudgetPolicy):

@@ -142,7 +142,7 @@ Logging/Tracing → PromptRegistry → ToolRegistry + AGENT_ROLES
 - 统一入口：`LLMGateway`（`llm/gateway.py:54`），业务层唯一对外入口。
 - 请求流程：Pre 中间件（validator→rate_limit→budget→dedup→cache）→ Dispatcher（router→chain→熔断→重试→fallback）→ Provider → Post 中间件（cache_write→dedup_complete→audit）。
 - 供应商适配：通过 registry 动态注册（openai/anthropic/google/dashscope/mock 等）。
-- 对 agent 的适配：`GatewayLLMAdapter`（`llm/binding.py`）把网关包装成 `chat_with_tools_stream` facade，`ReActAgent` 只依赖 `ToolCallingLLM` Protocol，不感知 provider/路由/熔断。
+- 对 agent 的适配：`GatewayLLMAdapter`（`llm/binding.py`）把网关包装成 `chat_with_tools_stream` facade，`ReActAgent` 只依赖 `ToolCallingLLM` ABC，不感知 provider/路由/熔断。
 
 chat / CLI / memory 等子系统共享这一套可观测、可治理的 LLM 调用能力。
 
@@ -254,7 +254,7 @@ on_start  →  for step:  resolve_tools → before_step → [LLM 流式]
 
 `agents/lifecycle.py`：
 
-- `AgentLifecycle` Protocol（`lifecycle.py:120`）：8 个 hook，全部默认 no-op，按需覆写、无需继承。
+- `AgentLifecycle` ABC（`lifecycle.py:120`）：8 个 hook 全部抽象；按需覆写的实现继承 `NoopLifecycle`，由其提供默认 no-op。
 - `MultiLifecycle`（`lifecycle.py:193`）：三种合并策略——
   - 「首个非 None 胜出」：`resolve_tools` / `before_step` / `before_tool_call`（避免互相覆盖）。
   - 「pipeline 累计」：`on_tool_result`（依次替换，形成管道）。

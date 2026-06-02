@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -141,8 +142,8 @@ class RunStore:
             raise FileNotFoundError(f"run 不存在: {run_id}")
         if validator is not None:
             result = validator(record, to_status)
-            if hasattr(result, "__await__"):
-                await result  # type: ignore[func-returns-value]
+            if inspect.isawaitable(result):
+                await result
 
         from_status = record.status
         record.status = to_status

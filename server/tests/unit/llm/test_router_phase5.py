@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import pytest
 
 from forge.config.domains.llm import ModelCapabilities, ModelConfig

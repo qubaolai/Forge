@@ -1,4 +1,4 @@
-"""Pre/Post 中间件 Protocol + PipelineRunner.
+"""Pre/Post 中间件 ABC + PipelineRunner.
 
 设计:
     - Pre 中间件: 在 LLMDispatcher 之前运行. 可以"短路"(返回 LLMResponse) 表示
@@ -15,15 +15,14 @@ OCP:
 from __future__ import annotations
 
 import logging
-from typing import Protocol, runtime_checkable
+from abc import ABC, abstractmethod
 
 from ..request import LLMRequest, LLMResponse
 
 logger = logging.getLogger(__name__)
 
 
-@runtime_checkable
-class PreMiddleware(Protocol):
+class PreMiddleware(ABC):
     """请求侧中间件.
 
     Returns:
@@ -33,11 +32,11 @@ class PreMiddleware(Protocol):
         - 抛异常: reject 请求 (例如 BudgetExceeded / InputValidationError)
     """
 
+    @abstractmethod
     async def process(self, req: LLMRequest) -> LLMResponse | None: ...
 
 
-@runtime_checkable
-class PostMiddleware(Protocol):
+class PostMiddleware(ABC):
     """响应侧中间件.
 
     在实际 LLM 调用成功后执行 (非流式). 流式模式下 Post 在流耗尽后通过 finally 执行.
@@ -46,6 +45,7 @@ class PostMiddleware(Protocol):
         LLMResponse: 可以原样返回或附加元信息. 不应改写 content / model 等核心字段.
     """
 
+    @abstractmethod
     async def process(self, req: LLMRequest, resp: LLMResponse) -> LLMResponse: ...
 
 

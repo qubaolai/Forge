@@ -8,11 +8,12 @@ import logging
 from pathlib import Path
 
 from forge.core.types import Element, ElementType
+from forge.retrieval.parsers.parser_base import BaseParser
 
 logger = logging.getLogger(__name__)
 
 
-class TxtParser:
+class TxtParser(BaseParser):
     """TXT 文档解析器."""
 
     def parse(self, file_path: Path) -> list[Element]:

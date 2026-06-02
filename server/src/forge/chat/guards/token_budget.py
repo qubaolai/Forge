@@ -15,10 +15,10 @@
 
 from __future__ import annotations
 
-from forge.chat.guards.base import Guidance, LoopState
+from forge.chat.guards.base import Guidance, LoopGuard, LoopState
 
 
-class TokenBudgetGuard:
+class TokenBudgetGuard(LoopGuard):
     DEFAULT_BUDGET = 100_000
 
     def __init__(

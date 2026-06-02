@@ -1,6 +1,6 @@
 """Provider ORM — LLM 供应商表。"""
 
-from sqlalchemy import BigInteger, Index, Integer, JSON, String, Text
+from sqlalchemy import JSON, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base

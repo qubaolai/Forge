@@ -86,7 +86,7 @@ class GetArtifact(Tool):
 
 
 def _parse_line_range(value: Any) -> tuple[int, int] | None:
-    if not isinstance(value, (list, tuple)) or len(value) != 2:
+    if not isinstance(value, list | tuple) or len(value) != 2:
         return None
     try:
         start, end = int(value[0]), int(value[1])

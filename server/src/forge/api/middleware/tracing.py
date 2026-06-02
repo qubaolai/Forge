@@ -19,8 +19,8 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from forge.core.request_context import (
-    REQUEST_ID_HEADER,
     _TRACE_ID,
+    REQUEST_ID_HEADER,
 )
 
 

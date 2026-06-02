@@ -13,11 +13,11 @@ LLM 在最后一步即使想继续调工具, 也被迫输出文本. 配合 R5 (t
 
 from __future__ import annotations
 
-from forge.chat.guards.base import Guidance, LoopState
+from forge.chat.guards.base import Guidance, LoopGuard, LoopState
 
 
-class StepSafetyNet:
-    """无状态. 但符合 LoopGuard Protocol 还是按 turn 实例化习惯一致."""
+class StepSafetyNet(LoopGuard):
+    """无状态. 但作为 LoopGuard 实现仍按 turn 实例化."""
 
     def __init__(self, warning_window: int = 3) -> None:
         """

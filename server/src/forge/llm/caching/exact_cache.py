@@ -22,11 +22,12 @@ import json
 import logging
 import threading
 import time
+from abc import ABC, abstractmethod
 from collections import OrderedDict
 from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Protocol
 
 from ..providers.base import ChatMessage
 from ..request import LLMResponse
@@ -62,13 +63,16 @@ def make_cache_key(
     return f"{_KEY_PREFIX}{digest}"
 
 
-class ExactCacheBackend(Protocol):
+class ExactCacheBackend(ABC):
     """缓存后端抽象, Phase 6 切 Redis 时只换实现."""
 
+    @abstractmethod
     async def get(self, key: str) -> LLMResponse | None: ...
 
+    @abstractmethod
     async def set(self, key: str, resp: LLMResponse, ttl_seconds: int = 3600) -> None: ...
 
+    @abstractmethod
     async def delete(self, key: str) -> None: ...
 
 
@@ -78,7 +82,7 @@ class _CacheEntry:
     expires_at: float
 
 
-class InProcessLRUCache:
+class InProcessLRUCache(ExactCacheBackend):
     """进程内 LRU + TTL 缓存. 适合单机或开发场景."""
 
     def __init__(self, max_size: int = 256) -> None:
@@ -119,7 +123,7 @@ class InProcessLRUCache:
         return len(self._store)
 
 
-class RedisExactCache:
+class RedisExactCache(ExactCacheBackend):
     """Redis-backed 精确缓存. Phase 6 多实例共享.
 
     Key 形态:
@@ -178,10 +182,8 @@ class RedisExactCache:
             logger.debug("Redis 精确缓存写入失败 (降级)", exc_info=True)
 
     async def delete(self, key: str) -> None:
-        try:
+        with suppress(Exception):
             await self._redis.delete(key)
-        except Exception:  # noqa: BLE001
-            pass
 
 
 # 全局单例

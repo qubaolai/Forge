@@ -126,7 +126,7 @@ class DbMessageContentStore(ContentStore):
     """chat 后端: 真相源 = chat_messages.content (经 ChatMessageRepository)."""
 
     def __init__(
-        self, session_factory: "async_sessionmaker[AsyncSession] | None" = None
+        self, session_factory: async_sessionmaker[AsyncSession] | None = None
     ) -> None:
         self._factory = session_factory
 
@@ -186,7 +186,7 @@ class DbMessageContentStore(ContentStore):
 class RunStoreContentStore(ContentStore):
     """CLI 后端: 真相源 = RunStore artifact.payload."""
 
-    def __init__(self, run_store: "RunStore", *, run_id: str | None = None) -> None:
+    def __init__(self, run_store: RunStore, *, run_id: str | None = None) -> None:
         self._store = run_store
         self._run_id = run_id
 

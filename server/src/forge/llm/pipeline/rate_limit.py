@@ -11,8 +11,8 @@ import logging
 from dataclasses import dataclass
 
 from ..inbound_rate_limiter import (
-    InboundRateLimitExceeded,
     InboundRateLimiter,
+    InboundRateLimitExceeded,
     get_inbound_rate_limiter,
 )
 from ..request import LLMRequest, LLMResponse

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from forge.chat.preparer import TurnPreparer, TurnPreparationError
+from forge.chat.preparer import TurnPreparationError, TurnPreparer
 
 
 def _build_fake_db(*, session):

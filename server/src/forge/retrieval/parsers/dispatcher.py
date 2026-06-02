@@ -15,30 +15,19 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Protocol
 
-from forge.core.types import Element
+from forge.retrieval.parsers.parser_base import BaseParser
 
 logger = logging.getLogger(__name__)
-
-
-class ParserLike(Protocol):
-    """Parser 协议: 任何提供 parse(Path) -> list[Element] 的对象都行.
-
-    项目内的 parsers (PdfParser / MdParser / TxtParser / WordParser) 并不
-    都继承同一基类, 用 Protocol 鸭子类型即可.
-    """
-
-    def parse(self, file_path: Path) -> list[Element]: ...
 
 
 class ParserDispatcher:
     """按扩展名管理 parser 实例."""
 
     def __init__(self) -> None:
-        self._parsers: dict[str, ParserLike] = {}
+        self._parsers: dict[str, BaseParser] = {}
 
-    def register(self, parser: ParserLike, extensions: list[str]) -> None:
+    def register(self, parser: BaseParser, extensions: list[str]) -> None:
         """注册 parser. extensions 形如 [".pdf"] (大小写不敏感)."""
         for ext in extensions:
             ext_norm = ext.lower()
@@ -54,7 +43,7 @@ class ParserDispatcher:
                 )
             self._parsers[ext_norm] = parser
 
-    def get(self, file_path: Path) -> ParserLike | None:
+    def get(self, file_path: Path) -> BaseParser | None:
         """按扩展名取 parser, 找不到返回 None."""
         return self._parsers.get(file_path.suffix.lower())
 

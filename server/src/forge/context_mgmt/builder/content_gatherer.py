@@ -43,7 +43,7 @@ class ContentGatherer:
         )
         chunks: dict[str, list[ContentChunk]] = {}
         degraded: list[str] = []
-        for provider, result in zip(self._providers, results):
+        for provider, result in zip(self._providers, results, strict=False):
             if isinstance(result, ContentProviderError):
                 # 软失败: Provider 显式声明可降级
                 degraded.append(result.reason_code or f"{provider.name}_fetch_failed")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from forge.llm.providers.base import ChatChunk
 from forge.llm.streaming import replay_as_chunks
 
 

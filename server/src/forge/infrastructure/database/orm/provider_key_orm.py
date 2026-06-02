@@ -1,6 +1,6 @@
 """ProviderKey ORM — 供应商 API Key 表。"""
 
-from sqlalchemy import BigInteger, DateTime, Index, Integer, String, Text, func
+from sqlalchemy import BigInteger, DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base

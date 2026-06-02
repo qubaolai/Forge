@@ -16,9 +16,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import Any
 
 
 @dataclass
@@ -139,11 +139,11 @@ class LLM(ABC):
             **kwargs,
         )
         # chat_stream 可能是 async generator 或 sync generator, 兼容两种形态
-        if hasattr(stream, "__aiter__"):
-            async for chunk in stream:  # type: ignore[union-attr]
+        if isinstance(stream, AsyncIterator):
+            async for chunk in stream:
                 chunks.append(chunk)
         else:
-            for chunk in stream:  # type: ignore[union-attr]
+            for chunk in stream:
                 chunks.append(chunk)
         content = "".join(c.delta for c in chunks)
         usage = next((c.usage for c in reversed(chunks) if c.usage), {})
@@ -153,7 +153,7 @@ class LLM(ABC):
     # chat_stream: 流式 (子类必实现)
     # ------------------------------------------------------------------
     @abstractmethod
-    async def chat_stream(
+    def chat_stream(
         self,
         messages: list[ChatMessage],
         *,
@@ -162,7 +162,7 @@ class LLM(ABC):
         max_tokens: int | None = None,
         extra_options: dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[ChatChunk]: ...
+    ) -> AsyncIterator[ChatChunk] | Iterator[ChatChunk]: ...
 
     # ------------------------------------------------------------------
     # Tool calling: 非所有 provider 实现 (默认抛 NotImplementedError)

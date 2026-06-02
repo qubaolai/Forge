@@ -1,4 +1,4 @@
-"""Router Protocol + 路由请求/决策类型.
+"""Router ABC + 路由请求/决策类型.
 
 Router 决定:在一组候选 (provider, model) 中选哪个作为 primary 给 LLMDispatcher.
 注意:
@@ -11,8 +11,9 @@ Router 决定:在一组候选 (provider, model) 中选哪个作为 primary 给 L
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from forge.config.domains.llm import ModelConfig
@@ -62,13 +63,13 @@ Candidate = tuple[str, "ModelConfig"]
 """路由候选项: (provider 名, model 配置). available 列表的每一项."""
 
 
-@runtime_checkable
-class Router(Protocol):
+class Router(ABC):
     """Router 接口.
 
     返回 None 表示"无意见", 让 CompositeRouter 询问下一个 Router.
     """
 
+    @abstractmethod
     def route(
         self,
         request: RoutingRequest,

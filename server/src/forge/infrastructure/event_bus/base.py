@@ -11,17 +11,19 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
-from typing import Any, Protocol
+from typing import Any
 
 EventPayload = dict[str, Any]
 EventHandler = Callable[[EventPayload], Awaitable[None]]
 Unsubscribe = Callable[[], None]
 
 
-class EventBus(Protocol):
+class EventBus(ABC):
     """进程内 / 跨进程 事件总线."""
 
+    @abstractmethod
     def subscribe(self, event_name: str, handler: EventHandler) -> Unsubscribe:
         """注册 subscriber. 多次 subscribe 同名事件 -> 多个 handler 并行被调.
 
@@ -31,6 +33,7 @@ class EventBus(Protocol):
         """
         ...
 
+    @abstractmethod
     async def publish(self, event_name: str, payload: EventPayload) -> None:
         """发布事件.
 

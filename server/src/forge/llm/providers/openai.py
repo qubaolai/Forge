@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterator
-from typing import Any, AsyncIterator, cast
+from collections.abc import AsyncIterator
+from typing import Any, cast
 
 from openai import NOT_GIVEN, APIStatusError, APITimeoutError, OpenAI
 
@@ -561,7 +561,7 @@ class DashScopeCompatLLM(OpenAICompatibleLLM):
     @property
     def provider_name(self) -> str:
         return "dashscope"
-    
+
 
 @register_llm("mimo")
 class XiaoMiMIMOLLM(OpenAICompatibleLLM):
@@ -572,7 +572,7 @@ class XiaoMiMIMOLLM(OpenAICompatibleLLM):
     @property
     def provider_name(self) -> str:
         return "mimo"
-    
+
     def _build_kwargs(
         self,
         *,
@@ -580,7 +580,7 @@ class XiaoMiMIMOLLM(OpenAICompatibleLLM):
         temperature: float | None,
         max_tokens: int | None,
         top_p: float | None = None,
-        thinking: bool | None = None,
+        reasoning_effort: str | None = None,
         extra_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         kw = super()._build_kwargs(

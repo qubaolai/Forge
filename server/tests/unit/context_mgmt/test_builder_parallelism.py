@@ -14,14 +14,13 @@ import pytest
 
 from forge.context_mgmt.budget.policy import DefaultBudgetPolicy
 from forge.context_mgmt.builder.content_gatherer import (
-    ContentGatherer,
     GatherResult,
 )
 from forge.context_mgmt.builder.context_builder import DefaultContextBuilder
 from forge.context_mgmt.builder.message_assembler import MessageAssembler
 from forge.context_mgmt.builder.prompt_renderer import PromptRenderer
 from forge.context_mgmt.meter.token_meter import DefaultTokenMeter
-from forge.context_mgmt.types import ContextMode, ContextRequest
+from forge.context_mgmt.types import ContextRequest
 from forge.llm.token_counter import HeuristicCounter
 
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-from forge.context_mgmt.protocols import TokenMeter, ContentProvider
+from forge.context_mgmt.protocols import ContentProvider, TokenMeter
 from forge.context_mgmt.types import ContentChunk, ContextRequest
 
 

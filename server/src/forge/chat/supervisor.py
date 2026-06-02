@@ -19,11 +19,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from forge.config import paths
 from forge.chat.turn_run import ChatTurnRun
+from forge.config import paths
 
 logger = logging.getLogger(__name__)
 
@@ -190,10 +191,8 @@ class ChatTurnSupervisor:
         # 1. 停清理任务
         if self._cleanup_task is not None:
             self._cleanup_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError, Exception):
                 await self._cleanup_task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
             self._cleanup_task = None
 
         # 2. 取消所有未完成 turn
@@ -212,7 +211,7 @@ class ChatTurnSupervisor:
                 ),
                 timeout=timeout,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("supervisor shutdown 等待超时, 硬取消剩余 turn")
             await asyncio.gather(
                 *(r.cancel() for r in active if not r.is_terminal),

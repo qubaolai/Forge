@@ -6,7 +6,7 @@ from forge.context_mgmt.protocols import CompactionTrigger
 from forge.context_mgmt.types import ContextSnapshot
 
 
-class CompositeTrigger:
+class CompositeTrigger(CompactionTrigger):
     """任一子 trigger 满足 → 触发."""
 
     def __init__(self, triggers: list[CompactionTrigger]) -> None:

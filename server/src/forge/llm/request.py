@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from .providers.base import ChatChunk, ChatMessage
+from .providers.base import ChatChunk
 
 
 @dataclass
@@ -27,7 +27,7 @@ class LLMRequest:
         > 配置默认 (CompositeRouter 兜底)
     """
 
-    messages: list[ChatMessage]
+    messages: list[Any]
     tools: list[dict] | None = None
     tool_choice: str = "auto"
 

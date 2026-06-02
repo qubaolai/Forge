@@ -8,14 +8,14 @@
     干净, 且类型检查器能帮你穷尽分支.
 
 Stage 2 只装 NoOpConflictResolver (永远 Insert, 不去重). Stage 3+ 视需求加
-LatestWinsConflictResolver / LLMJudgeConflictResolver, 实现同一 Protocol 即可,
+LatestWinsConflictResolver / LLMJudgeConflictResolver, 继承同一 ABC 即可,
 Store 调用方零改动.
 """
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Protocol
 
 from forge.memory.base import Fact
 from forge.memory.scope import MemoryScope
@@ -58,9 +58,9 @@ Resolution = Insert | Replace | Merge | Skip
 
 
 # ---------------------------------------------------------------------------
-# Protocol
+# ABC
 # ---------------------------------------------------------------------------
-class ConflictResolver(Protocol):
+class ConflictResolver(ABC):
     """决定 "新事实 vs 已有相似事实" 该怎么处理.
 
     Note:
@@ -68,6 +68,7 @@ class ConflictResolver(Protocol):
         NoOp / 纯规则实现也走 async, 调用方统一 await.
     """
 
+    @abstractmethod
     async def resolve(
         self,
         scope: MemoryScope,
@@ -91,7 +92,7 @@ class ConflictResolver(Protocol):
 # ---------------------------------------------------------------------------
 # NoOp 实现: Stage 2 默认
 # ---------------------------------------------------------------------------
-class NoOpConflictResolver:
+class NoOpConflictResolver(ConflictResolver):
     """永远 Insert, 不去重. 让重复内容靠 DB 唯一约束兜底 (若有)."""
 
     async def resolve(

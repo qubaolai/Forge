@@ -20,12 +20,12 @@ ContextBuilder 拼上下文的素材有四路: `system + history + summary + fac
 
 ```
 memory/
-├── base.py                  ← 对外契约: MemoryStore Protocol + Summary / Fact / FactRecallRequest 数据类型 + MemoryStoreError
+├── base.py                  ← 对外契约: MemoryStore ABC + Summary / Fact / FactRecallRequest 数据类型 + MemoryStoreError
 ├── null.py                  ← NullMemoryStore: 关闭记忆系统时的占位 (摘要/事实读全返回空)
 ├── scope.py                 ← MemoryScope 值对象 (user_id / workspace_id / tenant_id) — 隔离的最小单位
 ├── composite.py             ← CompositeMemoryStore: 把 SummaryStore + FactStore 组合成 MemoryStore
 ├── hooks.py                 ← install_memory_hooks(): 订阅 turn.completed, 按 every_n_turns 派发任务
-├── policies/                ← 策略层 (Protocol + NoOp)
+├── policies/                ← 策略层 (ABC + NoOp)
 │   ├── conflict.py          ConflictResolver: 写入新事实时与已有冲突的处理
 │   └── forgetting.py        ForgettingPolicy: 召回过滤 + 物理 prune 双钩子
 ├── summary/                 ← 摘要子系统
@@ -135,7 +135,7 @@ memory/
 
 **核心准则**: 写路径任一环节失败, 用户对话**不受影响** (只是这轮没生成摘要); 读路径任一环节失败, 上下文质量**降级** (跳过摘要/事实节, 主流程继续).
 
-## 策略层 (Protocol-only, Stage 2 只装 NoOp)
+## 策略层 (ABC-only, Stage 2 只装 NoOp)
 
 不是所有 "听上去要做的事" 都现在做. 但**接口契约**先定下来, 实现按需扩展.
 
@@ -192,7 +192,7 @@ memory:
 |---|---|
 | 新加触发条件 (eg "每次 user 主动说 '记一下'") | 在 `_stream_chat` 加新 `publish` 调用, 同一事件名或新事件名; `hooks.py` 加 `bus.subscribe` |
 | 长期事实 (Stage 3) | 实现 `FactStore` + `FactExtractor`, 在 `composite.py` 装上, 在 `tasks/` 加 `extract_facts` 任务 |
-| 真实 conflict 策略 | 新建 `policies/conflict_xxx.py` 实现 Protocol, 注入 `FactStore` |
+| 真实 conflict 策略 | 新建 `policies/conflict_xxx.py` 继承 ABC, 注入 `FactStore` |
 | 真实 forgetting 策略 | 新建 `policies/forgetting_xxx.py`; Celery beat 周期跑 `prune_facts` 任务 |
 | 跨进程事件 (web ↔ worker 之间需要互通) | 把 `InProcessEventBus` 换成 `RedisPubSubEventBus`, `get_event_bus()` 内部分发 |
 | 多租户隔离 | 给 `MemoryScope` 加 `tenant_id`, 各 Store 查询加过滤; 不需要换 "IsolationStrategy" |

@@ -15,7 +15,7 @@ from forge.tools.registry import register_tool
 
 def _parse_line_range(value: Any) -> tuple[int, int] | None:
     """把 [start, end] 解析成 (start, end); 非法返回 None (= 取全文)。"""
-    if not isinstance(value, (list, tuple)) or len(value) != 2:
+    if not isinstance(value, list | tuple) or len(value) != 2:
         return None
     try:
         start, end = int(value[0]), int(value[1])

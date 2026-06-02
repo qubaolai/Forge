@@ -29,13 +29,17 @@ from pathlib import Path
 
 import yaml
 
-from forge.config._env import expand_env, load_dotenv_if_present, load_env_files
+from forge.config._env import expand_env, load_env_files
 from forge.config.domains.agent_profiles import AgentProfilesConfig
 from forge.config.domains.app import AppConfig, MiddlewareConfig
+from forge.config.domains.context import ContextDigestSettings, ContextSettings
 from forge.config.domains.db import CelerySettings, DBSettings, RedisSettings
 from forge.config.domains.llm import LLMConfig, UtilityLLMConfig
-from forge.config.domains.context import ContextDigestSettings, ContextSettings
-from forge.config.domains.memory import MemorySettings, MemorySummarizerSettings, MemoryTriggerSettings
+from forge.config.domains.memory import (
+    MemorySettings,
+    MemorySummarizerSettings,
+    MemoryTriggerSettings,
+)
 from forge.config.domains.observability import ObservabilityConfig
 from forge.config.domains.quota import UserQuotaSettings
 from forge.config.domains.retrieval import (
@@ -45,6 +49,7 @@ from forge.config.domains.retrieval import (
     IngestConfig,
     RetrievalConfig,
 )
+
 logger = logging.getLogger(__name__)
 
 SERVER_ROOT = Path(__file__).resolve().parents[3]

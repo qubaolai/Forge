@@ -7,12 +7,13 @@
 
 from __future__ import annotations
 
+from forge.context_mgmt.protocols import CompactionTrigger
 from forge.context_mgmt.types import ContextSnapshot
 
 DEFAULT_THRESHOLD = 0.85
 
 
-class ThresholdTrigger:
+class ThresholdTrigger(CompactionTrigger):
     """按 token 使用率判断是否触发压缩."""
 
     def __init__(self, threshold: float = DEFAULT_THRESHOLD) -> None:

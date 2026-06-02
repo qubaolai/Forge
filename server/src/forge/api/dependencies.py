@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import Annotated
 
 from fastapi import Depends, Header, Request
@@ -116,10 +117,8 @@ async def _get_api_key_user(
         raise Unauthorized("用户已被禁用", code=40108)
 
     # 更新最后使用时间（失败不影响主流程）
-    try:
+    with suppress(Exception):
         await key_repo.touch_last_used(api_key)
-    except Exception:
-        pass
 
     return user
 

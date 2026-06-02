@@ -18,6 +18,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from forge.infrastructure.queue.base import TaskQueue
+
 if TYPE_CHECKING:  # 类型注解用, 运行期不依赖
     from celery import Celery
 
@@ -116,7 +118,6 @@ def _register_worker_signals() -> None:
         # worker 进程也会调 LLM (摘要等), 必须有同一份预算配置.
         try:
             from forge.config.settings import get_settings
-
             from forge.llm.cost_tracker import BudgetConfig, get_cost_tracker
 
             settings = get_settings()
@@ -134,7 +135,7 @@ def _register_worker_signals() -> None:
             logger.exception("celery worker 进程: CostTracker budget 加载失败 (预算检查 no-op)")
 
 
-class CeleryTaskQueue:
+class CeleryTaskQueue(TaskQueue):
     """通过 Celery 派发任务的 TaskQueue 实现."""
 
     def __init__(self, app: Celery) -> None:
