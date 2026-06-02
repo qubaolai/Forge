@@ -14,7 +14,10 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
+from forge.context_mgmt.digest.policy import DigestPolicy
+from forge.context_mgmt.digest.types import DigestLookup
 from forge.context_mgmt.protocols import (
     HistoryFilter,
     TokenMeter,
@@ -45,11 +48,21 @@ class HistoryProvider(ContentProvider):
         history_filter: HistoryFilter,
         tool_result_policy: ToolResultPolicy,
         token_meter: TokenMeter,
+        digest_policy: DigestPolicy | None = None,
+        digest_cap: int = 0,
+        digest_store: Any = None,
     ) -> None:
         self._store = message_store
         self._filter = history_filter
         self._tool_policy = tool_result_policy
         self._meter = token_meter
+        # digest 引用化 (止血): 单条超 cap 的消息折叠为引用占位。
+        # digest_policy=None 或 digest_cap<=0 时完全旁路, 行为与改动前一致。
+        self._digest_policy = digest_policy
+        self._digest_cap = digest_cap
+        # digest 缓存读源 (DigestStore, 需含 async batch_get(ids) -> Mapping)。
+        # 为 None 时 DigestPolicy 全部走廉价截断降级 (= 阶段 1 行为)。
+        self._digest_store = digest_store
 
     @property
     def name(self) -> str:
@@ -73,6 +86,25 @@ class HistoryProvider(ContentProvider):
             history_messages, request.current_user_message, request.mode
         )
 
+        # 单条 cap 闸: 把超长消息引用化折叠 (filter 之后、构造 Message 之前)。
+        # 与 MessageAssembler 的累计预算闸形成「单条 cap + 累计 budget」双闸。
+        digest_flags: list[str] = []
+        digest_info: list[str] = []
+        if self._digest_policy is not None and self._digest_cap > 0:
+            lookup: DigestLookup | None = await self._build_digest_lookup(filtered)
+            result = self._digest_policy.apply(
+                filtered, cap=self._digest_cap, meter=self._meter, lookup=lookup
+            )
+            filtered = result.messages
+            digest_flags = result.degraded_flags
+            digest_info = result.info_flags
+            if result.substituted or result.pending:
+                # 命中率可观测: 无损命中 vs 降级 (缓存未命中) 计数
+                logger.info(
+                    "digest 折叠 session=%s 命中=%d 降级=%d",
+                    request.session_id, result.substituted, result.pending,
+                )
+
         # 转换为 Message 列表 (按 turn_index 顺序)
         out_messages: list[Message] = [hm.message for hm in filtered]
         estimated = self._meter.count_messages(out_messages)
@@ -84,8 +116,26 @@ class HistoryProvider(ContentProvider):
             estimated_tokens=estimated,
             message_count=len(out_messages),
             truncated=(len(filtered) < candidate_count),
+            degraded=digest_flags,
+            info=digest_info,
         )
         return [chunk]
+
+    async def _build_digest_lookup(
+        self, messages: list[HistoryMessage]
+    ) -> DigestLookup | None:
+        """批量预取已缓存 digest (一次 IN 查询, 避免逐条查库)。
+
+        无 digest_store / 查询失败时返回 None -> DigestPolicy 走廉价截断降级,
+        由异步 content.digest 任务下一轮补上缓存。
+        """
+        if self._digest_store is None or not messages:
+            return None
+        try:
+            return await self._digest_store.batch_get([hm.id for hm in messages])
+        except Exception as exc:  # noqa: BLE001 — 缓存读失败软降级
+            logger.warning("digest 缓存预取失败, 走截断降级: %s", exc)
+            return None
 
     # aborted / error 消息不应带入 LLM 上下文
     _SKIP_STATUSES = frozenset({"aborted", "error", "streaming"})

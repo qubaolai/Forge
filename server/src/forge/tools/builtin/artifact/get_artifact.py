@@ -16,7 +16,10 @@ from forge.tools.registry import register_tool
 @register_tool
 class GetArtifact(Tool):
     name = "get_artifact"
-    description = "按 artifact_id 回读完整 artifact 内容 (含 payload)."
+    description = (
+        "按 artifact_id 回读 artifact 内容 (含 payload)。可选 line_range=[起始行,结束行] "
+        "(1-based 闭区间) 只取 payload 文本的某片段, 避免大产物整体拉回爆窗。"
+    )
     parameters: dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -28,6 +31,13 @@ class GetArtifact(Tool):
             "workspace_path": {
                 "type": "string",
                 "description": "RunStore 根路径",
+            },
+            "line_range": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "minItems": 2,
+                "maxItems": 2,
+                "description": "(可选) 1-based 闭区间 [起始行, 结束行]; 仅切 payload 文本",
             },
         },
         "required": ["artifact_id"],
@@ -54,4 +64,34 @@ class GetArtifact(Tool):
             item = await store.find_artifact(artifact_id)
         if item is None:
             return {"ok": False, "error": f"artifact 未找到: {artifact_id}"}
+
+        line_range = _parse_line_range(args.get("line_range"))
+        if line_range is not None:
+            # 定向回读: 只返回 payload 文本的指定行区间
+            from forge.infrastructure.storage.content_store import (
+                payload_to_text,
+                slice_text,
+            )
+
+            sl = slice_text(payload_to_text(item.payload), line_range)
+            return {
+                "ok": True,
+                "artifact_id": artifact_id,
+                "text": sl.text,
+                "total_lines": sl.total_lines,
+                "returned_range": list(sl.returned_range),
+                "truncated": sl.truncated,
+            }
         return {"ok": True, "artifact": item.to_dict()}
+
+
+def _parse_line_range(value: Any) -> tuple[int, int] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    try:
+        start, end = int(value[0]), int(value[1])
+    except (TypeError, ValueError):
+        return None
+    if start <= 0 or end <= 0:
+        return None
+    return start, end

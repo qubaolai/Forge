@@ -65,10 +65,14 @@ dashscope = { version = "^1.20", optional = true }
 "opentelemetry-exporter-otlp-proto-http" = { version = "^1.27", optional = true }
 langfuse = { version = "^2.50", optional = true }
 prometheus-client = { version = "^0.21", optional = true }
+# digest 代码骨架: tree-sitter 预编译多语言 grammar (缺失时 code_skeleton 自动降级为启发式)
+tree-sitter = { version = "^0.23", optional = true }
+tree-sitter-language-pack = { version = "^0.7", optional = true }
 
 [tool.poetry.extras]
 anthropic = ["anthropic"]
 google = ["google-genai"]
+digest = ["tree-sitter", "tree-sitter-language-pack"]
 rag = ["chromadb", "jieba", "docling", "sentence-transformers", "dashscope"]
 otel = ["opentelemetry-api", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-http"]
 langfuse = ["langfuse"]
@@ -79,6 +83,7 @@ all = [
     "chromadb", "jieba", "docling", "sentence-transformers", "dashscope",
     "opentelemetry-api", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-http",
     "langfuse", "celery", "prometheus-client",
+    "tree-sitter", "tree-sitter-language-pack",
 ]
 
 [tool.poetry.group.dev.dependencies]

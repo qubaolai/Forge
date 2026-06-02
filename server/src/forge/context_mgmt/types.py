@@ -110,6 +110,10 @@ class ContentChunk:
     estimated_tokens: Provider 预估的 token 数.
     message_count:    消息条数 (对 dialogue / tool_results 有意义).
     truncated:        本 chunk 是否被处理 / 截断过.
+    degraded:         本 chunk 产生的降级标记 (如 digest_pending),
+                      由 MessageAssembler 合并进 snapshot.degraded。
+    info:             非降级的信息性标记 (如 digest_substituted 无损折叠),
+                      合并进 snapshot.info, 不影响 is_healthy。
     """
 
     kind: str
@@ -119,6 +123,8 @@ class ContentChunk:
     estimated_tokens: int = 0
     message_count: int = 0
     truncated: bool = False
+    degraded: list[str] = field(default_factory=list)
+    info: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +304,9 @@ class ContextSnapshot:
     #   "history_truncated_by_budget", "active_compaction_triggered",
     #   "compaction_failed", "semantic_filter_fallback".
     degraded: list[str] = field(default_factory=list)
+
+    # 非降级的信息性标记 (不影响 is_healthy), 如 digest_substituted (无损折叠为引用)。
+    info: list[str] = field(default_factory=list)
 
     @property
     def usage_ratio(self) -> float:

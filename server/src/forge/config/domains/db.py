@@ -111,4 +111,5 @@ class CelerySettings(BaseSettings):
     task_modules: list[str] = [
         "forge.memory.tasks",
         "forge.observability.cost.tasks",
+        "forge.context_mgmt.digest.tasks",
     ]

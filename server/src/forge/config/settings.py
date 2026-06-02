@@ -34,6 +34,7 @@ from forge.config.domains.agent_profiles import AgentProfilesConfig
 from forge.config.domains.app import AppConfig, MiddlewareConfig
 from forge.config.domains.db import CelerySettings, DBSettings, RedisSettings
 from forge.config.domains.llm import LLMConfig, UtilityLLMConfig
+from forge.config.domains.context import ContextDigestSettings, ContextSettings
 from forge.config.domains.memory import MemorySettings, MemorySummarizerSettings, MemoryTriggerSettings
 from forge.config.domains.observability import ObservabilityConfig
 from forge.config.domains.quota import UserQuotaSettings
@@ -50,10 +51,6 @@ SERVER_ROOT = Path(__file__).resolve().parents[3]
 ROOT_DIR = SERVER_ROOT
 CONFIG_DIR = SERVER_ROOT / "config"
 CONFIG_FILE = CONFIG_DIR / "sys_config.yaml"
-
-# 向后兼容别名 — 测试套件通过 `from forge.config.settings import _expand_env` 导入
-_expand_env = expand_env
-_load_dotenv_if_present = load_dotenv_if_present
 
 __all__ = [
     "Settings",
@@ -88,6 +85,11 @@ class Settings:
             enabled=mem_cfg.get("enabled", True),
             summarizer=MemorySummarizerSettings(**(mem_cfg.get("summarizer") or {})),
             trigger=MemoryTriggerSettings(**(mem_cfg.get("trigger") or {})),
+        )
+
+        ctx_cfg = config.get("context", {}) or {}
+        self.context = ContextSettings(
+            digest=ContextDigestSettings(**(ctx_cfg.get("digest") or {})),
         )
 
         self.llm = LLMConfig(**config["llm"])

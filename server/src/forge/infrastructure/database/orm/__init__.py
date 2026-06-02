@@ -10,6 +10,7 @@ from forge.infrastructure.database.orm.kb_document_chunk_orm import (
 )
 from forge.infrastructure.database.orm.kb_document_orm import KbDocumentOrm
 from forge.infrastructure.database.orm.knowledge_base_orm import KnowledgeBaseOrm
+from forge.infrastructure.database.orm.message_digest_orm import MessageDigestOrm
 from forge.infrastructure.database.orm.model_orm import ModelOrm
 from forge.infrastructure.database.orm.model_provider_orm import ProviderOrm
 from forge.infrastructure.database.orm.provider_key_orm import ProviderKeyOrm
@@ -23,6 +24,7 @@ __all__ = [
     "KnowledgeBaseOrm",
     "KbDocumentChunkOrm",
     "KbDocumentOrm",
+    "MessageDigestOrm",
     "ModelOrm",
     "ProviderKeyOrm",
     "ProviderOrm",

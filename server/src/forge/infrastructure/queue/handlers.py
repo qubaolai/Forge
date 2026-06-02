@@ -26,9 +26,17 @@ async def handle_cost_flush() -> int:
     return await run_flush_cost_task()
 
 
+async def handle_context_digest(*, session_id: str) -> None:
+    """本地执行会话 digest 任务."""
+    from forge.context_mgmt.digest.tasks import run_digest_task
+
+    await run_digest_task(session_id)
+
+
 _DEFAULT_HANDLERS: dict[str, TaskHandler] = {
     "memory.summarize": handle_memory_summarize,
     "observability.cost.flush": handle_cost_flush,
+    "context.digest": handle_context_digest,
 }
 
 

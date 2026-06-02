@@ -194,6 +194,8 @@ class TurnFinalizer:
             "compaction_performed": snapshot.compaction_performed,
             "rebuild_count": snapshot.rebuild_count,
             "degraded": list(snapshot.degraded),
+            # 非降级信息标记 (如 digest_substituted 无损折叠为引用), 供前端展示
+            "info": list(snapshot.info),
             # ---- resume 恢复用 ----
             "finish_reason": result.finish_reason,
         }

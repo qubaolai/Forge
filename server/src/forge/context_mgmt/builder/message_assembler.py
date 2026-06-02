@@ -123,6 +123,16 @@ class MessageAssembler:
         if dropped > 0:
             snapshot.degraded.append("history_truncated_by_budget")
         snapshot.degraded.extend(gather_result.degraded)
+        # 合并各 chunk 自身产生的降级 / 信息标记 (如 HistoryProvider 的
+        # digest_pending / digest_substituted), 去重
+        for chunk_list in chunks.values():
+            for c in chunk_list:
+                for flag in c.degraded:
+                    if flag not in snapshot.degraded:
+                        snapshot.degraded.append(flag)
+                for flag in c.info:
+                    if flag not in snapshot.info:
+                        snapshot.info.append(flag)
 
         return snapshot
 

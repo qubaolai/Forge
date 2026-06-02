@@ -15,6 +15,12 @@
 """
 
 from forge.infrastructure.storage.base import FileStorage, StoredFile
+from forge.infrastructure.storage.content_store import (
+    ContentSlice,
+    ContentStore,
+    DbMessageContentStore,
+    RunStoreContentStore,
+)
 from forge.infrastructure.storage.data_protocols import (
     AuditStore,
     ChatMessageView,
@@ -44,4 +50,9 @@ __all__ = [
     # 共享数据视图
     "SessionView",
     "ChatMessageView",
+    # 会话内容真相源切片 (digest 回读)
+    "ContentStore",
+    "ContentSlice",
+    "DbMessageContentStore",
+    "RunStoreContentStore",
 ]
