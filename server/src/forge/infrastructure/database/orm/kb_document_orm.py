@@ -7,16 +7,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base
 from forge.infrastructure.database.orm.mixins import BigIntPKMixin, table_args
-from forge.utils.id_generator import new_id
 
 
 class KbDocumentOrm(Base, BigIntPKMixin):
+    """知识库文档表。id 为雪花主键, 即对外唯一 ID (str(id))。"""
+
     __tablename__ = "kb_documents"
 
-    doc_id: Mapped[str] = mapped_column(
-        String(40), unique=True, nullable=False,
-        default=lambda: new_id("doc"), comment="业务 ID: doc_xxx"
-    )
     kb_id: Mapped[int] = mapped_column(
         BigInteger, nullable=False, comment="→ knowledge_bases.id (应用层引用, 无 FK)"
     )
@@ -39,10 +36,6 @@ class KbDocumentOrm(Base, BigIntPKMixin):
     progress: Mapped[int] = mapped_column(default=0, nullable=False, comment="进度 0-100")
     chunk_count: Mapped[int] = mapped_column(default=0, nullable=False, comment="切分后的分块数")
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="完成索引时间")
-
-    @property
-    def business_id(self) -> str:
-        return self.doc_id
 
     __table_args__ = table_args(
         Index("ix_kb_docs_kb_created", "kb_id", "created_at"),

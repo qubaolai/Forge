@@ -48,16 +48,16 @@ async def _seed_message(factory, *, user_id: str, content: str) -> str:
 async def test_db_content_store_scopes_to_owner(factory):
     from forge.infrastructure.storage.content_store import DbMessageContentStore
 
-    mid = await _seed_message(factory, user_id="user_A", content="l1\nl2\nsecret")
+    mid = await _seed_message(factory, user_id="1001", content="l1\nl2\nsecret")
     store = DbMessageContentStore(factory)
 
     # 拥有者可读
-    sl = await store.get(f"msg:{mid}", None, owner_user_id="user_A")
+    sl = await store.get(f"msg:{mid}", None, owner_user_id="1001")
     assert sl is not None and "secret" in sl.text
 
     # 他人不可读 -> None (不泄露存在性)
-    assert await store.get(f"msg:{mid}", None, owner_user_id="user_B") is None
-    assert await store.exists(f"msg:{mid}", owner_user_id="user_B") is False
+    assert await store.get(f"msg:{mid}", None, owner_user_id="1002") is None
+    assert await store.exists(f"msg:{mid}", owner_user_id="1002") is False
 
     # 不传 owner (内部可信调用) 仍可读, 且 line_range 切片正确
     sl2 = await store.get(f"msg:{mid}", (1, 2), owner_user_id=None)
@@ -73,9 +73,9 @@ async def test_digest_store_batch_get_meta(factory):
 
     store = DigestStore(factory)
     await store.upsert(
-        message_id="msg_x", session_id="sess_1",
+        message_id="123", session_id="456",
         segments=[Segment(kind="prose", start_line=1, end_line=1, digest_text="d")],
         total_tokens=100, source_hash="h1", model=None, status="done",
     )
-    metas = await store.batch_get_meta(["msg_x", "msg_absent"])
-    assert metas == {"msg_x": ("h1", "done")}
+    metas = await store.batch_get_meta(["123", "999"])
+    assert metas == {"123": ("h1", "done")}

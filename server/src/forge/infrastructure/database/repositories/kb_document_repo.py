@@ -19,6 +19,16 @@ from forge.infrastructure.database.repositories.base import BaseRepository
 logger = logging.getLogger(__name__)
 
 
+def _to_int(value: str | int | None) -> int | None:
+    """对外 ID (str(雪花)) → BIGINT; 非法/空返回 None。"""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class KbDocumentRepository(BaseRepository):
     """KB 文档 CRUD + 状态机."""
 
@@ -53,7 +63,7 @@ class KbDocumentRepository(BaseRepository):
             chunk_count:   入库分块数 (终态时填)
             mark_indexed:  设为 True 时同时更新 indexed_at = now()
         """
-        doc = await self.session.get(KbDocumentOrm, doc_id)
+        doc = await self.session.get(KbDocumentOrm, _to_int(doc_id))
         if doc is None:
             return None
         doc.status = status
@@ -77,12 +87,12 @@ class KbDocumentRepository(BaseRepository):
     # 读
     # ------------------------------------------------------------------
     async def get(self, doc_id: str) -> KbDocumentOrm | None:
-        return await self.session.get(KbDocumentOrm, doc_id)
+        return await self.session.get(KbDocumentOrm, _to_int(doc_id))
 
     async def get_in_kb(self, doc_id: str, kb_id: str) -> KbDocumentOrm | None:
         """获取并校验文档归属 KB (用于鉴权前置)."""
-        doc = await self.session.get(KbDocumentOrm, doc_id)
-        if doc is None or doc.kb_id != kb_id:
+        doc = await self.session.get(KbDocumentOrm, _to_int(doc_id))
+        if doc is None or doc.kb_id != _to_int(kb_id):
             return None
         return doc
 
@@ -95,9 +105,10 @@ class KbDocumentRepository(BaseRepository):
         page_size: int = 50,
     ) -> tuple[list[KbDocumentOrm], int]:
         """分页列出某 KB 下的文档. 返回 (items, total)."""
-        base = select(KbDocumentOrm).where(KbDocumentOrm.kb_id == kb_id)
+        kid = _to_int(kb_id)
+        base = select(KbDocumentOrm).where(KbDocumentOrm.kb_id == kid)
         count_base = (
-            select(func.count()).select_from(KbDocumentOrm).where(KbDocumentOrm.kb_id == kb_id)
+            select(func.count()).select_from(KbDocumentOrm).where(KbDocumentOrm.kb_id == kid)
         )
         if status is not None:
             base = base.where(KbDocumentOrm.status == status)
@@ -125,8 +136,11 @@ class KbDocumentRepository(BaseRepository):
         """
         if not kb_ids:
             return []
+        ids = [i for i in (_to_int(k) for k in kb_ids) if i is not None]
+        if not ids:
+            return []
         stmt = select(KbDocumentOrm.id).where(
-            KbDocumentOrm.kb_id.in_(kb_ids),
+            KbDocumentOrm.kb_id.in_(ids),
             KbDocumentOrm.status == "indexed",
         )
         result = await self.session.execute(stmt)
@@ -141,7 +155,7 @@ class KbDocumentRepository(BaseRepository):
         stmt = (
             select(KbDocumentOrm)
             .where(
-                KbDocumentOrm.kb_id == kb_id,
+                KbDocumentOrm.kb_id == _to_int(kb_id),
                 KbDocumentOrm.content_hash == content_hash,
             )
             .limit(1)

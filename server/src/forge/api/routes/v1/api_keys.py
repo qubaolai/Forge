@@ -38,7 +38,7 @@ async def create_api_key(
     )
     return success(
         ApiKeyOut(
-            id=api_key.apikey_id,
+            id=str(api_key.id),
             name=api_key.name,
             prefix=api_key.prefix,
             raw_key=raw_key,
@@ -56,7 +56,7 @@ async def list_api_keys(
     keys = await _repo(db).list_by_user(user.id)
     items = [
         ApiKeyListItem(
-            id=k.apikey_id,
+            id=str(k.id),
             name=k.name,
             prefix=k.prefix,
             last_used_at=k.last_used_at,
@@ -75,8 +75,8 @@ async def revoke_api_key(
     user: AuthenticatedUser,
     db: DbSession,
 ):
-    """吊销 API Key（仅所有者可操作）。key_id 为业务 ID (apikey_xxx)。"""
-    api_key = await _repo(db).get_by_apikey_id(key_id)
+    """吊销 API Key（仅所有者可操作）。key_id 为雪花 ID (str(id))。"""
+    api_key = await _repo(db).get_by_id(key_id)
     if not api_key:
         raise NotFound("API Key 不存在", code=40430)
     if api_key.user_id != user.id:

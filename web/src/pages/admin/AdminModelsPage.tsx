@@ -347,7 +347,7 @@ function ModelDialog({
 }) {
   const qc = useQueryClient();
   const editing = !!model;
-  const modelDbId = model?.id ?? 0;
+  const modelDbId = model?.id ?? '';
   const [name, setName] = useState(model?.name || '');
   const [displayName, setDisplayName] = useState(model?.display_name || '');
   const [modelType, setModelType] = useState(model?.model_type || 'text');
@@ -366,7 +366,7 @@ function ModelDialog({
   const { data: latestModel, isLoading: loadingDetail } = useQuery({
     queryKey: ['admin-model-detail', modelDbId],
     queryFn: () => modelsAdminApi.detail(modelDbId),
-    enabled: editing && modelDbId > 0,
+    enabled: editing && !!modelDbId,
   });
 
   useEffect(() => {

@@ -13,10 +13,14 @@ class ApiKeyRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_by_apikey_id(self, apikey_id: str) -> UserApiKey | None:
-        """按业务 ID (apikey_xxx) 查找。"""
+    async def get_by_id(self, apikey_id: str | int) -> UserApiKey | None:
+        """按雪花 ID (str(id) 或 int) 查找。"""
+        try:
+            kid = int(apikey_id)
+        except (TypeError, ValueError):
+            return None
         res = await self.db.execute(
-            select(UserApiKey).where(UserApiKey.apikey_id == apikey_id)
+            select(UserApiKey).where(UserApiKey.id == kid)
         )
         return res.scalar_one_or_none()
 

@@ -233,7 +233,7 @@ export interface ModelEndpoint {
 
 // 供应商下的模型（管理视图）
 export interface ProviderModel {
-  id: number;
+  id: string;          // 雪花 ID 字符串 (与 model_id 同值)
   model_id: string;
   name: string;
   display_name: string;
@@ -264,7 +264,7 @@ export interface ProviderKey {
 
 // 供应商（管理视图，含模型与 Key 数量）
 export interface ProviderAdmin {
-  id: number;
+  id: string;          // 雪花 ID 字符串 (与 provider_id 同值)
   provider_id: string;
   name: string;
   impl: string;

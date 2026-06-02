@@ -8,6 +8,16 @@ from forge.infrastructure.database.orm.model_provider_orm import ProviderOrm
 from forge.infrastructure.database.orm.provider_key_orm import ProviderKeyOrm
 
 
+def _to_int(value: str | int | None) -> int | None:
+    """对外 ID (str(雪花)) → BIGINT; 非法/空返回 None。"""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class ProviderRepository:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -37,10 +47,11 @@ class ProviderRepository:
         return res.scalar_one_or_none()
 
     async def get_by_provider_id(self, provider_id: str) -> ProviderOrm | None:
-        res = await self.db.execute(
-            select(ProviderOrm).where(ProviderOrm.provider_id == provider_id)
-        )
-        return res.scalar_one_or_none()
+        """按雪花 ID (str(id) 或 int) 查找。"""
+        pid = _to_int(provider_id)
+        if pid is None:
+            return None
+        return await self.db.get(ProviderOrm, pid)
 
     async def list_enabled_keys(self, provider_db_id: int) -> list[ProviderKeyOrm]:
         res = await self.db.execute(
@@ -62,10 +73,11 @@ class ProviderRepository:
         return list(res.scalars().all())
 
     async def get_key(self, key_id: str) -> ProviderKeyOrm | None:
-        res = await self.db.execute(
-            select(ProviderKeyOrm).where(ProviderKeyOrm.key_id == key_id)
-        )
-        return res.scalar_one_or_none()
+        """按雪花 ID (str(id) 或 int) 查找。"""
+        kid = _to_int(key_id)
+        if kid is None:
+            return None
+        return await self.db.get(ProviderKeyOrm, kid)
 
     async def create_key(
         self, provider_db_id: int, *, ciphertext: str, fingerprint: str, weight: int = 1

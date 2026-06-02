@@ -59,9 +59,9 @@ context:
   digest:
     enabled: ${CONTEXT_DIGEST_ENABLED:true}
     # 单条消息超此 token 上限即在读时折叠为引用占位
-    per_message_token_cap: ${CONTEXT_DIGEST_CAP:8000}
+    per_message_token_cap: ${CONTEXT_DIGEST_CAP:6000}
     # 异步 digest 任务的最小处理阈值
-    min_tokens: ${CONTEXT_DIGEST_MIN_TOKENS:8000}
+    min_tokens: ${CONTEXT_DIGEST_MIN_TOKENS:6000}
 
 llm:
   provider: ${LLM_PROVIDER:}

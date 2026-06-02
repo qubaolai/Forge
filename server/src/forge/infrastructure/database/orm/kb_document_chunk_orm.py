@@ -5,15 +5,21 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base
 from forge.infrastructure.database.orm.mixins import BigIntPKMixin, table_args
-from forge.utils.id_generator import new_id
 
 
 class KbDocumentChunkOrm(Base, BigIntPKMixin):
+    """知识库文档父块表。
+
+    本表唯一 ID = 父块语义 chunk_id (形如 ``{doc_id}__p_x``, 由切分阶段生成),
+    它是「MySQL 父块行 ↔ 向量/BM25 条目」的关联键 (子块在向量库里以
+    parent_chunk_id 指回父块)。因此该 ID 是组合字符串, 而非雪花数值——
+    覆盖 BigIntPKMixin 的雪花 id 为 String 主键 (在 MySQL 上 BIGINT 无法承载)。
+    """
+
     __tablename__ = "kb_document_chunks"
 
-    chunk_id: Mapped[str] = mapped_column(
-        String(64), unique=True, nullable=False,
-        default=lambda: new_id("chunk"), comment="业务 ID: chunk_xxx"
+    id: Mapped[str] = mapped_column(
+        String(128), primary_key=True, comment="父块语义 ID: {doc_id}__p_x"
     )
     document_id: Mapped[int] = mapped_column(
         BigInteger, nullable=False, comment="→ kb_documents.id (应用层引用, 无 FK)"
@@ -32,10 +38,6 @@ class KbDocumentChunkOrm(Base, BigIntPKMixin):
     )
     extra: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="元数据")
     token_count: Mapped[int] = mapped_column(default=0, nullable=False, comment="估算 token 数")
-
-    @property
-    def business_id(self) -> str:
-        return self.chunk_id
 
     __table_args__ = table_args(
         Index("ix_chunks_doc_seq", "document_id", "seq"),

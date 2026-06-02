@@ -3,6 +3,7 @@
 .env.dev
 .env.test
 .env.prod
+.vscode/
 
 # Python
 __pycache__/

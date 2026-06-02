@@ -49,7 +49,7 @@ async def list_providers(db: DbSession, model_cache=Depends(get_model_cache)):
     providers = await repo.list_all()
     return success([
         {
-            "id": p.id,
+            "id": str(p.id),
             "name": p.name,
             "impl": p.impl or p.name,
             "is_enabled": bool(p.is_enabled),

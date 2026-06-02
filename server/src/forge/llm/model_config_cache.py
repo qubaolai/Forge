@@ -102,7 +102,7 @@ class ModelConfigCache:
             providers_data[provider.name] = json.dumps(
                 {
                     "name": provider.name,
-                    "provider_id": provider.provider_id,
+                    "provider_id": str(provider.id),
                     "db_id": provider.id,
                     "impl": provider.impl or provider.name,
                     "base_url": provider.base_url,
@@ -139,7 +139,7 @@ class ModelConfigCache:
             for model in models:
                 model_json = json.dumps(
                     {
-                        "model_id": model.model_id,
+                        "model_id": str(model.id),
                         "name": model.name,
                         "display_name": model.display_name,
                         "model_type": model.model_type,

@@ -99,7 +99,7 @@ async def list_models(
             models = [
                 _to_model_info(
                     {
-                        "model_id": m.model_id,
+                        "model_id": str(m.id),
                         "name": m.name,
                         "display_name": m.display_name,
                         "model_type": m.model_type,

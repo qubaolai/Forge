@@ -5,15 +5,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base
 from forge.infrastructure.database.orm.mixins import BigIntPKMixin, table_args
-from forge.utils.id_generator import new_id
 
 
 class ChatMessageOrm(Base, BigIntPKMixin):
+    """聊天消息表。id 为雪花主键, 即对外唯一消息 ID (str(id))。"""
+
     __tablename__ = "chat_messages"
 
-    message_id: Mapped[str] = mapped_column(
-        String(40), unique=True, nullable=False, default=lambda: new_id("msg"), comment="业务ID: msg_xxx"
-    )
     session_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="→ chat_sessions.id")
     role: Mapped[str] = mapped_column(String(16), nullable=False, comment="user / assistant / system")
     content: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="消息文本")

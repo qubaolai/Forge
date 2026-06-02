@@ -85,7 +85,7 @@ async def update_user(user_id: str, body: UserUpdateIn, admin: AdminUser, repo: 
 
 @router.delete("/{user_id}")
 async def delete_user(user_id: str, admin: AdminUser, repo: UserRepoDep):
-    if user_id == admin.id:
+    if user_id == str(admin.id):
         raise BadRequest("不能删除自己", code=40002)
     user = await repo.get_by_id(user_id)
     if not user:

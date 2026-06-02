@@ -70,7 +70,7 @@ class ModelUpdateIn(BaseModel):
 
 # ---- 供应商 ----
 class ProviderOut(BaseModel):
-    id: int
+    id: str
     provider_id: str
     name: str
     impl: str = ""

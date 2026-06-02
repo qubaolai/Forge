@@ -5,25 +5,17 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base
 from forge.infrastructure.database.orm.mixins import BigIntPKMixin, table_args
-from forge.utils.id_generator import new_id
 
 
 class UserOrm(Base, BigIntPKMixin):
     """用户账号表 — 系统登录主体。
 
-    id         BIGINT Snowflake 主键 (内部 join 用)
-    user_id    VARCHAR 业务 ID (外部引用, 如 JWT sub)
+    id 为雪花主键, 既是内部 join 用也是对外唯一 ID (JWT sub 即 str(id))。
+    不再维护单独的业务前缀 ID。
     """
 
     __tablename__ = "users"
 
-    user_id: Mapped[str] = mapped_column(
-        String(40),
-        unique=True,
-        nullable=False,
-        default=lambda: new_id("user"),
-        comment="业务 ID, 形如 user_xxx",
-    )
     email: Mapped[str] = mapped_column(
         String(255), unique=True, nullable=False, comment="登录邮箱, 唯一"
     )
@@ -38,9 +30,9 @@ class UserOrm(Base, BigIntPKMixin):
     password_hash: Mapped[str] = mapped_column(Text, nullable=False, comment="bcrypt 哈希后的密码")
 
     @property
-    def business_id(self) -> str:
-        """对外使用的业务 ID (user_xxx)。"""
-        return self.user_id
+    def user_id(self) -> str:
+        """对外唯一 ID = 雪花主键的字符串形式 (列已删除, 此处为只读便捷访问)。"""
+        return str(self.id)
 
     __table_args__ = table_args(
         Index("ix_users_email", "email"),

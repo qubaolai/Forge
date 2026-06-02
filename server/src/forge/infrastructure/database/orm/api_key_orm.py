@@ -7,24 +7,17 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base
 from forge.infrastructure.database.orm.mixins import BigIntPKMixin, table_args
-from forge.utils.id_generator import new_id
 
 
 class UserApiKey(Base, BigIntPKMixin):
     """用户 API Key 表 — 用于 CLI / 第三方工具远程认证。
 
+    id 为雪花主键, 即对外唯一 ID。
     user_id 引用 users.id (BIGINT)，应用层维护引用完整性，无 FK 约束。
     """
 
     __tablename__ = "user_api_keys"
 
-    apikey_id: Mapped[str] = mapped_column(
-        String(40),
-        unique=True,
-        nullable=False,
-        default=lambda: new_id("apikey"),
-        comment="业务 ID，形如 apikey_xxx",
-    )
     user_id: Mapped[int] = mapped_column(
         BigInteger, nullable=False, comment="→ users.id (应用层引用, 无 FK)"
     )

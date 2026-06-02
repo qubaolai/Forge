@@ -30,6 +30,16 @@ from forge.memory.base import MemoryStoreError, Summary
 logger = logging.getLogger(__name__)
 
 
+def _to_int(value: str | int | None) -> int | None:
+    """对外 ID (str(雪花)) → BIGINT; 非法/空返回 None。"""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class SummaryStore:
     """会话摘要持久化. 长寿单例, 并发安全 (每方法自有 session)."""
 
@@ -52,7 +62,7 @@ class SummaryStore:
         """
         try:
             async with self._factory() as db:
-                stmt = select(SessionSummaryOrm).where(SessionSummaryOrm.session_id == session_id)
+                stmt = select(SessionSummaryOrm).where(SessionSummaryOrm.session_id == _to_int(session_id))
                 if workspace_id is not None:
                     stmt = stmt.where(SessionSummaryOrm.workspace_id == workspace_id)
                 row = (await db.execute(stmt)).scalar_one_or_none()
@@ -89,10 +99,10 @@ class SummaryStore:
                 # MySQL ON DUPLICATE KEY UPDATE: 不存在 -> INSERT (version=1);
                 # 存在 -> UPDATE 内容并 version+1. 一句完成原子 upsert.
                 stmt = mysql_insert(SessionSummaryOrm).values(
-                    session_id=session_id,
+                    session_id=_to_int(session_id),
                     workspace_id=workspace_id,
                     content=content,
-                    covered_until_message_id=covered_until_message_id,
+                    covered_until_message_id=_to_int(covered_until_message_id),
                     token_count=token_count,
                     version=1,
                 )
@@ -108,7 +118,7 @@ class SummaryStore:
 
                 # 回查最终行 (拿到 server 端 version / updated_at)
                 select_stmt = select(SessionSummaryOrm).where(
-                    SessionSummaryOrm.session_id == session_id
+                    SessionSummaryOrm.session_id == _to_int(session_id)
                 )
                 if workspace_id is not None:
                     select_stmt = select_stmt.where(SessionSummaryOrm.workspace_id == workspace_id)
@@ -129,7 +139,7 @@ class SummaryStore:
     ) -> None:
         try:
             async with self._factory() as db:
-                stmt = delete(SessionSummaryOrm).where(SessionSummaryOrm.session_id == session_id)
+                stmt = delete(SessionSummaryOrm).where(SessionSummaryOrm.session_id == _to_int(session_id))
                 if workspace_id is not None:
                     stmt = stmt.where(SessionSummaryOrm.workspace_id == workspace_id)
                 await db.execute(stmt)
@@ -141,9 +151,13 @@ class SummaryStore:
 
 def _orm_to_summary(row: SessionSummaryOrm) -> Summary:
     return Summary(
-        session_id=row.session_id,
+        session_id=str(row.session_id),
         content=row.content,
-        covered_until_message_id=row.covered_until_message_id,
+        covered_until_message_id=(
+            str(row.covered_until_message_id)
+            if row.covered_until_message_id is not None
+            else None
+        ),
         token_count=row.token_count,
         updated_at=row.updated_at or datetime.utcnow(),
         workspace_id=getattr(row, "workspace_id", None),

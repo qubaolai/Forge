@@ -20,8 +20,22 @@ from forge.infrastructure.database.orm.message_digest_orm import MessageDigestOr
 logger = logging.getLogger(__name__)
 
 
+def _to_int(value: str | int | None) -> int | None:
+    """对外 ID (str(雪花)) → BIGINT; 非法/空返回 None。"""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class DigestStore:
-    """消息 digest 持久化. 长寿单例, 并发安全 (每方法自有 session)."""
+    """消息 digest 持久化. 长寿单例, 并发安全 (每方法自有 session).
+
+    对外 API 以 str(雪花) 表示 message_id / session_id (与消息视图一致),
+    内部按 BIGINT 列读写。
+    """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._factory = session_factory
@@ -32,11 +46,11 @@ class DigestStore:
     async def get(self, message_id: str) -> DigestRecord | None:
         """取单条 done 状态的 digest; 无 / 未完成返回 None。"""
         records = await self.batch_get([message_id])
-        return records.get(message_id)
+        return records.get(str(message_id))
 
     async def batch_get(self, message_ids: list[str]) -> dict[str, DigestRecord]:
         """批量取 done 状态的 digest. 失败时返回空 dict (软降级, 不抛)。"""
-        ids = [m for m in message_ids if m]
+        ids = [i for i in (_to_int(m) for m in message_ids) if i is not None]
         if not ids:
             return {}
         try:
@@ -49,17 +63,17 @@ class DigestStore:
         except SQLAlchemyError as exc:  # noqa: BLE001
             logger.warning("DigestStore.batch_get 失败: %s", exc)
             return {}
-        return {row.message_id: _orm_to_record(row) for row in rows}
+        return {str(row.message_id): _orm_to_record(row) for row in rows}
 
     async def get_meta(self, message_id: str) -> tuple[str, str] | None:
         """取 (source_hash, status), 供异步 task 判 stale / 幂等。无则 None。"""
-        return (await self.batch_get_meta([message_id])).get(message_id)
+        return (await self.batch_get_meta([message_id])).get(str(message_id))
 
     async def batch_get_meta(
         self, message_ids: list[str]
     ) -> dict[str, tuple[str, str]]:
         """批量取 {message_id: (source_hash, status)}, 一次 IN 查询。失败返回空 dict。"""
-        ids = [m for m in message_ids if m]
+        ids = [i for i in (_to_int(m) for m in message_ids) if i is not None]
         if not ids:
             return {}
         try:
@@ -73,7 +87,7 @@ class DigestStore:
         except SQLAlchemyError as exc:  # noqa: BLE001
             logger.warning("DigestStore.batch_get_meta 失败: %s", exc)
             return {}
-        return {r[0]: (r[1] or "", r[2] or "") for r in rows}
+        return {str(r[0]): (r[1] or "", r[2] or "") for r in rows}
 
     # ------------------------------------------------------------------
     # 写: 按 message_id upsert (select-then-write, 跨方言)
@@ -90,20 +104,22 @@ class DigestStore:
         status: str = "done",
     ) -> None:
         seg_payload = [_segment_to_dict(s) for s in segments]
+        mid = _to_int(message_id)
+        sid = _to_int(session_id)
         try:
             async with self._factory() as db:
                 existing = (
                     await db.execute(
                         select(MessageDigestOrm).where(
-                            MessageDigestOrm.message_id == message_id
+                            MessageDigestOrm.message_id == mid
                         )
                     )
                 ).scalar_one_or_none()
                 if existing is None:
                     db.add(
                         MessageDigestOrm(
-                            message_id=message_id,
-                            session_id=session_id,
+                            message_id=mid,
+                            session_id=sid,
                             segments=seg_payload,
                             total_tokens=total_tokens,
                             source_hash=source_hash,
@@ -112,7 +128,7 @@ class DigestStore:
                         )
                     )
                 else:
-                    existing.session_id = session_id
+                    existing.session_id = sid
                     existing.segments = seg_payload
                     existing.total_tokens = total_tokens
                     existing.source_hash = source_hash

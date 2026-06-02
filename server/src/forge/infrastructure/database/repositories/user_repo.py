@@ -3,7 +3,7 @@
 约定:
 - 只做数据访问,不调用其他层、不写业务规则
 - 只 flush 不 commit,事务边界由 get_db 控制
-- get_by_id 接收业务 ID (user_xxx), 非 BIGINT 主键
+- ID 统一为雪花主键; get_by_id 接收其字符串形式 (str(id))
 """
 
 from collections.abc import Sequence
@@ -18,19 +18,32 @@ from forge.core.security import hash_password
 from forge.infrastructure.database.orm.user_orm import UserOrm
 
 
+def _to_int(value: str | int | None) -> int | None:
+    """把对外 ID (str(雪花)) 解析为 BIGINT; 非法/空返回 None。"""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class UserRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_by_id(self, business_id: str) -> UserOrm | None:
-        """按业务 ID (user_xxx) 查找。"""
+    async def get_by_id(self, user_id: str | int) -> UserOrm | None:
+        """按雪花 ID (str(id) 或 int) 查找。"""
+        uid = _to_int(user_id)
+        if uid is None:
+            return None
         res = await self.db.execute(
-            select(UserOrm).where(UserOrm.user_id == business_id)
+            select(UserOrm).where(UserOrm.id == uid)
         )
         return res.scalar_one_or_none()
 
     async def get_by_db_id(self, db_id: int) -> UserOrm | None:
-        """按 BIGINT 主键查找。"""
+        """按 BIGINT 主键查找 (与 get_by_id 等价, 保留兼容调用)。"""
         res = await self.db.execute(
             select(UserOrm).where(UserOrm.id == db_id)
         )
@@ -40,12 +53,13 @@ class UserRepository:
         res = await self.db.execute(select(UserOrm).where(UserOrm.email == email))
         return res.scalar_one_or_none()
 
-    async def get_by_ids(self, business_ids: list[str]) -> Sequence[UserOrm]:
-        """按业务 ID 批量查找。"""
-        if not business_ids:
+    async def get_by_ids(self, user_ids: list[str]) -> Sequence[UserOrm]:
+        """按雪花 ID 批量查找。"""
+        ids = [i for i in (_to_int(x) for x in user_ids) if i is not None]
+        if not ids:
             return []
         res = await self.db.execute(
-            select(UserOrm).where(UserOrm.user_id.in_(business_ids))
+            select(UserOrm).where(UserOrm.id.in_(ids))
         )
         return res.scalars().all()
 

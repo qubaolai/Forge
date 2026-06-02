@@ -1,6 +1,6 @@
 """ChatSession 仓储 — MySQL 实现 SessionStore Protocol。
 
-会话 ID 使用业务 ID (sess_xxx)。user_id 列存储用户业务 ID (user_xxx)。
+会话 ID 与 user_id 均为雪花 ID; 对外以字符串 (str(id)) 暴露, 内部按 BIGINT 查询。
 """
 
 from collections.abc import Sequence
@@ -13,6 +13,16 @@ from forge.infrastructure.database.orm.chat_session_orm import ChatSessionOrm
 from forge.infrastructure.storage.data_protocols import SessionView
 
 
+def _to_int(value: str | int | None) -> int | None:
+    """把对外 ID (str(雪花)) 解析为 BIGINT; 非法/空返回 None。"""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class ChatSessionRepository:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -20,13 +30,16 @@ class ChatSessionRepository:
     async def list_by_user(
         self, user_id: str, page: int, page_size: int, q: str = ""
     ) -> tuple[Sequence[SessionView], int]:
+        uid = _to_int(user_id)
+        if uid is None:
+            return [], 0
         stmt = select(ChatSessionOrm).where(
             ChatSessionOrm.status == "active",
-            ChatSessionOrm.user_id == user_id,
+            ChatSessionOrm.user_id == uid,
         )
         cnt = select(func.count(ChatSessionOrm.id)).where(
             ChatSessionOrm.status == "active",
-            ChatSessionOrm.user_id == user_id,
+            ChatSessionOrm.user_id == uid,
         )
         if q:
             stmt = stmt.where(ChatSessionOrm.title.contains(q))
@@ -39,14 +52,17 @@ class ChatSessionRepository:
         return [self._to_view(s) for s in items], total
 
     async def get_by_id(self, session_id: str) -> SessionView | None:
+        sid = _to_int(session_id)
+        if sid is None:
+            return None
         res = await self.db.execute(
-            select(ChatSessionOrm).where(ChatSessionOrm.session_id == session_id)
+            select(ChatSessionOrm).where(ChatSessionOrm.id == sid)
         )
         row = res.scalar_one_or_none()
         return self._to_view(row) if row else None
 
     async def create(self, *, user_id: str, title: str | None = None) -> SessionView:
-        row = ChatSessionOrm(user_id=user_id, title=title or "")
+        row = ChatSessionOrm(user_id=_to_int(user_id), title=title or "")
         self.db.add(row)
         await self.db.flush()
         await self.db.refresh(row)
@@ -55,7 +71,7 @@ class ChatSessionRepository:
     async def update_title(self, session: SessionView, title: str) -> SessionView:
         await self.db.execute(
             update(ChatSessionOrm)
-            .where(ChatSessionOrm.session_id == session.id)
+            .where(ChatSessionOrm.id == _to_int(session.id))
             .values(title=title, updated_at=datetime.now(UTC))
         )
         await self.db.flush()
@@ -64,7 +80,7 @@ class ChatSessionRepository:
     async def delete(self, session: SessionView) -> None:
         await self.db.execute(
             update(ChatSessionOrm)
-            .where(ChatSessionOrm.session_id == session.id)
+            .where(ChatSessionOrm.id == _to_int(session.id))
             .values(status="deleted", updated_at=datetime.now(UTC))
         )
         await self.db.flush()
@@ -72,8 +88,8 @@ class ChatSessionRepository:
     @staticmethod
     def _to_view(row: ChatSessionOrm) -> SessionView:
         return SessionView(
-            id=row.session_id,
-            user_id=row.user_id,
+            id=str(row.id),
+            user_id=str(row.user_id),
             agent_id="",
             title=row.title,
             message_count=0,

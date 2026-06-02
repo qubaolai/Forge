@@ -71,7 +71,7 @@ class KbService:
             name=name,
             description=description,
             visibility=visibility,
-            owner_id=user_id,
+            owner_id=int(user_id),
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             embedding_model="",
@@ -202,7 +202,7 @@ class KbService:
 
         # 1. 落 DB 行 (pending), 拿 doc_id
         doc = KbDocumentOrm(
-            kb_id=kb_id,
+            kb_id=int(kb_id),
             name=filename,
             source="upload",
             mime_type=mime_type or "application/octet-stream",

@@ -25,6 +25,16 @@ from forge.infrastructure.database.repositories.base import BaseRepository
 logger = logging.getLogger(__name__)
 
 
+def _to_int(value: str | int | None) -> int | None:
+    """对外 ID (str(雪花)) → BIGINT; 非法/空返回 None。"""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class KnowledgeBaseRepository(BaseRepository):
     """知识库 CRUD + 按名/权限查询."""
 
@@ -41,12 +51,12 @@ class KnowledgeBaseRepository(BaseRepository):
         return kb
 
     async def get(self, kb_id: str) -> KnowledgeBaseOrm | None:
-        return await self.session.get(KnowledgeBaseOrm, kb_id)
+        return await self.session.get(KnowledgeBaseOrm, _to_int(kb_id))
 
     async def get_owned(self, kb_id: str, user_id: str) -> KnowledgeBaseOrm | None:
         """单机模式: 仅校验是否存在."""
         _ = user_id
-        return await self.session.get(KnowledgeBaseOrm, kb_id)
+        return await self.session.get(KnowledgeBaseOrm, _to_int(kb_id))
 
     async def list_for_user(self, user_id: str) -> list[KnowledgeBaseOrm]:
         """单机模式: 列出全部 KB."""
@@ -69,7 +79,7 @@ class KnowledgeBaseRepository(BaseRepository):
         size_bytes_delta: int = 0,
     ) -> None:
         """增量更新 KB 统计字段. 不 commit."""
-        kb = await self.session.get(KnowledgeBaseOrm, kb_id)
+        kb = await self.session.get(KnowledgeBaseOrm, _to_int(kb_id))
         if kb is None:
             return
         kb.document_count = max(0, (kb.document_count or 0) + document_count_delta)

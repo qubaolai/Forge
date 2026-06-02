@@ -41,7 +41,7 @@ def _svc(request: Request) -> KbService:
 
 def _kb_to_info(kb) -> KbInfo:
     return KbInfo(
-        id=kb.id,
+        id=str(kb.id),
         name=kb.name,
         description=kb.description,
         visibility=kb.visibility,
@@ -56,8 +56,8 @@ def _kb_to_info(kb) -> KbInfo:
 
 def _doc_to_info(doc) -> KbDocumentInfo:
     return KbDocumentInfo(
-        id=doc.id,
-        kb_id=doc.kb_id,
+        id=str(doc.id),
+        kb_id=str(doc.kb_id),
         name=doc.name,
         source=doc.source,
         source_url=doc.source_url,

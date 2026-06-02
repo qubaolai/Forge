@@ -5,7 +5,7 @@
 source_hash 用于判 stale (如 regenerate 重写了同一 message)。
 """
 
-from sqlalchemy import Index, Integer, JSON, String
+from sqlalchemy import BigInteger, Index, Integer, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base
@@ -15,11 +15,11 @@ from forge.infrastructure.database.orm.mixins import BigIntPKMixin, table_args
 class MessageDigestOrm(Base, BigIntPKMixin):
     __tablename__ = "message_digests"
 
-    message_id: Mapped[str] = mapped_column(
-        String(40), unique=True, nullable=False, comment="消息业务 ID (msg_xxx)"
+    message_id: Mapped[int] = mapped_column(
+        BigInteger, unique=True, nullable=False, comment="→ chat_messages.id (雪花)"
     )
-    session_id: Mapped[str | None] = mapped_column(
-        String(40), nullable=True, index=True, comment="会话业务 ID (sess_xxx)"
+    session_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, index=True, comment="→ chat_sessions.id (雪花)"
     )
     segments: Mapped[list] = mapped_column(
         JSON, nullable=False, default=list,

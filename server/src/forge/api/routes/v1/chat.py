@@ -44,7 +44,7 @@ from forge.infrastructure.database.database import get_session_factory
 from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
 from forge.infrastructure.database.repositories.chat_session_repo import ChatSessionRepository
 from forge.quota import get_usage_quota_manager
-from forge.utils.id_generator import new_id
+from forge.utils.snowflake import new_snowflake_id
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +265,6 @@ async def chat_regenerate(body: ChatRegenerateIn, user: AuthenticatedUser):
             {
                 "session_id": session.id,
                 "user_message": parent.content,
-                "new_message_id": new_id("msg"),
+                "new_message_id": str(new_snowflake_id()),
             }
         )

@@ -9,9 +9,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from forge.infrastructure.database.orm.model_orm import ModelOrm
 from forge.infrastructure.database.orm.model_provider_orm import ProviderOrm
-from forge.utils.id_generator import new_id
 
 logger = logging.getLogger(__name__)
+
+
+def _to_int(value: str | int | None) -> int | None:
+    """对外 ID (str(雪花)) → BIGINT; 非法/空返回 None。"""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class ModelRepository:
@@ -53,9 +62,11 @@ class ModelRepository:
         return res.scalar_one_or_none()
 
     async def get_by_model_id(self, model_id: str) -> ModelOrm | None:
-        stmt = select(ModelOrm).where(ModelOrm.model_id == model_id)
-        res = await self.db.execute(stmt)
-        return res.scalar_one_or_none()
+        """按雪花 ID (str(id) 或 int) 查找。"""
+        mid = _to_int(model_id)
+        if mid is None:
+            return None
+        return await self.db.get(ModelOrm, mid)
 
     async def get_by_id(self, model_db_id: int) -> ModelOrm | None:
         return await self.db.get(ModelOrm, model_db_id)
@@ -136,7 +147,6 @@ class ModelRepository:
 
         if dialect_name.startswith("mysql"):
             insert_values = {
-                "model_id": model_data.get("model_id") or new_id("mdl"),
                 "provider_id": provider_id,
                 "name": model_name,
                 "display_name": model_data.get("display_name", ""),
@@ -182,7 +192,6 @@ class ModelRepository:
             return existing, False
 
         model = ModelOrm(
-            model_id=new_id("mdl"),
             provider_id=provider_id,
             name=model_name,
             display_name=model_data.get("display_name", ""),
@@ -245,7 +254,7 @@ class ModelRepository:
                 and_(
                     ModelOrm.provider_id == model.provider_id,
                     ModelOrm.model_type == model.model_type,
-                    ModelOrm.model_id != model_id,
+                    ModelOrm.id != model.id,
                 )
             )
             .values(is_default=False)
@@ -270,7 +279,6 @@ class ModelRepository:
     async def create(self, provider_id: int, data: dict) -> ModelOrm:
         """管理端手动新增模型。"""
         model = ModelOrm(
-            model_id=new_id("mdl"),
             provider_id=provider_id,
             name=data["name"],
             display_name=data.get("display_name", ""),

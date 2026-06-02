@@ -111,7 +111,7 @@ export const providersApi = {
 
 // ---- 管理端：模型增删改查 ----
 export const modelsAdminApi = {
-  detail: (id: number) =>
+  detail: (id: string) =>
     apiClient.get<ProviderModel>(`/models/${id}`),
   create: (provider: string, payload: ModelUpsert) =>
     apiClient.post<ProviderModel>(`/providers/${provider}/models`, payload),

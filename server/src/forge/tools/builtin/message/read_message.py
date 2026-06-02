@@ -39,7 +39,7 @@ class ReadMessage(Tool):
         "properties": {
             "message_id": {
                 "type": "string",
-                "description": "消息 ID (msg_xxx), 即引用占位 [ref:msg:<id>] 中的 id",
+                "description": "消息 ID, 即引用占位 [ref:msg:<id>] 中的 id",
             },
             "line_range": {
                 "type": "array",

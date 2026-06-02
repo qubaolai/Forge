@@ -5,15 +5,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base
 from forge.infrastructure.database.orm.mixins import BigIntPKMixin, table_args
-from forge.utils.id_generator import new_id
 
 
 class ProviderKeyOrm(Base, BigIntPKMixin):
+    """供应商 API Key 表。id 为雪花主键, 即对外唯一 ID (str(id))。"""
+
     __tablename__ = "provider_keys"
 
-    key_id: Mapped[str] = mapped_column(
-        String(40), unique=True, nullable=False, default=lambda: new_id("pkey"), comment="业务ID: pkey_xxx"
-    )
     provider_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="→ providers.id")
     key_ciphertext: Mapped[str] = mapped_column(Text, nullable=False, comment="API Key (AES-256-GCM 加密)")
     key_fingerprint: Mapped[str] = mapped_column(String(12), nullable=False, comment="Key 指纹, 日志脱敏")

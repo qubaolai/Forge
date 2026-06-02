@@ -28,8 +28,8 @@ def _key_fingerprint(api_key: str) -> str:
 
 def _model_to_dict(model) -> dict:
     return {
-        "id": model.id,
-        "model_id": model.model_id,
+        "id": str(model.id),
+        "model_id": str(model.id),
         "name": model.name,
         "display_name": model.display_name,
         "model_type": model.model_type,
@@ -50,7 +50,7 @@ def _model_to_dict(model) -> dict:
 def _key_to_dict(key) -> dict:
     """脱敏 Key 视图（绝不含明文/密文）。"""
     return {
-        "key_id": key.key_id,
+        "key_id": str(key.id),
         "key_fingerprint": key.key_fingerprint,
         "is_enabled": bool(key.is_enabled),
         "weight": key.weight,
@@ -85,8 +85,8 @@ class AdminModelService:
             models = await model_repo.list_by_provider(p.id, enabled_only=False)
             keys = await provider_repo.list_keys(p.id)
             result.append({
-                "id": p.id,
-                "provider_id": p.provider_id,
+                "id": str(p.id),
+                "provider_id": str(p.id),
                 "name": p.name,
                 "impl": p.impl,
                 "base_url": p.base_url,
@@ -97,8 +97,8 @@ class AdminModelService:
                 "model_count": len(models),
                 "models": [
                     {
-                        "id": m.id,
-                        "model_id": m.model_id,
+                        "id": str(m.id),
+                        "model_id": str(m.id),
                         "name": m.name,
                         "display_name": m.display_name,
                         "model_type": m.model_type,

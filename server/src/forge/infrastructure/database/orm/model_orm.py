@@ -7,15 +7,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base
 from forge.infrastructure.database.orm.mixins import BigIntPKMixin, table_args
-from forge.utils.id_generator import new_id
 
 
 class ModelOrm(Base, BigIntPKMixin):
+    """模型信息表。id 为雪花主键, 即对外唯一 ID (str(id))。"""
+
     __tablename__ = "models"
 
-    model_id: Mapped[str] = mapped_column(
-        String(40), unique=True, nullable=False, default=lambda: new_id("mdl"), comment="业务ID: mdl_xxx"
-    )
     provider_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="→ providers.id")
     name: Mapped[str] = mapped_column(String(128), nullable=False, comment="模型名: gpt-4o / qwen-plus / text-embedding-v3")
     display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", comment="展示名")

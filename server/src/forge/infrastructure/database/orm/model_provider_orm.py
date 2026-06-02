@@ -5,15 +5,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base
 from forge.infrastructure.database.orm.mixins import BigIntPKMixin, table_args
-from forge.utils.id_generator import new_id
 
 
 class ProviderOrm(Base, BigIntPKMixin):
+    """LLM 供应商表。id 为雪花主键, 即对外唯一 ID (str(id))。"""
+
     __tablename__ = "providers"
 
-    provider_id: Mapped[str] = mapped_column(
-        String(40), unique=True, nullable=False, default=lambda: new_id("prov"), comment="业务ID: prov_xxx"
-    )
     name: Mapped[str] = mapped_column(String(64), nullable=False, comment="anthropic / openai / deepseek / dashscope")
     impl: Mapped[str] = mapped_column(String(64), nullable=True, comment="SDK 实现类名")
     base_url: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="API 地址, NULL=官方默认")
