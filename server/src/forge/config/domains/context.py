@@ -45,10 +45,9 @@ class ContextSemanticRecallSettings(BaseSettings):
     """语义历史召回配置 (HybridFilter 的早期轮次按语义相似度过滤).
 
     默认关闭: 启用后每轮要对当前问题做一次 query embedding + 读消息向量缓存,
-    有额外延迟/成本, 故 opt-in。关闭时 HybridFilter 走 NullScorer (= 仅近期锚点保留,
-    等价 RecentFilter 行为), 与改动前完全一致。
+    有额外延迟/成本, 故 opt-in。关闭时 HybridFilter 不做语义过滤, 历史原样保留。
 
-    依赖: 需配置 semantic_history_embedding 系统模型绑定；不可用时整体降级 RecentFilter。
+    依赖: 需配置 semantic_history_embedding 系统模型绑定；不可用时保留全部历史。
     """
     model_config = SettingsConfigDict(extra="ignore")
 

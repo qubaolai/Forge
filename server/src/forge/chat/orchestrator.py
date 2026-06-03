@@ -23,12 +23,13 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import replace
+from datetime import datetime
 
 from forge.agents.base import AgentEvent
 from forge.agents.profiles import get_agent_profile
 from forge.api.schemas.chat import ChatCompletionIn
-from forge.chat.assembler import ContextAssembler
 from forge.chat.finalizer import TurnFinalizer
+from forge.chat.kb_resolver import fetch_kb_list
 from forge.chat.preparer import TurnPreparer
 from forge.chat.resumer import ResumeError, TurnResumer
 from forge.chat.runner import ReActRunner
@@ -42,12 +43,29 @@ from forge.chat.turn_run import (
 )
 from forge.chat.types import ResumeState, TurnContext
 from forge.config.settings import get_settings
+from forge.context_mgmt.builder.factory import build_context_builder
+from forge.context_mgmt.compaction.controller import CompactionController
+from forge.context_mgmt.compaction.strategies.summary import SummaryCompaction
+from forge.context_mgmt.compaction.trigger.threshold import ThresholdTrigger
+from forge.context_mgmt.manager import ContextManager
+from forge.context_mgmt.memory_factory import get_memory_store
+from forge.context_mgmt.types import (
+    CompactionResult,
+    ContextMode,
+    ContextRequest,
+    ContextSnapshot,
+)
 from forge.core.content_merge import ResumeStreamDedup
 from forge.core.request_context import set_trace_id, set_user_id
 from forge.core.types.message import Message, ToolCall
+from forge.infrastructure.database.database import get_session_factory
+from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
 from forge.llm import GatewayBinding, GatewayLLMAdapter, get_llm_gateway
+from forge.prompts import get_registry
 
 logger = logging.getLogger(__name__)
+
+_CHAT_SYSTEM_TEMPLATE = "chat/default_system"
 
 
 def _status_from_finish_reason(finish_reason: str) -> str:
@@ -91,9 +109,9 @@ class TurnOrchestrator:
     实际执行逻辑跑在 ChatTurnRun 的背景 task 里.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, context_manager: ContextManager) -> None:
         self._preparer = TurnPreparer()
-        self._assembler = ContextAssembler()
+        self._context_manager = context_manager
         self._finalizer = TurnFinalizer()
         self._resumer = TurnResumer()
 
@@ -225,31 +243,51 @@ class TurnOrchestrator:
             await run.emit(ev.to_dict())
 
         # 2. context 组装 + 主动压缩
-        snapshot, system_prompt = await self._assembler.assemble(ctx)
-        if self._assembler.should_compact(snapshot, ctx):
-            pre_tokens = snapshot.usage.total_input_tokens
+        request = ContextRequest(
+            user_id=ctx.user_id,
+            session_id=ctx.session_id,
+            current_user_message=ctx.current_user_message,
+            mode=ContextMode.CHAT,
+            system_prompt_vars={"user_name": ctx.user_name},
+            context_window=ctx.context_window,
+            exclude_message_ids=tuple(ctx.exclude_message_ids),
+        )
+
+        async def on_compaction_started(pre_snapshot: ContextSnapshot) -> None:
             trigger_reason = (
                 "history_truncated"
-                if snapshot.history_messages_dropped > 0
+                if pre_snapshot.history_messages_dropped > 0
                 else "approaching_window"
             )
             await run.emit({
                 "type": "compaction_started",
                 "reason": trigger_reason,
-                "estimated_tokens": pre_tokens,
+                "estimated_tokens": pre_snapshot.usage.total_input_tokens,
                 "context_window": ctx.context_window,
             })
-            snapshot, system_prompt, tokens_saved = (
-                await self._assembler.compact_and_reassemble(ctx, snapshot)
-            )
-            compaction_ok = "compaction_failed" not in snapshot.degraded
+
+        async def on_compaction_done(
+            result: CompactionResult,
+            final_snapshot: ContextSnapshot,
+        ) -> None:
             await run.emit({
                 "type": "compaction_done",
-                "tokens_saved": tokens_saved,
-                "estimated_tokens": snapshot.usage.total_input_tokens,
-                "rebuild_count": snapshot.rebuild_count,
-                "ok": compaction_ok,
+                "tokens_saved": result.tokens_saved,
+                "estimated_tokens": final_snapshot.usage.total_input_tokens,
+                "rebuild_count": final_snapshot.rebuild_count,
+                "ok": result.success,
             })
+
+        try:
+            allow_compaction = get_settings().memory.enabled
+        except Exception:  # noqa: BLE001
+            allow_compaction = False
+        snapshot = await self._context_manager.build(
+            request,
+            allow_compaction=allow_compaction,
+            on_compaction_started=on_compaction_started,
+            on_compaction_done=on_compaction_done,
+        )
 
         # 2.5 上下文占用快照 (分层) -- 复用组装产物, 不触发额外计算
         await run.emit(_context_usage_event(snapshot))
@@ -257,7 +295,7 @@ class TurnOrchestrator:
         # 3. 跑 agent
         runner = await self._setup_runner(
             ctx.agent_mode,
-            system_prompt,
+            snapshot.rendered_system_prompt,
             body.model_options.model_dump(),
             user_id=ctx.user_id,
         )
@@ -313,13 +351,25 @@ class TurnOrchestrator:
                 ),
             )
 
-        snapshot, system_prompt = await self._assembler.assemble(ctx)
+        request = ContextRequest(
+            user_id=ctx.user_id,
+            session_id=ctx.session_id,
+            current_user_message=ctx.current_user_message,
+            mode=ContextMode.CHAT,
+            system_prompt_vars={"user_name": ctx.user_name},
+            context_window=ctx.context_window,
+            exclude_message_ids=tuple(ctx.exclude_message_ids),
+        )
+        snapshot = await self._context_manager.build(
+            request,
+            allow_compaction=False,
+        )
         await run.emit(_context_usage_event(snapshot))
         messages = _inject_partial_into_messages(snapshot.messages, prev_state)
 
         runner = await self._setup_runner(
             ctx.agent_mode,
-            system_prompt,
+            snapshot.rendered_system_prompt,
             None,
             user_id=ctx.user_id,
         )
@@ -459,7 +509,56 @@ def _dicts_to_tool_calls(records: list[dict]) -> list[ToolCall]:
 # 工厂 + 兼容导出
 # ---------------------------------------------------------------------------
 def build_turn_orchestrator() -> TurnOrchestrator:
-    return TurnOrchestrator()
+    async def build_once(request: ContextRequest) -> ContextSnapshot:
+        from forge.chat.tools import resolve_chat_tools
+
+        tools_meta = [
+            {"name": tool.name, "description": tool.description}
+            for tool in resolve_chat_tools(get_settings())
+        ]
+        kb_list = await fetch_kb_list(request.user_id)
+        system_prompt = get_registry().render(
+            _CHAT_SYSTEM_TEMPLATE,
+            user_system_prompt="",
+            user_name=str(request.system_prompt_vars.get("user_name", "")),
+            datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            tools=tools_meta,
+            kb_list=kb_list,
+        )
+        build_request = replace(request, system_prompt_override=system_prompt)
+
+        factory = get_session_factory()
+        async with factory() as db:
+            builder = build_context_builder(
+                mode=ContextMode.CHAT,
+                message_store=ChatMessageRepository(db),
+                memory_store=get_memory_store(),
+            )
+            snapshot = await builder.build(build_request)
+
+        logger.info(
+            "上下文构建完成 session=%s messages=%d est_input_tokens=%d "
+            "history_used=%d history_dropped=%d facts=%d summary=%s degraded=%s",
+            request.session_id, len(snapshot.messages),
+            snapshot.usage.total_input_tokens,
+            snapshot.history_messages_used,
+            snapshot.history_messages_dropped,
+            snapshot.facts_included,
+            snapshot.summary_included,
+            snapshot.degraded or "[]",
+        )
+        if snapshot.degraded:
+            logger.warning(
+                "上下文构建有降级 session=%s reasons=%s",
+                request.session_id, snapshot.degraded,
+            )
+        return snapshot
+
+    context_manager = ContextManager(
+        build_once,
+        CompactionController(SummaryCompaction(), ThresholdTrigger()),
+    )
+    return TurnOrchestrator(context_manager)
 
 
 # 兼容老 API: get_active_streams 返回 supervisor 的 abort_event view.

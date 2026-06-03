@@ -12,7 +12,7 @@
 │       • memory/summarize.j2
 │
 └─ [运行时] 每次请求调用 get_registry().render(...)
-    ├─ ContextAssembler._render_system_prompt()
+    ├─ chat.build_turn_orchestrator() 中的 build_once
     │   → render("chat/default_system", agent_name=..., datetime=...)     # 每次 turn
     ├─ ReActAgent._default_system_prompt()
     │   → render("react/system")                                         # 首次懒加载，后续缓存
@@ -28,12 +28,12 @@
 - 不支持热重载，改模板需重启服务（有意为之，版本跟 git 走）
 
 
-### 变量传值时机：**每次请求，在 `ContextAssembler._render_system_prompt()` 中**
+### 变量传值时机：**每次上下文构建，在 Chat 的 `build_once` 中**
 
 模板中的变量，来源各不相同：
 
 ```
-prompts/chat/default_system.j2          assembler.py:238-244 传参
+prompts/chat/default_system.j2          orchestrator.py 的 build_once 传参
 ┌──────────────────────────────┐        ┌──────────────────────────────────────┐
 │ {{ agent_name }}             │ ←────  │ agent.name(已删除)                    │
 │ {{ user_name }}              │ ←────  │ ctx.user_name                        │
@@ -72,10 +72,10 @@ orchestrator.py:100-108
   │
   ▼
 orchestrator.py:124-126
-  build_result, system_prompt = assembler.assemble(ctx, agent_snapshot)
+  snapshot = context_manager.build(request)
   │
   ▼
-assembler.py:_render_system_prompt()
+orchestrator.py:build_turn_orchestrator() 内的 build_once
   │
   │  ★ 在这里填充变量 ★
   │
@@ -94,7 +94,7 @@ jinja2 模板引擎替换 {{ }} → 返回最终 system prompt 字符串
 ### 关键点
 
 - **`agent.name` / `agent.system_prompt`**：来自 **DB `agents` 表**，在 `TurnPreparer.prepare()` 中查询并打包进 `_AgentSnapshot`
-- **`user_name`**：来自 **JWT token**，`api/dependencies.py` 中 `CurrentUser` 依赖注入解析，经路由层 → orchestrator → preparer → TurnContext → assembler
+- **`user_name`**：来自 **JWT token**，`api/dependencies.py` 中 `CurrentUser` 依赖注入解析，经路由层 → orchestrator → preparer → TurnContext → ContextRequest
 - **`datetime`**：**请求时刻**的系统时间（非模板编译时），每次 render 都取最新值
 - **`tools`**：当前硬编码 `[]`，CLA.md 注明 "待工具元数据统一访问点" 后接入
 - **`user_system_prompt`**：以**纯文本变量**注入，不会被 Jinja2 二次解析（`autoescape=False` + 直接作为变量值，防模板注入）

@@ -36,6 +36,7 @@ class FakeRow:
     id: str
     role: str
     content: str
+    parent_id: str | None = None
 
 
 class FakeRepo:
@@ -185,6 +186,35 @@ async def test_filter_non_chat_rows(counter):
     contents = [m.content for m in snap.messages]
     assert "ignored" not in contents
     assert "" not in contents[1:]  # 除 system 外无空内容
+
+
+def test_history_rows_group_user_and_assistant_into_same_turn():
+    from forge.context_mgmt.providers.history import HistoryProvider
+
+    rows = [
+        FakeRow("u1", "user", "Q1"),
+        FakeRow("a1", "assistant", "A1", parent_id="u1"),
+        FakeRow("u2", "user", "Q2"),
+        FakeRow("a2", "assistant", "A2", parent_id="u2"),
+    ]
+
+    messages = HistoryProvider._rows_to_history_messages(rows, set())  # noqa: SLF001
+
+    assert [m.turn_index for m in messages] == [0, 0, 1, 1]
+
+
+def test_history_rows_treat_orphan_assistant_as_separate_turn():
+    from forge.context_mgmt.providers.history import HistoryProvider
+
+    rows = [
+        FakeRow("u1", "user", "Q1"),
+        FakeRow("a_orphan", "assistant", "A?"),
+        FakeRow("u2", "user", "Q2"),
+    ]
+
+    messages = HistoryProvider._rows_to_history_messages(rows, set())  # noqa: SLF001
+
+    assert [m.turn_index for m in messages] == [0, 1, 2]
 
 
 @pytest.mark.asyncio

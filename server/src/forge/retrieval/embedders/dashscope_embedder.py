@@ -1,13 +1,15 @@
 """千问 (DashScope) Embedding 实现.
 
-模型: text-embedding-v3 / text-embedding-v2 / text-embedding-v1
+模型: 由 models.name 指定, 必须匹配 DashScope TextEmbedding 端点
 SDK: dashscope (官方)
 
 config 字段 (本类 __init__ 接受, 来自数据库 embedding_model_configs):
     api_key:     必填
-    model:       默认 "text-embedding-v3"
-    dimension:   默认 1024 (v3 支持 512/768/1024/1536)
-    batch_size:  默认 25 (v3 官方上限)
+    model:       必填, 来自 models.name
+    dimension:   必填, 来自 embedding_model_configs.dimension
+    batch_size:  必填, 来自 embedding_model_configs.batch_size
+    supported_dimensions: 必填, 来自 embedding_model_configs.supported_dimensions
+    max_batch_size: 必填, 来自 embedding_model_configs.max_batch_size
     max_retries: 默认 3
     retry_backoff: 重试退避基数 (秒), 默认 1.0, 指数增长
 
@@ -42,20 +44,44 @@ _PROVIDER_NAME = "dashscope"
 class DashScopeEmbedder(Embedder):
     """阿里百炼 (DashScope) 文本向量化."""
 
-    DEFAULT_MODEL = "text-embedding-v3"
-    DEFAULT_DIMENSION = 1024
-    DEFAULT_BATCH_SIZE = 10  # v3 官方上限
-
     def __init__(self, config: dict):
         api_key = config.get("api_key")
         if not api_key:
             raise ValueError("DashScopeEmbedder 需要 config['api_key']")
+        model = config.get("model")
+        if not model:
+            raise ValueError("DashScopeEmbedder 需要 config['model']")
+        dimension = config.get("dimension")
+        if dimension is None:
+            raise ValueError("DashScopeEmbedder 需要 config['dimension']")
+        batch_size = config.get("batch_size")
+        if batch_size is None:
+            raise ValueError("DashScopeEmbedder 需要 config['batch_size']")
+        supported_dimensions = config.get("supported_dimensions")
+        if not supported_dimensions:
+            raise ValueError("DashScopeEmbedder 需要 config['supported_dimensions']")
+        max_batch_size = config.get("max_batch_size")
+        if max_batch_size is None:
+            raise ValueError("DashScopeEmbedder 需要 config['max_batch_size']")
+        if int(dimension) <= 0:
+            raise ValueError("DashScopeEmbedder config['dimension'] 必须大于 0")
+        if int(batch_size) <= 0:
+            raise ValueError("DashScopeEmbedder config['batch_size'] 必须大于 0")
+        dimensions = [int(value) for value in supported_dimensions]
+        if int(dimension) not in dimensions:
+            raise ValueError(
+                f"DashScopeEmbedder dimension={dimension} 不在 supported_dimensions={dimensions} 中"
+            )
+        if int(batch_size) > int(max_batch_size):
+            raise ValueError(
+                f"DashScopeEmbedder batch_size={batch_size} 超过 max_batch_size={max_batch_size}"
+            )
 
         # 实例级持有, 不再写 dashscope.api_key = api_key
         self._api_key: str = api_key
-        self._model: str = config.get("model", self.DEFAULT_MODEL)
-        self._dim: int = config.get("dimension", self.DEFAULT_DIMENSION)
-        self._batch_size: int = config.get("batch_size", self.DEFAULT_BATCH_SIZE)
+        self._model: str = str(model)
+        self._dim: int = int(dimension)
+        self._batch_size: int = int(batch_size)
         self._max_retries: int = config.get("max_retries", 3)
         self._retry_backoff: float = config.get("retry_backoff", 1.0)
 
@@ -151,11 +177,15 @@ class DashScopeEmbedder(Embedder):
                 continue
 
             raise RuntimeError(
-                f"DashScope embedding 失败 (不可重试): "
+                f"DashScope embedding 失败 (不可重试): model={self._model}, "
+                f"text_type={text_type}, "
                 f"status={resp.status_code}, code={resp.code}, message={resp.message}"
             )
 
-        raise RuntimeError(f"DashScope embedding 重试 {self._max_retries} 次后仍失败: {last_err}")
+        raise RuntimeError(
+            f"DashScope embedding 重试 {self._max_retries} 次后仍失败: "
+            f"model={self._model}, text_type={text_type}, error={last_err}"
+        )
 
     @staticmethod
     def _should_retry(status_code: int) -> bool:

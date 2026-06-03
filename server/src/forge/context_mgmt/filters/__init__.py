@@ -1,1 +1,1 @@
-"""HistoryFilter 实现集合 (recent / semantic / hybrid / null / step_scoped)."""
+"""HistoryFilter 实现集合 (hybrid / null；step_scoped 为未接入占位)."""

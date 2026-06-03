@@ -78,6 +78,8 @@ class ModelConfigRepository:
             return {
                 "dimension": row.dimension,
                 "batch_size": row.batch_size,
+                "supported_dimensions": list(row.supported_dimensions or []),
+                "max_batch_size": row.max_batch_size,
                 "input_modalities": list(row.input_modalities or []),
                 "max_retries": row.max_retries,
                 "retry_backoff": row.retry_backoff,

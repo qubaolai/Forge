@@ -2,14 +2,14 @@
 
 两个调用方:
     1. memory.tasks.summarize._run (Celery 异步任务)
-    2. context.ContextAssembler.compact_and_reassemble (R2 inline 主动压缩)
+    2. context_mgmt.SummaryCompaction (R2 inline 主动压缩)
 
-抽出来让两边不重复, 而且 ContextAssembler 不依赖 Celery 路径.
+抽出来让两边不重复, 而且主动压缩不依赖 Celery 路径.
 
 InfrastructureError vs None 的语义:
     - 返回 None:   没历史 / 无效消息 / LLM 返回空摘要 -- 业务上正常, 不是错误
     - 抛 InfrastructureError: LLM 初始化挂 / DB upsert 挂 -- 调用方决定重试 (Celery)
-                              或降级 (ContextAssembler 用 prev 结果)
+                              或降级 (ContextManager 用压缩前结果)
 """
 
 from __future__ import annotations

@@ -4,7 +4,7 @@
     - 只保留 role in (user, assistant) 且 content 非空的消息
     - 过滤掉 exclude_message_ids
     - 不分 dialogue / tool_results, 全部归入 layer="dialogue"
-    - 应用 HistoryFilter (默认 RecentFilter, 无过滤)
+    - 应用 HistoryFilter
 
 阶段 2 扩展:
     - 拆分 tool_results 单独成 chunk
@@ -81,7 +81,7 @@ class HistoryProvider(ContentProvider):
         history_messages = self._rows_to_history_messages(rows, exclude)
         candidate_count = len(history_messages)
 
-        # 应用 HistoryFilter (阶段 1: RecentFilter 不过滤)
+        # 应用 HistoryFilter
         filtered = await self._filter.filter(
             history_messages, request.current_user_message, request.mode
         )
@@ -170,10 +170,12 @@ class HistoryProvider(ContentProvider):
         """ChatMessageView -> HistoryMessage 列表.
 
         仅保留 role in (user, assistant)、content 非空、且 status 为正常终态。
+        同一 user 消息及其 parent_id 指向该 user 的 assistant 消息共享 turn_index。
         """
         skip = HistoryProvider._SKIP_STATUSES
         out: list[HistoryMessage] = []
-        for idx, r in enumerate(rows):
+        turn_indexes: dict[str, int] = {}
+        for r in rows:
             if r.id in exclude:
                 continue
             if r.role not in ("user", "assistant"):
@@ -182,11 +184,18 @@ class HistoryProvider(ContentProvider):
                 continue
             if getattr(r, "status", None) in skip:
                 continue
+            turn_key = (
+                r.id
+                if r.role == "user"
+                else (getattr(r, "parent_id", None) or r.id)
+            )
+            if turn_key not in turn_indexes:
+                turn_indexes[turn_key] = len(turn_indexes)
             out.append(
                 HistoryMessage(
                     message=Message(role=r.role, content=r.content),
                     id=r.id,
-                    turn_index=idx,
+                    turn_index=turn_indexes[turn_key],
                     # 落库时算好的 content token 数 (存量无列时为 None, 下游回退实时算)
                     token_count=getattr(r, "token_count", None),
                 )

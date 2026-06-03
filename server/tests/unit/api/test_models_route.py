@@ -29,7 +29,12 @@ class _FakeCache:
                     "name": "anthropic-embedding-v1",
                     "display_name": "Anthropic Embedding V1",
                     "model_type": "embedding",
-                    "config": {"dimension": 1024},
+                    "config": {
+                        "dimension": 1024,
+                        "batch_size": 10,
+                        "supported_dimensions": [1024],
+                        "max_batch_size": 10,
+                    },
                 },
             ],
             "openai": [

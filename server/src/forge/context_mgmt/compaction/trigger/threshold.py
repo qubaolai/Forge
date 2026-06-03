@@ -1,6 +1,6 @@
 """ThresholdTrigger: token 使用率超阈值时触发.
 
-等价于现有 ContextAssembler.should_compact():
+默认主动压缩判定:
     - history_messages_dropped > 0 (历史被裁剪过)
     - 或 usage_ratio > threshold (默认 0.85)
 """

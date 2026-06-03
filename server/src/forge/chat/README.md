@@ -24,7 +24,6 @@ chat/
 ├── types.py            ← TurnContext (frozen 上下文) / RunResult (累计结果) / ResumeState (恢复快照)
 ├── llm_selection.py    ← build_llm_chain_for_agent: agent.model_id → LLMFallbackChain
 ├── preparer.py         ← TurnPreparer: DB 校验 + user_msg 持久化 + assistant 占位
-├── assembler.py        ← ContextAssembler: system_prompt 渲染 + ctx 构建 + 主动压缩 (R2)
 ├── runner.py           ← AgentRunner ABC + ReActRunner + mode 注册表
 ├── guards/             ← LoopGuard 框架: StepSafetyNet / StuckDetector / TokenBudget / WallClock
 ├── finalizer.py        ← TurnFinalizer: 落库 + 发终态事件 + publish turn.completed
@@ -49,13 +48,13 @@ chat/
 │                                                                    │
 │   按顺序串起 5 个角色, 在合适位置 yield 生命周期事件                  │
 └──────────────┬─────────────────────────────────────────────────────┘
-       ┌───────┴───────┬───────────┬─────────────┬─────────────┐
-       ▼               ▼           ▼             ▼             ▼
-  ┌─────────┐    ┌──────────┐ ┌─────────┐  ┌────────┐  ┌───────────┐
-  │Preparer │    │Resumer   │ │Assembler│  │Runner  │  │Finalizer  │
-  │(new turn│    │(resume   │ │(ctx 组装│  │(agent  │  │(落库+发终态│
-  │ 持久化) │    │ 加载快照)│ │ +压缩)  │  │ 循环)  │  │ +publish) │
-  └─────────┘    └──────────┘ └─────────┘  └────────┘  └───────────┘
+       ┌───────┴───────┬────────────────┬─────────────┬─────────────┐
+       ▼               ▼                ▼             ▼             ▼
+  ┌─────────┐    ┌──────────┐    ┌──────────────┐ ┌────────┐  ┌───────────┐
+  │Preparer │    │Resumer   │    │ContextManager│ │Runner  │  │Finalizer  │
+  │(new turn│    │(resume   │    │(ctx 构建     │ │(agent  │  │(落库+发终态│
+  │ 持久化) │    │ 加载快照)│    │ +压缩)       │ │ 循环)  │  │ +publish) │
+  └─────────┘    └──────────┘    └──────────────┘ └────────┘  └───────────┘
 ```
 
 ## 五个角色的契约
@@ -64,11 +63,11 @@ chat/
 |---|---|---|---|---|
 | `TurnPreparer` | ✅ 自有事务 | ❌ | user_id / message | `TurnContext` |
 | `TurnResumer` | ✅ 自有事务 | ❌ | user_id / message_id | `(TurnContext, _AgentSnapshot, ResumeState)` |
-| `ContextAssembler` | ✅ 自有事务 (内部) | ❌ | TurnContext / AgentSnapshot | `(AssembledContext, system_prompt)` |
+| `ContextManager` | ✅ 由 Chat build_once 自有事务 | ❌ | `ContextRequest` | `ContextSnapshot` |
 | `ReActRunner` | ❌ | ✅ 中间事件 (delta/tool_call/tool_result/...) | messages / abort_event | `RunResult` (累积态) |
 | `TurnFinalizer` | ✅ 自有事务 | ✅ 终态事件 (done/error/task_partial) | RunResult / BuildMeta / prev_state? | — |
 
-**每个角色都无状态**, 复用单实例; DB session 按需开关. 跟 chat 路由 / fastapi 请求 session 完全解耦, 因为 SSE 流的生命周期超出 fastapi 请求.
+DB session 由 Chat 的 `build_once` 按需开关. 跟 chat 路由 / fastapi 请求 session 完全解耦, 因为 SSE 流的生命周期超出 fastapi 请求.
 
 ## 统一入口 (S6.5 M1)
 
@@ -115,11 +114,11 @@ TurnPreparer.prepare
   ↓ 持久化 user_msg + 占位 assistant_msg, 拿到 assistant_msg_id
 yield session_created / session_renamed / message_start
   ↓
-ContextAssembler.assemble                  ← 拼 [system, ...history, <current_question>]
+ContextManager.build                       ← 拼 [system, ...history, <current_question>]
   ↓
-if should_compact:                         ← R2 主动压缩
+if ThresholdTrigger 命中:                  ← R2 主动压缩
   yield compaction_started
-  await compact_and_reassemble             ← SummaryService inline + rebuild
+  await SummaryCompaction + build_once     ← SummaryService inline + rebuild
   yield compaction_done
   ↓
 build_llm_chain_for_agent                  ← 按 agent.model_id 解析 provider/model
@@ -140,7 +139,7 @@ TurnResumer.prepare
   ↓ msg.status = "streaming" (允许 /chat/stop 重新挂上 + 拒绝并发 resume)
 yield message_resumed (注意: 不是 message_start, 前端不创建新气泡)
   ↓
-ContextAssembler.assemble                  ← ctx.current_user_message = RESUME_PROMPT
+ContextManager.build(allow_compaction=False) ← ctx.current_user_message = RESUME_PROMPT
   ↓
 _inject_partial_into_messages(...)         ← 在末尾 prompt 前插入 partial_assistant + 完成态 tool_results
   ↓ (status="running" 的 tool_call 整体丢弃, 防 LLM 报错)
@@ -246,7 +245,7 @@ aggregate: 多 guard 的 guidance 文本拼到 inject_system_messages
 |---|---|
 | 新增 agent mode (plan-execute / supervisor) | 继承 `AgentRunner` ABC 并实现抽象方法, `@register_runner("xxx")` 注册. orchestrator + 路由零改动 |
 | 新增 LoopGuard (eg "禁止某 tool 连调") | 在 `chat/guards/` 加新文件, 注册到 `runner._default_guard_factories`. ReActAgent 零改动 |
-| 修改主动压缩触发条件 | `assembler.should_compact` 这一个方法; orchestrator 不动 |
+| 修改主动压缩触发条件 | `context_mgmt/compaction/trigger/` |
 | 修改终态事件协议 | `finalizer._done_event / _error_event / _partial_event` 这一处 |
 | 加新 SSE 生命周期事件 (eg "thinking_started") | `orchestrator._lifecycle_events` (或 Runner 内部 yield) |
 | 加新触发 publish 的事件 (eg "tool.executed") | Finalizer 加 publish 调用; 业务侧通过 `infrastructure/event_bus` 订阅 |

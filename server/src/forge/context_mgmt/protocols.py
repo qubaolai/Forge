@@ -106,11 +106,8 @@ class HistoryFilter(ABC):
     """按相关性过滤历史消息.
 
     实现:
-        - RecentFilter:   返回原列表 (兜底)
-        - SemanticFilter: 按向量相似度过滤
         - HybridFilter:   近期锚点 + 语义过滤 (chat 默认)
-        - NullFilter:     返回空 (task 模式不要历史)
-        - StepScopedFilter: 只返回本 step 的消息 (workflow 模式)
+        - NullFilter:     返回原列表 (空实现)
     """
 
     @abstractmethod

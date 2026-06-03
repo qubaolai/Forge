@@ -4,81 +4,34 @@ from __future__ import annotations
 
 import pytest
 
-from forge.context_mgmt.filters.hybrid import HybridFilter
+from forge.context_mgmt.filters.hybrid import EmbeddingScorer, HybridFilter
 from forge.context_mgmt.filters.null import NullFilter
-from forge.context_mgmt.filters.recent import RecentFilter
-from forge.context_mgmt.filters.semantic import (
-    NullScorer,
-    SemanticFilter,
-)
 from forge.context_mgmt.filters.step_scoped import StepScopedFilter
 from forge.context_mgmt.types import ContextMode, HistoryMessage
 from forge.core.types.message import Message
 
 
-def _msg(turn_index: int, content: str = "x") -> HistoryMessage:
+def _msg(
+    turn_index: int,
+    content: str = "x",
+    *,
+    role: str = "user",
+    message_id: str | None = None,
+) -> HistoryMessage:
     return HistoryMessage(
-        message=Message(role="user", content=content),
-        id=f"m{turn_index}",
+        message=Message(role=role, content=content),
+        id=message_id or f"m{turn_index}",
         turn_index=turn_index,
     )
 
 
 # ---------------------------------------------------------------------------
-# RecentFilter / NullFilter
+# NullFilter
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_recent_filter_keeps_all():
+async def test_null_filter_keeps_all():
     msgs = [_msg(i) for i in range(5)]
-    out = await RecentFilter().filter(msgs, "any", ContextMode.CHAT)
-    assert out == msgs
-
-
-@pytest.mark.asyncio
-async def test_null_filter_returns_empty():
-    msgs = [_msg(i) for i in range(5)]
-    out = await NullFilter().filter(msgs, "any", ContextMode.TASK)
-    assert out == []
-
-
-# ---------------------------------------------------------------------------
-# SemanticFilter
-# ---------------------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_semantic_filter_with_null_scorer_keeps_all():
-    """NullScorer 给所有消息 1.0 分, 全部通过 min_score=0.6 阈值."""
-    msgs = [_msg(i) for i in range(3)]
-    sf = SemanticFilter(scorer=NullScorer(), min_score=0.6)
-    out = await sf.filter(msgs, "query", ContextMode.CHAT)
-    assert len(out) == 3
-
-
-@pytest.mark.asyncio
-async def test_semantic_filter_drops_low_score():
-    """得分低于阈值的被剔除."""
-
-    class _BinaryScorer:
-        async def score(self, query, messages):
-            # 偶数 turn_index 给 1.0, 奇数给 0.1
-            return [1.0 if m.turn_index % 2 == 0 else 0.1 for m in messages]
-
-    msgs = [_msg(i) for i in range(4)]
-    sf = SemanticFilter(scorer=_BinaryScorer(), min_score=0.5)
-    out = await sf.filter(msgs, "q", ContextMode.CHAT)
-    assert [m.turn_index for m in out] == [0, 2]
-
-
-@pytest.mark.asyncio
-async def test_semantic_filter_scorer_failure_fallback():
-    """Scorer 抛异常 -> 保留全部, 不向上抛."""
-
-    class _BrokenScorer:
-        async def score(self, query, messages):
-            raise RuntimeError("embedder down")
-
-    msgs = [_msg(i) for i in range(3)]
-    sf = SemanticFilter(scorer=_BrokenScorer(), min_score=0.5)
-    out = await sf.filter(msgs, "q", ContextMode.CHAT)
+    out = await NullFilter().filter(msgs, "any", ContextMode.CHAT)
     assert out == msgs
 
 
@@ -106,8 +59,6 @@ class _FakeEmbStore:
 
 @pytest.mark.asyncio
 async def test_embedding_scorer_uses_cached_vectors():
-    from forge.context_mgmt.filters.semantic import EmbeddingScorer
-
     msgs = [_msg(0), _msg(1), _msg(2)]
     # m0 与 query 同向 (1.0); m1 正交 (0.0); m2 无缓存 (保留 1.0)
     store = _FakeEmbStore({"m0": [1.0, 0.0, 0.0], "m1": [0.0, 1.0, 0.0]})
@@ -121,8 +72,6 @@ async def test_embedding_scorer_uses_cached_vectors():
 
 @pytest.mark.asyncio
 async def test_embedding_scorer_no_store_keeps_all():
-    from forge.context_mgmt.filters.semantic import EmbeddingScorer
-
     scorer = EmbeddingScorer(_FakeEmbedder(), None)
     scores = await scorer.score("q", [_msg(0), _msg(1)])
     assert scores == [1.0, 1.0]  # 无 store -> 全部保留
@@ -131,15 +80,14 @@ async def test_embedding_scorer_no_store_keeps_all():
 @pytest.mark.asyncio
 async def test_embedding_scorer_drops_irrelevant_via_hybrid():
     """EmbeddingScorer 接入 HybridFilter: 早期正交轮被剔除, 锚点保留."""
-    from forge.context_mgmt.filters.semantic import EmbeddingScorer
-
     msgs = [_msg(i) for i in range(6)]
     # 早期 m0 相关(同向), m1/m2 正交; 后 3 轮是锚点 (anchor_turns=3)
     store = _FakeEmbStore({
         "m0": [1.0, 0.0, 0.0], "m1": [0.0, 1.0, 0.0], "m2": [0.0, 1.0, 0.0],
     })
     hf = HybridFilter(
-        semantic=SemanticFilter(EmbeddingScorer(_FakeEmbedder(), store), min_score=0.5),
+        scorer=EmbeddingScorer(_FakeEmbedder(), store),
+        min_score=0.5,
         anchor_turns=3,
     )
     out = await hf.filter(msgs, "q", ContextMode.CHAT)
@@ -160,6 +108,29 @@ async def test_hybrid_keeps_all_when_below_anchor():
 
 
 @pytest.mark.asyncio
+async def test_hybrid_without_scorer_keeps_all_history():
+    """未启用语义召回时, HybridFilter 不改变历史."""
+    msgs = [_msg(i) for i in range(10)]
+    out = await HybridFilter(anchor_turns=3).filter(msgs, "q", ContextMode.CHAT)
+    assert out == msgs
+
+
+@pytest.mark.asyncio
+async def test_hybrid_scorer_failure_keeps_all_history():
+    """语义打分失败时保留全部历史, 不向上抛."""
+
+    class _BrokenScorer:
+        async def score(self, query, messages):
+            raise RuntimeError("embedder down")
+
+    msgs = [_msg(i) for i in range(10)]
+    out = await HybridFilter(scorer=_BrokenScorer()).filter(
+        msgs, "q", ContextMode.CHAT
+    )
+    assert out == msgs
+
+
+@pytest.mark.asyncio
 async def test_hybrid_keeps_anchor_turns_even_if_irrelevant():
     """最近 anchor_turns 轮无条件保留, 哪怕语义不相关."""
 
@@ -169,7 +140,8 @@ async def test_hybrid_keeps_anchor_turns_even_if_irrelevant():
 
     msgs = [_msg(i) for i in range(10)]
     hf = HybridFilter(
-        semantic=SemanticFilter(scorer=_AllZeroScorer(), min_score=0.5),
+        scorer=_AllZeroScorer(),
+        min_score=0.5,
         anchor_turns=3,
     )
     out = await hf.filter(msgs, "q", ContextMode.CHAT)
@@ -188,12 +160,61 @@ async def test_hybrid_keeps_relevant_early_turns():
 
     msgs = [_msg(i) for i in range(10)]
     hf = HybridFilter(
-        semantic=SemanticFilter(scorer=_SelectiveScorer(), min_score=0.5),
+        scorer=_SelectiveScorer(),
+        min_score=0.5,
         anchor_turns=3,
     )
     out = await hf.filter(msgs, "q", ContextMode.CHAT)
     # turn_index 2 (相关) + 7,8,9 (锚点)
     assert [m.turn_index for m in out] == [2, 7, 8, 9]
+
+
+@pytest.mark.asyncio
+async def test_hybrid_keeps_whole_turn_when_one_message_is_relevant():
+    """同轮任意消息命中语义阈值时, 问题和回答必须一起保留."""
+
+    class _AssistantOnlyScorer:
+        async def score(self, query, messages):
+            return [1.0 if m.message.role == "assistant" else 0.0 for m in messages]
+
+    early_turn = [
+        _msg(0, "Q0", role="user", message_id="u0"),
+        _msg(0, "A0", role="assistant", message_id="a0"),
+    ]
+    anchors = [_msg(i, f"Q{i}") for i in range(1, 4)]
+    hf = HybridFilter(
+        scorer=_AssistantOnlyScorer(),
+        min_score=0.5,
+        anchor_turns=3,
+    )
+
+    out = await hf.filter(early_turn + anchors, "q", ContextMode.CHAT)
+
+    assert [m.id for m in out] == ["u0", "a0", "m1", "m2", "m3"]
+
+
+@pytest.mark.asyncio
+async def test_hybrid_drops_whole_turn_when_all_messages_are_irrelevant():
+    """同轮所有消息均低于阈值时, 整轮剔除."""
+
+    class _AllZeroScorer:
+        async def score(self, query, messages):
+            return [0.0] * len(messages)
+
+    early_turn = [
+        _msg(0, "Q0", role="user", message_id="u0"),
+        _msg(0, "A0", role="assistant", message_id="a0"),
+    ]
+    anchors = [_msg(i, f"Q{i}") for i in range(1, 4)]
+    hf = HybridFilter(
+        scorer=_AllZeroScorer(),
+        min_score=0.5,
+        anchor_turns=3,
+    )
+
+    out = await hf.filter(early_turn + anchors, "q", ContextMode.CHAT)
+
+    assert [m.id for m in out] == ["m1", "m2", "m3"]
 
 
 # ---------------------------------------------------------------------------

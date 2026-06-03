@@ -58,6 +58,8 @@ async def _seed_models(db):
     embedding_config = await configs.create(embedding.id, "embedding", {
         "dimension": 8,
         "batch_size": 2,
+        "supported_dimensions": [8],
+        "max_batch_size": 2,
         "input_modalities": ["text"],
         "max_retries": 1,
         "retry_backoff": 0.1,
@@ -98,7 +100,13 @@ async def test_model_config_uses_independent_snowflake_id_and_unique_model_id(fa
         with pytest.raises(ValueError, match="不能写入 embedding 配置"):
             await ModelConfigRepository(db).create(chat.id, "embedding", {"dimension": 16})
 
-        db.add(EmbeddingModelConfigOrm(model_id=embedding.id, dimension=16))
+        db.add(EmbeddingModelConfigOrm(
+            model_id=embedding.id,
+            dimension=16,
+            batch_size=2,
+            supported_dimensions=[16],
+            max_batch_size=2,
+        ))
         with pytest.raises(IntegrityError):
             await db.flush()
 

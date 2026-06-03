@@ -72,6 +72,8 @@ _ADDITIVE_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("kb_documents", "vector_index_status", "VARCHAR(16) NOT NULL DEFAULT 'stale'"),
     ("kb_documents", "vector_index_error", "TEXT NULL"),
     ("kb_documents", "vector_indexed_at", "DATETIME NULL"),
+    ("embedding_model_configs", "supported_dimensions", "JSON NULL"),
+    ("embedding_model_configs", "max_batch_size", "INTEGER NULL"),
 )
 
 
@@ -150,10 +152,14 @@ def _migrate_model_configs(sync_conn) -> None:
                 provider_options=extra or None,
             ))
         elif model_type == "embedding" and model_id not in existing_embedding:
+            dimension = int(extra.pop("dimension", 1024))
+            batch_size = int(extra.pop("batch_size", 10))
             sync_conn.execute(EmbeddingModelConfigOrm.__table__.insert().values(
                 model_id=model_id,
-                dimension=int(extra.pop("dimension", 1024)),
-                batch_size=int(extra.pop("batch_size", 10)),
+                dimension=dimension,
+                batch_size=batch_size,
+                supported_dimensions=[dimension],
+                max_batch_size=batch_size,
                 input_modalities=["text"],
                 max_retries=int(extra.pop("max_retries", 3)),
                 retry_backoff=float(extra.pop("retry_backoff", 1.0)),
@@ -171,6 +177,22 @@ def _migrate_model_configs(sync_conn) -> None:
                 monitor_threshold=float(truncation.pop("monitor_threshold", 0.1)),
                 provider_options={**extra, **truncation} or None,
             ))
+
+    embedding_configs = sync_conn.execute(
+        select(EmbeddingModelConfigOrm.__table__)
+    ).mappings().all()
+    for row in embedding_configs:
+        values = {}
+        if not row.get("supported_dimensions"):
+            values["supported_dimensions"] = [row["dimension"]]
+        if row.get("max_batch_size") is None:
+            values["max_batch_size"] = row["batch_size"]
+        if values:
+            sync_conn.execute(
+                update(EmbeddingModelConfigOrm.__table__)
+                .where(EmbeddingModelConfigOrm.model_id == row["model_id"])
+                .values(**values)
+            )
 
     sync_conn.execute(
         update(ModelOrm.__table__).where(ModelOrm.model_type == "text").values(model_type="chat")

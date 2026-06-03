@@ -11,7 +11,6 @@ import pytest
 from forge.agents.lifecycle import AgentLifecycle, NoopLifecycle, StepContext, StepDecision
 from forge.chat.guards.base import LoopGuard
 from forge.chat.runner import AgentRunner
-from forge.context_mgmt.filters.semantic import RelevanceScorer
 from forge.context_mgmt.protocols import (
     BudgetPolicy,
     CompactionStrategy,
@@ -79,7 +78,6 @@ ABSTRACT_BASES = (
     PostMiddleware,
     PreMiddleware,
     QueryRewriter,
-    RelevanceScorer,
     RetryPolicy,
     Router,
     SessionStore,

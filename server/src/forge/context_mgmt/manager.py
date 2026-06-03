@@ -6,7 +6,7 @@
     3. get_current_usage(session_id) - 近实时查询上下文用量 (内存缓存)
 
 设计:
-    - 组合 ContextBuilder + CompactionController, 两者完全解耦
+    - 组合调用方提供的 build_once + CompactionController, 两者完全解耦
     - 维护 session_id -> ContextUsage 内存缓存, 用于近实时查询
     - 压缩流程: build → 检测触发 → 压缩 → 重建 → 用 tokens_saved 更新 snapshot
 """
@@ -14,9 +14,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
-from forge.context_mgmt.builder.context_builder import DefaultContextBuilder
 from forge.context_mgmt.compaction.controller import CompactionController
 from forge.context_mgmt.types import (
     CompactionResult,
@@ -33,32 +32,51 @@ class ContextManager:
 
     def __init__(
         self,
-        builder: DefaultContextBuilder,
+        build_once: Callable[[ContextRequest], Awaitable[ContextSnapshot]],
         compaction: CompactionController,
     ) -> None:
-        self._builder = builder
+        self._build_once = build_once
         self._compaction = compaction
         # session_id -> 最近一次 build 后的 ContextUsage (近实时查询用)
         self._usage_cache: dict[str, ContextUsage] = {}
 
-    async def build(self, request: ContextRequest) -> ContextSnapshot:
+    async def build(
+        self,
+        request: ContextRequest,
+        *,
+        allow_compaction: bool = True,
+        on_compaction_started: Callable[[ContextSnapshot], Awaitable[None]] | None = None,
+        on_compaction_done: Callable[
+            [CompactionResult, ContextSnapshot], Awaitable[None]
+        ] | None = None,
+    ) -> ContextSnapshot:
         """构建上下文, 按需触发压缩并重建.
+
+        调用方负责提供具体 build_once; ContextManager 只编排生命周期。
+        allow_compaction=False 用于 resume 等不允许主动压缩的调用。
+        回调分别在触发后执行前、压缩尝试完成后调用。
 
         所有降级都写入 snapshot.degraded, 不抛业务异常.
         """
-        snapshot = await self._builder.build(request)
+        snapshot = await self._build_once(request)
         self._usage_cache[request.session_id] = snapshot.usage
 
+        if not allow_compaction:
+            return snapshot
+
         result = await self._compaction.compact_if_needed(
-            request.session_id, snapshot
+            request.session_id,
+            snapshot,
+            on_compaction_started=on_compaction_started,
         )
         if result and result.success:
             # 压缩成功 → 重跑 builder, 用新 snapshot 替换
             pre_tokens = snapshot.usage.total_input_tokens
-            new_snapshot = await self._builder.build(request)
+            new_snapshot = await self._build_once(request)
             tokens_saved = max(
                 0, pre_tokens - new_snapshot.usage.total_input_tokens
             )
+            result.tokens_saved = tokens_saved
             new_snapshot.compaction_performed = True
             new_snapshot.compaction_token_saved = tokens_saved
             new_snapshot.rebuild_count = snapshot.rebuild_count + 1
@@ -69,9 +87,13 @@ class ContextManager:
                 request.session_id, pre_tokens,
                 new_snapshot.usage.total_input_tokens, tokens_saved,
             )
+            if on_compaction_done is not None:
+                await on_compaction_done(result, new_snapshot)
             return new_snapshot
         elif result and not result.success:
             snapshot.degraded.append("compaction_failed")
+            if on_compaction_done is not None:
+                await on_compaction_done(result, snapshot)
 
         return snapshot
 
@@ -156,4 +178,8 @@ def build_context_manager(
         compaction_trigger = ThresholdTrigger(DEFAULT_THRESHOLD)
 
     controller = CompactionController(compaction_strategy, compaction_trigger)
-    return ContextManager(builder, controller)
+
+    async def build_once(request: ContextRequest) -> ContextSnapshot:
+        return await builder.build(request)
+
+    return ContextManager(build_once, controller)

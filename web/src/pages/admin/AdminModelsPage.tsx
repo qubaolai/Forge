@@ -497,6 +497,10 @@ function ModelDialog({
   const [maxOutputTokens, setMaxOutputTokens] = useState(Number(initialConfig.max_output_tokens ?? 4096));
   const [dimension, setDimension] = useState(Number(initialConfig.dimension ?? 1024));
   const [batchSize, setBatchSize] = useState(Number(initialConfig.batch_size ?? 10));
+  const [supportedDimensionsText, setSupportedDimensionsText] = useState(
+    ((initialConfig.supported_dimensions as number[] | undefined) ?? [Number(initialConfig.dimension ?? 1024)]).join(', '),
+  );
+  const [maxBatchSize, setMaxBatchSize] = useState(Number(initialConfig.max_batch_size ?? initialConfig.batch_size ?? 10));
   const [timeoutSeconds, setTimeoutSeconds] = useState(Number(initialConfig.timeout_seconds ?? 5));
   const [maxRetries, setMaxRetries] = useState(Number(initialConfig.max_retries ?? 3));
   const [retryBackoff, setRetryBackoff] = useState(Number(initialConfig.retry_backoff ?? 1));
@@ -531,6 +535,10 @@ function ModelDialog({
     setMaxOutputTokens(Number(config.max_output_tokens ?? 4096));
     setDimension(Number(config.dimension ?? 1024));
     setBatchSize(Number(config.batch_size ?? 10));
+    setSupportedDimensionsText(
+      ((config.supported_dimensions as number[] | undefined) ?? [Number(config.dimension ?? 1024)]).join(', '),
+    );
+    setMaxBatchSize(Number(config.max_batch_size ?? config.batch_size ?? 10));
     setTimeoutSeconds(Number(config.timeout_seconds ?? 5));
     setMaxRetries(Number(config.max_retries ?? 3));
     setRetryBackoff(Number(config.retry_backoff ?? 1));
@@ -576,6 +584,18 @@ function ModelDialog({
       }
 
       const enabledThinkingOptions = THINKING_LEVELS.filter((l) => thinkingOptions.includes(l));
+      const supportedDimensions = supportedDimensionsText
+        .split(',')
+        .map((value) => Number(value.trim()));
+      if (
+        modelType === 'embedding'
+        && (
+          supportedDimensions.length === 0
+          || supportedDimensions.some((value) => !Number.isInteger(value) || value <= 0)
+        )
+      ) {
+        throw new Error('支持的向量维度必须是逗号分隔的正整数');
+      }
 
       const capabilities = [
         ...(supportsTools ? ['tools'] : []),
@@ -598,6 +618,8 @@ function ModelDialog({
           ? {
               dimension,
               batch_size: batchSize,
+              supported_dimensions: supportedDimensions,
+              max_batch_size: maxBatchSize,
               input_modalities: ['text'],
               max_retries: maxRetries,
               retry_backoff: retryBackoff,
@@ -710,14 +732,24 @@ function ModelDialog({
           </>
         )}
         {modelType === 'embedding' && (
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="向量维度">
-              <input type="number" value={dimension} disabled={editing} onChange={(e) => setDimension(Number(e.target.value) || 0)} className={inputCls} />
-            </Field>
-            <Field label="批大小">
-              <input type="number" value={batchSize} onChange={(e) => setBatchSize(Number(e.target.value) || 0)} className={inputCls} />
-            </Field>
-          </div>
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="向量维度">
+                <input type="number" value={dimension} disabled={editing} onChange={(e) => setDimension(Number(e.target.value) || 0)} className={inputCls} />
+              </Field>
+              <Field label="批大小">
+                <input type="number" value={batchSize} onChange={(e) => setBatchSize(Number(e.target.value) || 0)} className={inputCls} />
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="支持的向量维度">
+                <input value={supportedDimensionsText} onChange={(e) => setSupportedDimensionsText(e.target.value)} placeholder="1024, 768, 512" className={inputCls} />
+              </Field>
+              <Field label="最大批大小">
+                <input type="number" value={maxBatchSize} onChange={(e) => setMaxBatchSize(Number(e.target.value) || 0)} className={inputCls} />
+              </Field>
+            </div>
+          </>
         )}
         {modelType === 'reranker' && (
           <>

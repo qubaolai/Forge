@@ -44,7 +44,7 @@ def _resume_state() -> ResumeState:
 async def test_start_resume_register_conflict_returns_resume_error(tmp_path, monkeypatch) -> None:
     """并发 resume 注册冲突应返回可预期的 409 错误。"""
     monkeypatch.setenv("ASSISTANT_HOME", str(tmp_path))
-    orchestrator = TurnOrchestrator()
+    orchestrator = TurnOrchestrator(SimpleNamespace())
     orchestrator._resumer = SimpleNamespace(
         prepare=AsyncMock(return_value=(_ctx(), _resume_state()))
     )

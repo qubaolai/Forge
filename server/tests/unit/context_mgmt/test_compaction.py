@@ -126,6 +126,29 @@ async def test_compact_if_needed_executes_above_threshold():
     assert result.tokens_saved == 1234
 
 
+@pytest.mark.asyncio
+async def test_compact_if_needed_notifies_before_strategy():
+    """触发后的回调必须在耗时 strategy 执行前完成."""
+    events: list[str] = []
+
+    class _OrderedStrategy(_SuccessStrategy):
+        async def compact(self, session_id, snapshot):
+            events.append("strategy")
+            return await super().compact(session_id, snapshot)
+
+    async def on_started(snapshot):
+        events.append("started")
+
+    controller = CompactionController(_OrderedStrategy(), ThresholdTrigger(0.85))
+    await controller.compact_if_needed(
+        "s1",
+        _make_snapshot(total_tokens=950),
+        on_compaction_started=on_started,
+    )
+
+    assert events == ["started", "strategy"]
+
+
 # ---------------------------------------------------------------------------
 # 5. compact_now 绕过 trigger
 # ---------------------------------------------------------------------------

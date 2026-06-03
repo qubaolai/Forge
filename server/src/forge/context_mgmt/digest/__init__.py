@@ -17,7 +17,7 @@
 降级职责收敛 (修订 E):
     - 单条超长一律先 digest 折叠 (保留信息、可回读); MessageAssembler 的「硬丢弃」
       (history_truncated_by_budget) 退为「折叠后整体仍超 budget」的最后兜底。
-    - 折叠使被挤掉的历史变少, ContextAssembler.should_compact (依赖 history dropped)
+    - 折叠使被挤掉的历史变少, ThresholdTrigger (依赖 history dropped)
       触发频率随之下降, 属预期非异常。
 """
 

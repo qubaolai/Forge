@@ -1,7 +1,7 @@
 """聊天路径工具白名单 (走 agent_profiles).
 
 chat 路径的工具集来源于 agent_profiles.profiles.chat.tools_allowed.
-assembler 渲染 system_prompt 时用此函数列出 chat 模式可用工具.
+Chat build_once 渲染 system_prompt 时用此函数列出 chat 模式可用工具.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ def resolve_chat_tools(settings=None) -> tuple[Tool, ...]:  # noqa: ARG001
     try:
         profile = get_agent_profile("chat")
     except (ValueError, RuntimeError) as exc:
-        # profile 未加载或未定义 chat mode: 返回空集合, 不抛错; assembler 仍能渲染.
+        # profile 未加载或未定义 chat mode: 返回空集合, 不抛错; system prompt 仍能渲染.
         logger.warning("chat profile 未就绪 (%s), 不开放任何工具给对话", exc)
         return ()
     return filter_tools_by_name(ToolRegistry.get_all(), set(profile.tools_allowed))

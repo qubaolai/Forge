@@ -29,8 +29,10 @@ class EmbeddingModelConfigOrm(Base, BigIntPKMixin):
     __tablename__ = "embedding_model_configs"
 
     model_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="→ models.id")
-    dimension: Mapped[int] = mapped_column(Integer, nullable=False, default=1024)
-    batch_size: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    dimension: Mapped[int] = mapped_column(Integer, nullable=False)
+    batch_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    supported_dimensions: Mapped[list] = mapped_column(JSON, nullable=False)
+    max_batch_size: Mapped[int] = mapped_column(Integer, nullable=False)
     input_modalities: Mapped[list] = mapped_column(JSON, nullable=False, default=lambda: ["text"])
     max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     retry_backoff: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)

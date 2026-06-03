@@ -140,7 +140,7 @@ class TurnPreparer:
 
         model_options_dict = model_options.model_dump() if model_options else None
         # 真实 context_window 取自 model 配置, 失败回落到默认.
-        # 影响 ContextAssembler.should_compact 的阈值判定.
+        # 影响 ContextManager 主动压缩的阈值判定.
         context_window = await resolve_context_window(
             model_options_dict, default=_DEFAULT_CONTEXT_WINDOW,
         )

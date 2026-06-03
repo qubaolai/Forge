@@ -19,12 +19,28 @@ class ChatModelConfigIn(BaseModel):
 
 
 class EmbeddingModelConfigIn(BaseModel):
-    dimension: int = Field(default=1024, ge=1)
-    batch_size: int = Field(default=10, ge=1)
+    dimension: int = Field(ge=1)
+    batch_size: int = Field(ge=1)
+    supported_dimensions: list[int] = Field(min_length=1)
+    max_batch_size: int = Field(ge=1)
     input_modalities: list[str] = Field(default_factory=lambda: ["text"])
     max_retries: int = Field(default=3, ge=0)
     retry_backoff: float = Field(default=1.0, ge=0)
     provider_options: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_limits(self) -> EmbeddingModelConfigIn:
+        if any(value <= 0 for value in self.supported_dimensions):
+            raise ValueError("supported_dimensions 必须全部大于 0")
+        if self.dimension not in self.supported_dimensions:
+            raise ValueError(
+                f"dimension={self.dimension} 不在 supported_dimensions 中"
+            )
+        if self.batch_size > self.max_batch_size:
+            raise ValueError(
+                f"batch_size={self.batch_size} 超过 max_batch_size={self.max_batch_size}"
+            )
+        return self
 
 
 class RerankerModelConfigIn(BaseModel):

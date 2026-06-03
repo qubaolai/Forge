@@ -11,7 +11,7 @@
       给 HybridFilter 的早期轮次打相似度分。
 
 默认关闭 (settings.context.semantic_recall.enabled=False), 开启需配置 embedding provider。
-embedder 不可用时整体降级 RecentFilter (近期锚点保留)。
+embedder 不可用时 HybridFilter 保留全部早期消息。
 """
 
 from __future__ import annotations

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 
 from forge.context_mgmt.protocols import (
     CompactionError,
@@ -47,6 +48,8 @@ class CompactionController:
         self,
         session_id: str,
         snapshot: ContextSnapshot,
+        *,
+        on_compaction_started: Callable[[ContextSnapshot], Awaitable[None]] | None = None,
     ) -> CompactionResult | None:
         """由 ContextManager 在每次 build 后自动调用.
 
@@ -54,9 +57,13 @@ class CompactionController:
             None: 不满足触发条件, 未压缩.
             CompactionResult(success=True): 压缩成功 (调用方应重建上下文).
             CompactionResult(success=False): 压缩失败 (调用方降级).
+
+        on_compaction_started 在 trigger 命中后、strategy 执行前调用。
         """
         if not self._trigger.should_compact(snapshot):
             return None
+        if on_compaction_started is not None:
+            await on_compaction_started(snapshot)
         return await self._safe_compact(
             session_id, snapshot, trigger_source="threshold"
         )

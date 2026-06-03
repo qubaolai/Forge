@@ -1,7 +1,5 @@
 """SummaryCompaction: 调 SummaryService 生成早期对话摘要, 替换历史尾部.
 
-从 forge.chat.assembler.ContextAssembler.compact_and_reassemble() 移入.
-
 行为:
     1. 调 SummaryService.summarize_session() 生成最新摘要 (写入 SummaryStore)
     2. 上层 (ContextManager) 在压缩成功后重跑 ContextBuilder, 这样

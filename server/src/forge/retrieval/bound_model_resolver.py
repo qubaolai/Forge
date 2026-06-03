@@ -87,6 +87,8 @@ class BoundModelResolver:
             result.update({
                 "dimension": config["dimension"],
                 "batch_size": config["batch_size"],
+                "supported_dimensions": config["supported_dimensions"],
+                "max_batch_size": config["max_batch_size"],
                 "max_retries": config["max_retries"],
                 "retry_backoff": config["retry_backoff"],
             })

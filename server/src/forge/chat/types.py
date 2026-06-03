@@ -27,7 +27,7 @@ class TurnContext:
     model_options: dict[str, Any] | None = None
     # ★ ContextBuilder 需要排除本轮已持久化的 user 消息, 避免历史里重复
     exclude_message_ids: tuple[str, ...] = ()
-    # 给 Assembler 用的 agent 配置 (ContextAssembler 不直接拿 AgentOrm)
+    # 给上下文构建用的 agent 配置
     system_prompt: str = ""
     context_window: int = 128_000
 

@@ -9,7 +9,7 @@
 正常路径:
     Route -> orchestrator.start_turn -> ChatTurnRun.attach_task(execute_coro)
           -> 返回 run -> 路由 yield run.subscribe()
-    背景 task 跑 execute_coro: assembler / runner / finalizer, 中间每个 agent event
+    背景 task 跑 execute_coro: context manager / runner / finalizer, 中间每个 agent event
     都通过 run.emit() 落盘 + 推订阅者; 完成时 finalizer 写 DB.
 
 中断路径:

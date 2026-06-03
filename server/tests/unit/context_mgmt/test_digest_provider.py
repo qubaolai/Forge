@@ -6,7 +6,7 @@ import pytest
 
 from forge.context_mgmt.digest.policy import DigestPolicy
 from forge.context_mgmt.digest.types import DigestRecord, Segment
-from forge.context_mgmt.filters.recent import RecentFilter
+from forge.context_mgmt.filters.null import NullFilter
 from forge.context_mgmt.protocols import TokenMeter
 from forge.context_mgmt.providers.history import HistoryProvider
 from forge.context_mgmt.tool_policy.verbatim import VerbatimPolicy
@@ -78,7 +78,7 @@ def _request() -> ContextRequest:
 def _provider(rows, digest_store) -> HistoryProvider:
     return HistoryProvider(
         _FakeMessageStore(rows),
-        RecentFilter(),
+        NullFilter(),
         VerbatimPolicy(),
         _CharMeter(),
         digest_policy=DigestPolicy(),
@@ -125,7 +125,7 @@ async def test_carried_token_count_avoids_recount():
     meter = _CountingMeter()
     provider = HistoryProvider(
         _FakeMessageStore(rows),
-        RecentFilter(),
+        NullFilter(),
         VerbatimPolicy(),
         meter,
         digest_policy=DigestPolicy(),

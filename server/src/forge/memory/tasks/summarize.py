@@ -7,7 +7,7 @@ Celery task + 处理重试.
     memory.summarize(session_id: str, workspace_id: str | None = None) -> None
 
 由 hooks.py 在 turn.completed 事件 + 触发条件满足时派发.
-ContextAssembler 的主动压缩走同一个 service, 不走 Celery.
+ContextManager 的主动压缩走同一个 service, 不走 Celery.
 
 celery 可选依赖: 没装 celery 时, 整个模块 import 仍然可工作 (用兜底装饰器).
 """
