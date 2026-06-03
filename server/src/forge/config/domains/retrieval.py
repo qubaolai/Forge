@@ -36,14 +36,6 @@ class ComponentConfig(BaseModel):
         return sorted(self.providers.keys())
 
 
-class EmbeddingConfig(ComponentConfig):
-    """Embedding 组件配置。
-
-    Embedding 不支持运行时 fallback；文档入库和召回必须使用同一个模型，
-    否则向量空间不一致会导致召回失真。
-    """
-
-
 # ======================================================================
 # Ingest: 文档入库
 # ======================================================================

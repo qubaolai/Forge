@@ -7,7 +7,6 @@
 管理接口（需 AdminUser）:
     GET  /models/{id}         按数据库 id 查询模型详情
     PUT  /models/{model_id}   切换启用状态  {enabled: true/false}
-    POST /models/{model_id}/set-default  设为默认模型
 """
 
 from fastapi import APIRouter, Depends, Query
@@ -22,26 +21,25 @@ router = APIRouter()
 
 def _build_thinking_meta(model: dict) -> dict | None:
     """组装前端可直接消费的 thinking 配置。"""
-    if not model.get("supports_thinking"):
+    config = model.get("config") or {}
+    if "thinking" not in set(config.get("capabilities") or []):
         return None
 
-    options = model.get("thinking_options") or None
+    options = config.get("thinking_options") or None
     default = options[0] if options else None
     return {"options": options, "default": default}
 
 
 def _to_model_info(model: dict, provider_name: str) -> dict:
     """统一模型输出结构（供 ChatInput 使用）。"""
+    config = model.get("config") or {}
     return {
         "provider": provider_name,
         "model_id": model.get("model_id", ""),
         "name": model.get("name", ""),
         "display_name": model.get("display_name", ""),
-        "model_type": model.get("model_type", "text"),
-        "context_window": int(model.get("context_window") or 0),
-        "supports_tools": bool(model.get("supports_tools", False)),
-        "supports_images": bool(model.get("supports_images", False)),
-        "supports_thinking": bool(model.get("supports_thinking", False)),
+        "model_type": model.get("model_type", "chat"),
+        "config": config,
         "thinking": _build_thinking_meta(model),
     }
 
@@ -54,9 +52,10 @@ async def list_models(
     db: DbSession,
     model_cache=Depends(get_model_cache),
     provider: str | None = Query(None, description="按供应商名称筛选"),
-    model_type: str | None = Query(None, description="按类型筛选: text/embedding/reranker"),
+    model_type: str | None = Query(None, description="按类型筛选: chat/embedding/reranker"),
 ):
     """列出可用模型（按供应商分组）。"""
+    from forge.infrastructure.database.repositories.model_config_repo import ModelConfigRepository
     from forge.infrastructure.database.repositories.model_provider_repo import ProviderRepository
     from forge.infrastructure.database.repositories.model_repo import ModelRepository
     from forge.llm.model_config_cache import ModelConfigCache
@@ -85,6 +84,7 @@ async def list_models(
         # Redis 不可用时降级读 DB
         provider_repo = ProviderRepository(db)
         model_repo = ModelRepository(db)
+        config_repo = ModelConfigRepository(db)
         provider_rows = await provider_repo.list_enabled()
         if provider:
             provider_rows = [p for p in provider_rows if p.name == provider]
@@ -103,11 +103,7 @@ async def list_models(
                         "name": m.name,
                         "display_name": m.display_name,
                         "model_type": m.model_type,
-                        "context_window": m.context_window,
-                        "supports_tools": m.supports_tools,
-                        "supports_images": m.supports_images,
-                        "supports_thinking": m.supports_thinking,
-                        "thinking_options": m.thinking_options,
+                        "config": config_repo.to_dict(await config_repo.get(m.id, m.model_type)),
                     },
                     provider_row.name,
                 )
@@ -167,7 +163,7 @@ async def update_model(
     db: DbSession,
     model_cache=Depends(get_model_cache),
 ):
-    """更新模型配置（全字段：启停 / 设默认 / 上下文窗口 / 能力 / 优先级等）。"""
+    """更新模型管理字段与对应类型配置。"""
     from forge.api.services.admin_model_service import AdminModelService
     from forge.llm.model_config_cache import ModelConfigCache
 

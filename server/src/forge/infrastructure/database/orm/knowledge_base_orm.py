@@ -24,7 +24,7 @@ class KnowledgeBaseOrm(Base, BigIntPKMixin):
         JSON, nullable=True, comment="协作者列表"
     )
     embedding_model: Mapped[str] = mapped_column(
-        String(128), default="", nullable=False, comment="embedding 模型标识"
+        String(128), default="", nullable=False, comment="已废弃，向量模型由系统绑定决定"
     )
     chunk_size: Mapped[int] = mapped_column(default=512, nullable=False, comment="分块字符数")
     chunk_overlap: Mapped[int] = mapped_column(default=64, nullable=False, comment="分块重叠字符数")

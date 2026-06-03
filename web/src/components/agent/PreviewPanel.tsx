@@ -29,7 +29,7 @@ export function PreviewPanel({ draft }: Props) {
     queryFn: () => toolsApi.list(),
   });
 
-  const selectedModel = models?.find((m) => m.id === debounced.model.model_id);
+  const selectedModel = models?.find((m) => m.model_id === debounced.model.model_id);
   const selectedKbs = kbs?.items.filter((k) => debounced.retrieval.kb_ids.includes(k.id)) || [];
   const enabledTools = debounced.tools.filter((t) => t.enabled);
   const enabledToolNames = enabledTools
@@ -48,7 +48,7 @@ export function PreviewPanel({ draft }: Props) {
         {/* 配置摘要 */}
         <section className="bg-white rounded-md border p-3 space-y-2 text-xs">
           <SummaryRow icon={<Cpu size={12} />} label="模型">
-            {selectedModel ? selectedModel.name : <span className="text-gray-400">未选择</span>}
+            {selectedModel ? selectedModel.display_name || selectedModel.name : <span className="text-gray-400">未选择</span>}
             {selectedModel && (
               <span className="text-gray-400 ml-1.5">temp {debounced.model.temperature}</span>
             )}

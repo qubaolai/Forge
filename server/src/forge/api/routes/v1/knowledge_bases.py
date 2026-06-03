@@ -45,7 +45,6 @@ def _kb_to_info(kb) -> KbInfo:
         name=kb.name,
         description=kb.description,
         visibility=kb.visibility,
-        embedding_model=kb.embedding_model or None,
         document_count=kb.document_count,
         chunk_count=kb.chunk_count,
         size_bytes=kb.size_bytes,
@@ -69,6 +68,10 @@ def _doc_to_info(doc) -> KbDocumentInfo:
         progress=doc.progress,
         chunk_count=doc.chunk_count,
         indexed_at=doc.indexed_at,
+        embedding_model_id=str(doc.embedding_model_id) if doc.embedding_model_id else None,
+        vector_index_status=doc.vector_index_status,
+        vector_index_error=doc.vector_index_error,
+        vector_indexed_at=doc.vector_indexed_at,
         created_at=doc.created_at,
         updated_at=doc.updated_at,
     )

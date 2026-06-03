@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { sessionsApi, systemApi, ModelGroup } from '@/api';
-import { ChatMessage, Citation } from '@/types';
+import { sessionsApi, systemApi } from '@/api';
+import { ChatMessage, Citation, ModelGroup } from '@/types';
 import { useChatStream } from '@/hooks/useChatStream';
 import { MessageList } from '@/components/chat/MessageList';
 import { ChatInput, ThinkingLevel } from '@/components/chat/ChatInput';
@@ -50,7 +50,7 @@ export default function ChatPage() {
   // 加载分组模型列表（按供应商）
   const loadModelGroups = useCallback(async () => {
     try {
-      const res = await systemApi.models({ model_type: 'text' });
+      const res = await systemApi.models({ model_type: 'chat' });
       const groups = res.groups || [];
       setModelGroups(groups);
 
@@ -190,7 +190,7 @@ export default function ChatPage() {
       return null;
     })();
     if (!base) return null;
-    const cw = currentModelMeta?.context_window || base.context_window;
+    const cw = currentModelMeta?.config?.context_window || base.context_window;
     if (cw === base.context_window) return base;
     return {
       ...base,
@@ -205,7 +205,7 @@ export default function ChatPage() {
 
   function buildModelOptions(): ModelOptions {
     const opts: ModelOptions = { provider: selectedProvider, model: selectedModel };
-    if (!currentModelMeta?.supports_thinking) {
+    if (!currentModelMeta?.config?.capabilities?.includes('thinking')) {
       return opts;
     }
     opts.thinking = thinkingEnabled;

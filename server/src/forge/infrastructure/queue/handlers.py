@@ -40,11 +40,18 @@ async def handle_context_embedding(*, session_id: str) -> None:
     await run_embedding_task(session_id)
 
 
+async def handle_rag_index_rebuild(*, job_id: str) -> None:
+    from forge.retrieval.rebuild_tasks import run_rag_rebuild_task
+
+    await run_rag_rebuild_task(job_id)
+
+
 _DEFAULT_HANDLERS: dict[str, TaskHandler] = {
     "memory.summarize": handle_memory_summarize,
     "observability.cost.flush": handle_cost_flush,
     "context.digest": handle_context_digest,
     "context.embedding": handle_context_embedding,
+    "rag.index.rebuild": handle_rag_index_rebuild,
 }
 
 

@@ -423,7 +423,17 @@ class LLMGateway:
             except Exception:  # noqa: BLE001
                 continue
             for m in models:
-                cap_data = m.get("capabilities") or {}
+                if m.get("model_type") != "chat":
+                    continue
+                config = m.get("config") or {}
+                capabilities = set(config.get("capabilities") or [])
+                cap_data = {
+                    "context_window": config.get("context_window", 128000),
+                    "supports_tools": "tools" in capabilities,
+                    "supports_images": "vision" in capabilities
+                    or "image" in set(config.get("input_modalities") or []),
+                    "supports_thinking": "thinking" in capabilities,
+                }
                 try:
                     capabilities = ModelCapabilities(**cap_data)
                 except Exception:  # noqa: BLE001

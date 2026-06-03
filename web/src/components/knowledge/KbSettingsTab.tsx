@@ -98,7 +98,6 @@ export function KbSettingsTab({ kb }: Props) {
         <section>
           <h2 className="text-sm font-medium mb-3">索引配置</h2>
           <div className="bg-gray-50 rounded-md p-4 space-y-2 text-xs">
-            <KvRow k="嵌入模型" v={kb.embedding_model} />
             <KvRow k="分块大小" v={`${kb.chunk_size} tokens`} />
             <KvRow k="分块重叠" v={`${kb.chunk_overlap} tokens`} />
           </div>

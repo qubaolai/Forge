@@ -94,11 +94,14 @@ def _build_chat_history_filter() -> HistoryFilter:
         from forge.context_mgmt.filters.semantic import EmbeddingScorer, SemanticFilter
         from forge.context_mgmt.recall.embedding_store import MessageEmbeddingStore
         from forge.infrastructure.database.database import get_session_factory
-        from forge.retrieval.embedders.factory import build_embedder_from_settings
+        from forge.retrieval.bound_model_resolver import get_bound_model_resolver
 
-        embedder = build_embedder_from_settings(get_settings())
         store = MessageEmbeddingStore(get_session_factory())
-        scorer = EmbeddingScorer(embedder, store)
+        scorer = EmbeddingScorer(
+            None,
+            store,
+            resolver=lambda: get_bound_model_resolver().resolve("semantic_history_embedding"),
+        )
         return HybridFilter(
             SemanticFilter(scorer, min_score=cfg.min_score),
             anchor_turns=cfg.anchor_turns,

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, KeyboardEvent } from 'react';
 import { Send, Square, Brain } from 'lucide-react';
-import type { ModelGroup } from '@/api';
+import type { ModelGroup } from '@/types';
 import { cn } from '@/lib/utils';
 
 export type ThinkingLevel = 'standard' | 'low' | 'medium' | 'high' | 'xhigh';
@@ -90,7 +90,7 @@ export function ChatInput({
     .find((group) => group.provider === selectedProvider)
     ?.models.find((m) => m.name === selectedModel);
   const thinkingMeta = currentModel?.thinking;
-  const hasThinking = Boolean(currentModel?.supports_thinking);
+  const hasThinking = Boolean(currentModel?.config?.capabilities?.includes('thinking'));
   const thinkingOptions = (thinkingMeta?.options || []).filter(Boolean) as string[];
   const showThinkingLevel = hasThinking && thinkingOptions.length > 0 && onThinkingLevelChange;
   const selectedThinkingLevel = (

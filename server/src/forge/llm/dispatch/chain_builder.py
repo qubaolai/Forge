@@ -57,7 +57,7 @@ async def build_dispatch_chain(
         fallbacks,
         max_retries=settings.llm.max_retries,
         retry_backoff_seconds=settings.llm.retry_backoff_seconds,
-        timeout_config=settings.llm.timeout,
+        timeout_config=getattr(settings.llm, "timeout", None),
     )
 
 
@@ -115,7 +115,7 @@ async def build_utility_dispatch_chain(
         entries[1:],
         max_retries=settings.llm.max_retries,
         retry_backoff_seconds=settings.llm.retry_backoff_seconds,
-        timeout_config=settings.llm.timeout,
+        timeout_config=getattr(settings.llm, "timeout", None),
     )
 
 
@@ -157,13 +157,22 @@ async def _build_entries_from_cache(
     if not model_detail:
         logger.error("模型详情缺失: provider=%s model=%s", provider, model)
         raise ValueError(f"模型详情缺失: {provider}:{model}")
+    if model_detail.get("model_type") != "chat":
+        logger.error(
+            "非 Chat 模型不能用于 LLM 调用: provider=%s model=%s type=%s",
+            provider,
+            model,
+            model_detail.get("model_type"),
+        )
+        raise ValueError(f"模型 {provider}:{model} 不是 Chat 模型")
 
     keys = await model_cache.get_keys(provider)
     if not keys:
         logger.error("供应商无可用 API Key: provider=%s", provider)
         raise ValueError(f"供应商 {provider} 当前没有可用 API Key")
 
-    extra = model_detail.get("extra_params") or {}
+    config = model_detail.get("config") or {}
+    extra = config.get("provider_options") or {}
     impl = provider_info.get("impl") or provider
     base_spec = LLMCallSpec(
         impl=impl,
@@ -171,7 +180,7 @@ async def _build_entries_from_cache(
         model=model,
         provider_name=provider,
         temperature=extra.get("temperature", 0.7),
-        max_tokens=extra.get("max_tokens", model_detail.get("max_output_tokens", 4096)),
+        max_tokens=extra.get("max_tokens", config.get("max_output_tokens", 4096)),
         top_p=extra.get("top_p"),
         thinking=extra.get("thinking"),
         reasoning_effort=extra.get("reasoning_effort"),

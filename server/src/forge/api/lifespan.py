@@ -17,7 +17,7 @@
         - 想强制 RAG 必须可用, 设环境变量 STRICT_RAG=true.
 
     任何 RAG 组件初始化失败时, app.state.<name> 不会被设置;
-    业务侧用 hasattr(app.state, "embedder") 判断可用性.
+    业务侧通过 app.state.rag_runtime / kb_service 判断可用性.
 """
 
 from __future__ import annotations
@@ -506,54 +506,7 @@ async def _setup_rag_components(app, settings, model_cache=None) -> None:
     except Exception as e:  # noqa: BLE001
         _fail("tokenizer", e)
 
-    # 4b. Embedder: 优先从 DB 读取 embedding 类型模型配置，YAML 作为 fallback
-    embedder = None
-    try:
-        from forge.retrieval.embedders.factory import EmbedderFactory
-
-        if model_cache is not None and model_cache.ready:
-            embedding_models = await model_cache.get_models_by_type("embedding")
-            if embedding_models:
-                # 使用第一个启用的 embedding 模型的 extra_params 构造 config
-                em = embedding_models[0]
-                config = em.get("extra_params") or {}
-                provider_name = em.get("name")
-                # 从 provider name 推断 provider impl（优先用 model 配置里的信息）
-                provider = em.get("provider") or ""
-                logger.info(
-                    "Embedder 从 DB 加载: provider=%s model=%s extra_params=%s",
-                    provider, provider_name, list(config.keys()),
-                )
-                embedder = EmbedderFactory.create(provider, config)
-            else:
-                # fallback 到 YAML settings
-                from forge.retrieval.embedders.factory import build_embedder_from_settings
-                embedder = build_embedder_from_settings(settings)
-                logger.info("Embedder 从 YAML 加载 (DB 中无 embedding 模型)")
-        else:
-            from forge.retrieval.embedders.factory import build_embedder_from_settings
-            embedder = build_embedder_from_settings(settings)
-            logger.info("Embedder 从 YAML 加载 (cache 不可用)")
-
-        app.state.embedder = embedder
-    except Exception as e:  # noqa: BLE001
-        _fail("embedder", e)
-
-    # 4c. Vector store
-    vector_store = None
-    try:
-        from forge.retrieval.stores.vector.factory import VectorStoreFactory
-
-        vector_store = VectorStoreFactory.create(
-            settings.vector_store.provider,
-            settings.vector_store.active_config(),
-        )
-        app.state.vector_store = vector_store
-        logger.info("向量库就绪: %s", settings.vector_store.provider)
-    except Exception as e:  # noqa: BLE001
-        _fail("vector_store", e)
-
-    # 4d. BM25 store
+    # 4b. BM25 store
     bm25_store = None
     try:
         from forge.retrieval.stores.bm25.factory import BM25StoreFactory
@@ -570,49 +523,25 @@ async def _setup_rag_components(app, settings, model_cache=None) -> None:
     except Exception as e:  # noqa: BLE001
         _fail("bm25_store", e)
 
-    # 4e. Reranker: 优先从 DB 读取 reranker 类型模型，YAML 作为 fallback
-    db_reranker = None
+    # 4c. RAG runtime: Embedding/Reranker 仅按 DB 系统绑定动态解析
+    rag_runtime = None
     try:
-        if model_cache is not None and model_cache.ready:
-            reranker_models = await model_cache.get_models_by_type("reranker")
-            if reranker_models:
-                from forge.retrieval.rerankers.factory import RerankerFactory
+        if bm25_store is None:
+            raise RuntimeError("RAG runtime 需要 BM25 store")
+        from forge.retrieval.rag_runtime import RagRuntime, set_rag_runtime
 
-                rm = reranker_models[0]
-                config = rm.get("extra_params") or {}
-                provider = (rm.get("extra_params") or {}).get("provider") or "dashscope"
-                db_reranker = RerankerFactory.create(provider, config)
-                logger.info("Reranker 从 DB 加载: provider=%s model=%s", provider, rm.get("name"))
-    except Exception:
-        logger.debug("Reranker DB 加载失败, 将降级到 YAML", exc_info=True)
-
-    # 4f. Retriever (依赖 vector_store / bm25_store / embedder)
-    try:
-        if embedder is None or vector_store is None or bm25_store is None:
-            raise RuntimeError("retriever 需要 embedder / vector_store / bm25_store 全部就绪")
-        from forge.retrieval.factory import RetrieverFactory
-
-        retriever = RetrieverFactory.create(
-            settings=settings,
-            child_store=vector_store,
-            bm25_store=bm25_store,
-            embedder=embedder,
-            reranker=db_reranker,
-        )
-        app.state.retriever = retriever
-        # 同步发布到 retrieval 模块级单例, 供 knowledge_search 等工具读取
-        from forge.retrieval.runtime import set_retriever
-
-        set_retriever(retriever)
-        logger.info("检索器就绪")
+        rag_runtime = RagRuntime(settings=settings, bm25_store=bm25_store)
+        set_rag_runtime(rag_runtime)
+        app.state.rag_runtime = rag_runtime
+        logger.info("RAG runtime 就绪，Embedding/Reranker 将从 DB 系统绑定解析")
     except Exception as e:  # noqa: BLE001
-        _fail("retriever", e)
+        _fail("rag_runtime", e)
 
-    # 4g. 文件存储 + KbIngestService + KbService
+    # 4d. 文件存储 + KbIngestService + KbService
     # 上传 API 需要这三个组件; 任一缺失则 KB 路由不可用 (路由内会报错).
     try:
-        if embedder is None or vector_store is None or bm25_store is None:
-            raise RuntimeError("KB ingest 需要 embedder / vector_store / bm25_store 全部就绪")
+        if rag_runtime is None or bm25_store is None:
+            raise RuntimeError("KB ingest 需要 rag_runtime / bm25_store 就绪")
 
         from pathlib import Path
 
@@ -629,9 +558,8 @@ async def _setup_rag_components(app, settings, model_cache=None) -> None:
             child_overlap_chars=settings.ingest.chunking.chunk_overlap,
         )
         ingest_service = KbIngestService(
-            child_store=vector_store,
             bm25_store=bm25_store,
-            embedder=embedder,
+            rag_runtime=rag_runtime,
             parser_dispatcher=default_dispatcher(),
             chunk_config=chunk_cfg,
         )

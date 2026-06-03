@@ -50,12 +50,17 @@ CREATE TABLE `kb_documents` (
   `progress` int NOT NULL COMMENT '进度 0-100',
   `chunk_count` int NOT NULL COMMENT '切分后的分块数',
   `indexed_at` datetime DEFAULT NULL COMMENT '完成索引时间',
+  `embedding_model_id` bigint DEFAULT NULL COMMENT '生成当前向量索引的 embedding models.id',
+  `vector_index_status` varchar(16) NOT NULL DEFAULT 'stale' COMMENT 'ready / stale / rebuilding / failed',
+  `vector_index_error` text COMMENT '向量索引错误信息',
+  `vector_indexed_at` datetime DEFAULT NULL COMMENT '向量索引完成时间',
   `created_at` datetime NOT NULL DEFAULT (now()) COMMENT '创建时间',
   `updated_at` datetime NOT NULL DEFAULT (now()) COMMENT '更新时间',
   PRIMARY KEY (`id`),
   KEY `ix_kb_docs_status` (`kb_id`,`status`),
   KEY `ix_kb_docs_hash` (`content_hash`),
-  KEY `ix_kb_docs_kb_created` (`kb_id`,`created_at`)
+  KEY `ix_kb_docs_kb_created` (`kb_id`,`created_at`),
+  KEY `ix_kb_docs_vector_status` (`vector_index_status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='知识库文档表 (用户上传)';
 CREATE TABLE `knowledge_bases` (
 `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'Snowflake 主键',
@@ -64,7 +69,7 @@ CREATE TABLE `knowledge_bases` (
   `visibility` varchar(16) NOT NULL COMMENT 'private / workspace / public',
   `owner_id` bigint NOT NULL COMMENT '→ users.id (应用层引用, 无 FK)',
   `collaborators` json DEFAULT NULL COMMENT '协作者列表',
-  `embedding_model` varchar(128) NOT NULL COMMENT 'embedding 模型标识',
+  `embedding_model` varchar(128) NOT NULL COMMENT '已废弃，向量模型由系统绑定决定',
   `chunk_size` int NOT NULL COMMENT '分块字符数',
   `chunk_overlap` int NOT NULL COMMENT '分块重叠字符数',
   `document_count` int NOT NULL COMMENT '文档总数',
@@ -99,17 +104,17 @@ CREATE TABLE `models` (
   `provider_id` bigint NOT NULL COMMENT '→ providers.id',
   `name` varchar(128) NOT NULL COMMENT '模型名: gpt-4o / qwen-plus / text-embedding-v3',
   `display_name` varchar(128) NOT NULL COMMENT '展示名',
-  `model_type` varchar(32) NOT NULL COMMENT 'text / embedding / reranker / image / audio',
-  `context_window` int NOT NULL COMMENT '上下文窗口长度',
-  `max_output_tokens` int NOT NULL COMMENT '最大输出 token',
-  `supports_tools` tinyint(1) NOT NULL COMMENT '是否支持工具调用',
-  `supports_images` tinyint(1) NOT NULL COMMENT '是否支持图片识别',
-  `supports_thinking` tinyint(1) NOT NULL COMMENT '是否支持思考模式',
-  `thinking_options` json DEFAULT NULL COMMENT '思考强度档位: ["standard","low","medium","high","xhigh"]',
-  `extra_params` json DEFAULT NULL COMMENT '类型特定参数: dimension / batch_size / timeout / truncation ...',
+  `model_type` varchar(32) NOT NULL COMMENT 'chat / embedding / reranker',
+  `context_window` int NOT NULL COMMENT '已废弃',
+  `max_output_tokens` int NOT NULL COMMENT '已废弃',
+  `supports_tools` tinyint(1) NOT NULL COMMENT '已废弃',
+  `supports_images` tinyint(1) NOT NULL COMMENT '已废弃',
+  `supports_thinking` tinyint(1) NOT NULL COMMENT '已废弃',
+  `thinking_options` json DEFAULT NULL COMMENT '已废弃',
+  `extra_params` json DEFAULT NULL COMMENT '已废弃',
   `cost_tier` varchar(16) NOT NULL COMMENT 'cheap / mid / expensive',
   `is_enabled` tinyint(1) NOT NULL COMMENT '启用标识',
-  `is_default` tinyint(1) NOT NULL COMMENT '是否该供应商的默认模型',
+  `is_default` tinyint(1) NOT NULL COMMENT '已废弃',
   `priority` int NOT NULL COMMENT '同类型内优先级',
   `is_stale` tinyint(1) NOT NULL COMMENT 'API 不再返回时标记',
   `created_at` datetime NOT NULL DEFAULT (now()) COMMENT '创建时间',
@@ -121,6 +126,81 @@ CREATE TABLE `models` (
   KEY `ix_models_enabled` (`is_enabled`),
   KEY `ix_models_provider` (`provider_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='模型信息表';
+
+CREATE TABLE `chat_model_configs` (
+  `id` bigint NOT NULL COMMENT 'Snowflake 主键',
+  `model_id` bigint NOT NULL COMMENT '→ models.id',
+  `context_window` int NOT NULL COMMENT '上下文窗口长度',
+  `max_output_tokens` int NOT NULL COMMENT '最大输出 token',
+  `input_modalities` json NOT NULL COMMENT '输入模态数组',
+  `output_modalities` json NOT NULL COMMENT '输出模态数组',
+  `capabilities` json NOT NULL COMMENT '能力数组',
+  `thinking_options` json DEFAULT NULL COMMENT '思考强度档位',
+  `provider_options` json DEFAULT NULL COMMENT '供应商调用参数',
+  `created_at` datetime NOT NULL DEFAULT (now()) COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT (now()) COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `ix_chat_model_configs_model` (`model_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Chat 模型调用配置';
+
+CREATE TABLE `embedding_model_configs` (
+  `id` bigint NOT NULL COMMENT 'Snowflake 主键',
+  `model_id` bigint NOT NULL COMMENT '→ models.id',
+  `dimension` int NOT NULL COMMENT '向量维度',
+  `batch_size` int NOT NULL COMMENT '批处理大小',
+  `input_modalities` json NOT NULL COMMENT '输入模态数组',
+  `max_retries` int NOT NULL COMMENT '最大重试次数',
+  `retry_backoff` float NOT NULL COMMENT '重试退避秒数',
+  `provider_options` json DEFAULT NULL COMMENT '供应商调用参数',
+  `created_at` datetime NOT NULL DEFAULT (now()) COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT (now()) COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `ix_embedding_model_configs_model` (`model_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Embedding 模型调用配置';
+
+CREATE TABLE `reranker_model_configs` (
+  `id` bigint NOT NULL COMMENT 'Snowflake 主键',
+  `model_id` bigint NOT NULL COMMENT '→ models.id',
+  `timeout_seconds` float NOT NULL COMMENT '调用超时秒数',
+  `max_retries` int NOT NULL COMMENT '最大重试次数',
+  `retry_backoff` float NOT NULL COMMENT '重试退避秒数',
+  `truncation_strategy` varchar(32) NOT NULL COMMENT '文档截断策略',
+  `max_doc_chars` int NOT NULL COMMENT '单文档最大字符数',
+  `monitor_threshold` float NOT NULL COMMENT '截断监控阈值',
+  `provider_options` json DEFAULT NULL COMMENT '供应商调用参数',
+  `created_at` datetime NOT NULL DEFAULT (now()) COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT (now()) COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `ix_reranker_model_configs_model` (`model_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Reranker 模型调用配置';
+
+CREATE TABLE `system_model_bindings` (
+  `id` bigint NOT NULL COMMENT 'Snowflake 主键',
+  `role` varchar(64) NOT NULL COMMENT '系统模型角色',
+  `model_id` bigint DEFAULT NULL COMMENT '→ models.id',
+  `version` int NOT NULL COMMENT '绑定版本',
+  `updated_by` bigint DEFAULT NULL COMMENT '→ users.id',
+  `created_at` datetime NOT NULL DEFAULT (now()) COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT (now()) COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `ix_system_model_bindings_role` (`role`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='系统模型角色绑定';
+
+CREATE TABLE `rag_index_rebuild_jobs` (
+  `id` bigint NOT NULL COMMENT 'Snowflake 主键',
+  `model_id` bigint NOT NULL COMMENT '目标 embedding models.id',
+  `binding_version` int NOT NULL COMMENT '目标绑定版本',
+  `status` varchar(32) NOT NULL COMMENT 'pending / running / completed / partial_failed / cancelled',
+  `total_documents` int NOT NULL COMMENT '文档总数',
+  `succeeded_documents` int NOT NULL COMMENT '成功文档数',
+  `failed_documents` int NOT NULL COMMENT '失败文档数',
+  `error_message` text COMMENT '任务错误信息',
+  `created_by` bigint DEFAULT NULL COMMENT '→ users.id',
+  `created_at` datetime NOT NULL DEFAULT (now()) COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT (now()) COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  KEY `ix_rag_rebuild_jobs_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='RAG 向量索引批量重建任务';
 
 CREATE TABLE `provider_keys` (
 `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'Snowflake 主键',

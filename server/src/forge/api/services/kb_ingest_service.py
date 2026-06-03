@@ -27,6 +27,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,7 +50,6 @@ from forge.infrastructure.database.repositories.knowledge_base_repo import (
     KnowledgeBaseRepository,
 )
 from forge.retrieval.chunkers import ChunkConfig, select_chunker
-from forge.retrieval.embedders.base import Embedder
 from forge.retrieval.parsers.dispatcher import ParserDispatcher
 from forge.retrieval.stores.bm25.base import BM25Store
 from forge.retrieval.stores.vector.base import ChildVectorStore
@@ -66,15 +67,13 @@ class KbIngestService:
     def __init__(
         self,
         *,
-        child_store: ChildVectorStore,
         bm25_store: BM25Store,
-        embedder: Embedder,
+        rag_runtime,
         parser_dispatcher: ParserDispatcher,
         chunk_config: ChunkConfig | None = None,
     ):
-        self.child_store = child_store
         self.bm25_store = bm25_store
-        self.embedder = embedder
+        self.rag_runtime = rag_runtime
         self.parser_dispatcher = parser_dispatcher
         self.chunk_config = chunk_config or ChunkConfig()
 
@@ -88,12 +87,13 @@ class KbIngestService:
         kb: KnowledgeBaseOrm,
         document: KbDocumentOrm,
         file_path: Path,
+        update_kb_stats: bool = True,
     ) -> dict:
         """完整入库流水线.
 
         Args:
             session:  外部传入的 AsyncSession (用于状态机 + 父块写入)
-            kb:       已存在的 KB ORM (含 embedding_model 校验信息)
+            kb:       已存在的 KB ORM
             document: 已落地的 kb_documents 行 (status 通常为 pending)
             file_path: 本地文件路径 (调用方负责将上传内容落到磁盘)
 
@@ -108,16 +108,8 @@ class KbIngestService:
         doc_repo = KbDocumentRepository(session)
         chunk_repo = KbDocumentChunkRepository(session)  # 不在 S6.5 Store ABC 内
 
-        # 0. embedding_model 一致性: 首次入库回填, 后续严格校验
-        try:
-            self._ensure_embedding_consistency(kb)
-        except KbIngestError:
-            await doc_repo.update_status(document.id, "failed", message="embedding_model 不匹配")
-            raise
-
-        if not kb.embedding_model:
-            kb.embedding_model = self.embedder.model_name
-            await session.flush()
+        embedder = await self.rag_runtime.resolve_embedding()
+        child_store = await self.rag_runtime.vector_store_for(embedder)
 
         # 1. parsing
         await doc_repo.update_status(document.id, "parsing", progress=10)
@@ -158,12 +150,14 @@ class KbIngestService:
 
         # 3. embedding
         await doc_repo.update_status(document.id, "embedding", progress=60)
-        try:
-            embed_texts = [self._build_embed_text(c) for c in children]
-            embeddings = self.embedder.embed_documents(embed_texts) if children else []
-        except Exception as e:
-            await doc_repo.update_status(document.id, "failed", message=f"向量化失败: {e}")
-            raise KbIngestError(f"embed 失败: {e}") from e
+        embeddings: list[list[float]] = []
+        if embedder is not None:
+            try:
+                embed_texts = [self._build_embed_text(c) for c in children]
+                embeddings = embedder.embed_documents(embed_texts) if children else []
+            except Exception as e:
+                await doc_repo.update_status(document.id, "failed", message=f"向量化失败: {e}")
+                raise KbIngestError(f"embed 失败: {e}") from e
 
         # 4. Saga 写库外 + MySQL
         try:
@@ -173,10 +167,11 @@ class KbIngestService:
                 children=children,
                 embeddings=embeddings,
                 chunk_repo=chunk_repo,
+                child_store=child_store,
             )
         except Exception as e:
             logger.exception("入库失败, 触发补偿清理: doc=%s", document.id)
-            self._compensate(document.id)
+            self._compensate(document.id, child_store)
             await doc_repo.update_status(document.id, "failed", message=f"入库失败: {e}")
             raise KbIngestError(f"入库失败: {e}") from e
 
@@ -188,10 +183,17 @@ class KbIngestService:
             chunk_count=len(parents),
             mark_indexed=True,
         )
-        await kb_repo.update_stats(
-            kb.id,
-            chunk_count_delta=len(parents),
+        document.embedding_model_id = (
+            int(embedder._forge_model_id) if embedder is not None else None  # type: ignore[attr-defined]
         )
+        document.vector_index_status = "ready" if embedder is not None else "stale"
+        document.vector_index_error = None
+        document.vector_indexed_at = document.indexed_at if embedder is not None else None
+        if update_kb_stats:
+            await kb_repo.update_stats(
+                kb.id,
+                chunk_count_delta=len(parents),
+            )
 
         logger.info(
             "KB 入库完成: kb=%s doc=%s parents=%d children=%d",
@@ -206,6 +208,53 @@ class KbIngestService:
             "children": len(children),
             "status": "indexed",
         }
+
+    async def rebuild_vector_index(
+        self,
+        *,
+        document: KbDocumentOrm,
+        file_path: Path,
+        before_vector_write: Callable[[], Awaitable[None]] | None = None,
+    ) -> dict:
+        """仅重建当前绑定模型的向量索引，不修改 BM25、父块或主文档状态。"""
+        embedder = await self.rag_runtime.resolve_embedding()
+        child_store = await self.rag_runtime.vector_store_for(embedder)
+        if embedder is None or child_store is None:
+            raise KbIngestError("尚未配置可用的 RAG Embedding 模型")
+
+        parser = self.parser_dispatcher.get(file_path)
+        if parser is None:
+            raise KbIngestError(f"未支持的文件格式: {file_path.suffix}")
+        try:
+            elements = parser.parse(file_path)
+        except Exception as exc:
+            raise KbIngestError(f"解析 {file_path} 失败: {exc}") from exc
+        if not elements:
+            raise KbIngestError(f"文件 {file_path} 解析结果为空")
+
+        chunker = select_chunker(elements, self.chunk_config)
+        chunks = chunker.chunk(elements, doc_id=document.id, doc_version="v1")
+        children = [c for c in chunks if c.chunk_type == ChunkType.CHILD]
+        for child in children:
+            child.kb_id = document.kb_id
+        try:
+            embeddings = embedder.embed_documents(
+                [self._build_embed_text(child) for child in children]
+            ) if children else []
+        except Exception as exc:
+            raise KbIngestError(f"embed 失败: {exc}") from exc
+
+        if before_vector_write is not None:
+            await before_vector_write()
+        child_store.delete_by_doc(document.id)
+        if children:
+            child_store.add_children(children, embeddings)
+
+        document.embedding_model_id = int(embedder._forge_model_id)  # type: ignore[attr-defined]
+        document.vector_index_status = "ready"
+        document.vector_index_error = None
+        document.vector_indexed_at = datetime.utcnow()
+        return {"document_id": document.id, "children": len(children), "status": "ready"}
 
     # ==================================================================
     # 主动删除 (kb_documents 已存在, 清掉所有存储)
@@ -222,7 +271,10 @@ class KbIngestService:
         """
         # 先清库外 (顺序无关, 失败也尽量继续)
         try:
-            self.child_store.delete_by_doc(document.id)
+            embedder = await self.rag_runtime.resolve_embedding()
+            child_store = await self.rag_runtime.vector_store_for(embedder)
+            if child_store is not None:
+                child_store.delete_by_doc(document.id)
         except Exception:  # noqa: BLE001
             logger.exception("删除向量库子块失败: doc=%s", document.id)
         try:
@@ -236,14 +288,6 @@ class KbIngestService:
     # ==================================================================
     # 内部实现
     # ==================================================================
-    def _ensure_embedding_consistency(self, kb: KnowledgeBaseOrm) -> None:
-        if kb.embedding_model and kb.embedding_model != self.embedder.model_name:
-            raise KbIngestError(
-                f"KB {kb.name!r} 配置 embedding={kb.embedding_model}, "
-                f"但当前进程 embedder={self.embedder.model_name}, "
-                f"无法入库 (向量空间不兼容)"
-            )
-
     async def _persist(
         self,
         *,
@@ -252,6 +296,7 @@ class KbIngestService:
         children: list[Chunk],
         embeddings: list[list[float]],
         chunk_repo: KbDocumentChunkRepository,
+        child_store: ChildVectorStore | None,
     ) -> None:
         """落库阶段.
 
@@ -261,24 +306,27 @@ class KbIngestService:
                   同一 session, 调用方 commit 时统一生效)
         """
         # 4.1 清理库外 (重入时兜底)
-        self.child_store.delete_by_doc(document.id)
+        if child_store is not None:
+            child_store.delete_by_doc(document.id)
         self.bm25_store.delete_by_doc(document.id)
         # 4.2 清父块 (重入时兜底)
         await chunk_repo.delete_by_document(document.id)
 
         # 4.3 写库外
         if children:
-            self.child_store.add_children(children, embeddings)
+            if child_store is not None:
+                child_store.add_children(children, embeddings)
             self.bm25_store.add_children(children)
 
         # 4.4 写 MySQL 父块 (commit 由外层控制)
         parent_dicts = [self._chunk_to_parent_dict(p, document.kb_id) for p in parents]
         await chunk_repo.save_many(parent_dicts)
 
-    def _compensate(self, document_id: str) -> None:
+    def _compensate(self, document_id: str, child_store: ChildVectorStore | None) -> None:
         """异常发生后清掉库外存储 (best-effort, 每步独立 try)."""
         try:
-            self.child_store.delete_by_doc(document_id)
+            if child_store is not None:
+                child_store.delete_by_doc(document_id)
         except Exception:  # noqa: BLE001
             logger.exception("补偿: 清向量库失败")
         try:

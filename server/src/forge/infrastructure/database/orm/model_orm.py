@@ -1,4 +1,4 @@
-"""Model ORM — 模型信息表（统一存储 text / embedding / reranker 等类型）。"""
+"""Model ORM — 统一模型注册表。"""
 
 
 from sqlalchemy import JSON, BigInteger, Boolean, Index, Integer, String
@@ -17,22 +17,23 @@ class ModelOrm(Base, BigIntPKMixin):
     name: Mapped[str] = mapped_column(String(128), nullable=False, comment="模型名: gpt-4o / qwen-plus / text-embedding-v3")
     display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", comment="展示名")
     model_type: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="text", comment="text / embedding / reranker / image / audio"
+        String(32), nullable=False, default="chat", comment="chat / embedding / reranker"
     )
-    context_window: Mapped[int] = mapped_column(Integer, nullable=False, default=128000, comment="上下文窗口长度")
-    max_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=4096, comment="最大输出 token")
-    supports_tools: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否支持工具调用")
-    supports_images: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="是否支持图片识别")
-    supports_thinking: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="是否支持思考模式")
+    # 以下类型专属列仅为兼容旧数据库保留，新业务代码不得读取或写入。
+    context_window: Mapped[int] = mapped_column(Integer, nullable=False, default=128000, comment="已废弃")
+    max_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=4096, comment="已废弃")
+    supports_tools: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="已废弃")
+    supports_images: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="已废弃")
+    supports_thinking: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="已废弃")
     thinking_options: Mapped[list | None] = mapped_column(
-        JSON, nullable=True, comment='思考强度档位: ["standard","low","medium","high","xhigh"]'
+        JSON, nullable=True, comment="已废弃"
     )
     extra_params: Mapped[dict | None] = mapped_column(
-        JSON, nullable=True, comment="类型特定参数: dimension / batch_size / timeout / truncation ..."
+        JSON, nullable=True, comment="已废弃"
     )
     cost_tier: Mapped[str] = mapped_column(String(16), nullable=False, default="mid", comment="cheap / mid / expensive")
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="启用标识")
-    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="是否该供应商的默认模型")
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="已废弃")
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="同类型内优先级")
     is_stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="API 不再返回时标记")
 

@@ -52,7 +52,6 @@ export default function KnowledgeDetailPage() {
               <div className="flex items-center gap-4 text-xs text-gray-400 mt-2">
                 <span>{kb.document_count} 文档</span>
                 <span>{kb.chunk_count} 分块</span>
-                <span>嵌入模型: {kb.embedding_model}</span>
               </div>
             </div>
           </div>

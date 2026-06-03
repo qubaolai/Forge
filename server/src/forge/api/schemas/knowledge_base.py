@@ -33,7 +33,6 @@ class KbInfo(BaseModel):
     name: str
     description: str | None
     visibility: str
-    embedding_model: str | None
     document_count: int
     chunk_count: int
     size_bytes: int
@@ -55,6 +54,10 @@ class KbDocumentInfo(BaseModel):
     progress: int
     chunk_count: int
     indexed_at: datetime | None
+    embedding_model_id: str | None
+    vector_index_status: str
+    vector_index_error: str | None
+    vector_indexed_at: datetime | None
     created_at: datetime
     updated_at: datetime
 

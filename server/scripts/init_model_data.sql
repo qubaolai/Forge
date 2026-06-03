@@ -1,93 +1,102 @@
 -- ============================================================
 -- Forge 模型配置初始化 SQL
 -- 使用方法: mysql -h host -u user -p database < init_model_data.sql
--- 表结构由服务启动时 bootstrap_schema 自动创建，本脚本只写数据。
+-- 表结构由服务启动时 bootstrap_schema 自动创建，本脚本只写示例数据。
+-- 所有 id 均为示例雪花 ID；生产环境建议通过管理 API 或 seed_models.py 创建。
+-- 系统绑定保持为空，升级后由管理员在页面手动选择。
 -- ============================================================
 
--- ------------------------------------------------------------
--- 1. 供应商 (providers)
--- snowflake id 由应用层生成；手动插入时用固定值。
--- ------------------------------------------------------------
-INSERT INTO providers (id, provider_id, name, impl, base_url, is_enabled, priority, routing_config, created_at, updated_at)
+-- 1. 供应商
+INSERT INTO providers
+  (id, name, impl, base_url, is_enabled, priority, routing_config, created_at, updated_at)
 VALUES
-(1001, 'prov_dashscope', 'dashscope', NULL, NULL, 1, 10,
-  '{"fallback_chain":[{"provider":"openai","model":"gpt-4o-mini"}],"max_retries":3,"retry_backoff_seconds":1.0}',
-  NOW(), NOW()),
-(1003, 'prov_deepseek',  'deepseek',  NULL, NULL, 1, 30, '{}', NOW(), NOW())
-ON DUPLICATE KEY UPDATE name=VALUES(name);
+  (1001, 'dashscope', 'dashscope', NULL, 1, 10, '{}', NOW(), NOW()),
+  (1003, 'deepseek', 'deepseek', NULL, 1, 30, '{}', NOW(), NOW())
+ON DUPLICATE KEY UPDATE
+  impl=VALUES(impl),
+  base_url=VALUES(base_url),
+  is_enabled=VALUES(is_enabled),
+  priority=VALUES(priority),
+  routing_config=VALUES(routing_config);
 
--- ------------------------------------------------------------
--- 2. API Key (provider_keys)
--- ★ key_ciphertext 需要填入真实的 AES 加密后的 API Key
---    先用占位符 'CHANGE_ME_xxxxxxxxx'，上线前替换为真实加密值。
---    AES 加密方法见 server/src/forge/utils/crypto.py
--- ------------------------------------------------------------
-INSERT INTO provider_keys (id, key_id, provider_id, key_ciphertext, key_fingerprint, is_enabled, weight, created_at, updated_at)
+-- 2. 统一模型注册表
+-- 兼容物理列仍需提供值，但新业务代码不再读取 context_window、
+-- max_output_tokens、supports_*、thinking_options、extra_params、is_default。
+INSERT INTO models
+  (id, provider_id, name, display_name, model_type,
+   context_window, max_output_tokens, supports_tools, supports_images,
+   supports_thinking, thinking_options, extra_params,
+   cost_tier, is_enabled, is_default, priority, is_stale, created_at, updated_at)
 VALUES
-(2001, 'pkey_ds_1',   1001, 'CHANGE_ME_DASHSCOPE_KEY',  'sk-xxx-ds',  1, 1, NOW(), NOW()),
-(2002, 'pkey_openai', 1002, 'CHANGE_ME_OPENAI_KEY',    'sk-xxx-oai', 1, 1, NOW(), NOW()),
-(2003, 'pkey_ds2',    1003, 'CHANGE_ME_DEEPSEEK_KEY',  'sk-xxx-dp',  1, 1, NOW(), NOW()),
-(2004, 'pkey_anth',   1004, 'CHANGE_ME_ANTHROPIC_KEY', 'sk-xxx-ant', 1, 1, NOW(), NOW())
-ON DUPLICATE KEY UPDATE key_id=VALUES(key_id);
+  (3001, 1001, 'qwen-plus', '通义千问 Plus', 'chat',
+   0, 0, 0, 0, 0, NULL, NULL, 'cheap', 1, 0, 100, 0, NOW(), NOW()),
+  (3002, 1003, 'deepseek-v4-pro', 'DeepSeek V4 PRO', 'chat',
+   0, 0, 0, 0, 0, NULL, NULL, 'expensive', 1, 0, 100, 0, NOW(), NOW()),
+  (3101, 1001, 'text-embedding-v3', '通义千问 Embedding V3', 'embedding',
+   0, 0, 0, 0, 0, NULL, NULL, 'cheap', 1, 0, 100, 0, NOW(), NOW()),
+  (3201, 1001, 'gte-rerank', '通义千问 GTE Rerank', 'reranker',
+   0, 0, 0, 0, 0, NULL, NULL, 'cheap', 1, 0, 100, 0, NOW(), NOW())
+ON DUPLICATE KEY UPDATE
+  display_name=VALUES(display_name),
+  cost_tier=VALUES(cost_tier),
+  is_enabled=VALUES(is_enabled),
+  priority=VALUES(priority),
+  is_stale=VALUES(is_stale);
 
--- ------------------------------------------------------------
--- 3. 模型 (models) — 文本模型 (model_type = 'text')
--- ------------------------------------------------------------
-INSERT INTO models (id, model_id, provider_id, name, display_name, model_type,
-  context_window, max_output_tokens,
-  supports_tools, supports_images, supports_thinking,
-  thinking_options,
-  extra_params, cost_tier, is_enabled, is_default, priority, created_at, updated_at)
+-- 3. Chat 模型配置
+INSERT INTO chat_model_configs
+  (id, model_id, context_window, max_output_tokens, input_modalities,
+   output_modalities, capabilities, thinking_options, provider_options,
+   created_at, updated_at)
 VALUES
--- DashScope / 通义千问
-(3001, 'mdl_ds_max',    1001, 'qwen3-max-preview', '通义千问 Max', 'text',
-  32768,  8192,  true, false, false, NULL,
-  '{"temperature":0.7}', 'mid',   true, false, 90, NOW(), NOW()),
-(3002, 'mdl_ds_plus',   1001, 'qwen-plus', '通义千问 Plus', 'text',
-  131072, 8192,  true, false, false, NULL,
-  '{"temperature":0.7}', 'cheap', true, true,  100, NOW(), NOW()),
-(3003, 'mdl_ds_36plus', 1001, 'qwen3.6-plus', '通义千问 qwen3.6-plus', 'text',
-  131072, 8192,  true, false, false, NULL,
-  '{"temperature":0.7}', 'mid',   true, false, 80, NOW(), NOW()),
-(3004, 'mdl_ds_flash',  1001, 'qwen3.5-flash', '通义千问 qwen3.5-flash', 'text',
-  8192,   4096,  true, false, false, NULL,
-  '{"temperature":0.7}', 'cheap', true, false, 70, NOW(), NOW()),
+  (4001, 3001, 131072, 8192, '["text"]', '["text"]', '["tools"]', NULL,
+   '{"temperature":0.7}', NOW(), NOW()),
+  (4002, 3002, 1000000, 32768, '["text"]', '["text"]', '["tools","thinking"]',
+   '["standard","low","medium","high","xhigh"]',
+   '{"temperature":0.7}', NOW(), NOW())
+ON DUPLICATE KEY UPDATE
+  context_window=VALUES(context_window),
+  max_output_tokens=VALUES(max_output_tokens),
+  input_modalities=VALUES(input_modalities),
+  output_modalities=VALUES(output_modalities),
+  capabilities=VALUES(capabilities),
+  thinking_options=VALUES(thinking_options),
+  provider_options=VALUES(provider_options);
 
--- DeepSeek
-(3021, 'mdl_dp_pro',  1003, 'deepseek-v4-pro',  'DeepSeek V4 PRO',  'text',
-  1000000, 32768, true, false, true,
-  '["standard","low","medium","high","xhigh"]',
-  '{"temperature":0.7}', 'expensive', true, true,  100, NOW(), NOW()),
-(3022, 'mdl_dp_flash', 1003, 'deepseek-v4-flash', 'DeepSeek V4 flash', 'text',
-  1000000, 32768, true, false, true,
-  '["standard","low","medium","high","xhigh"]',
-  '{"temperature":0.7}', 'mid',       true, false, 90, NOW(), NOW())
-ON DUPLICATE KEY UPDATE name=VALUES(name);
-
--- ------------------------------------------------------------
--- 4. 模型 (models) — Embedding 模型 (model_type = 'embedding')
--- ------------------------------------------------------------
-INSERT INTO models (id, model_id, provider_id, name, display_name, model_type,
-  context_window, max_output_tokens,
-  supports_tools, supports_images, supports_thinking,
-  extra_params, cost_tier, is_enabled, is_default, priority, created_at, updated_at)
+-- 4. Embedding 模型配置
+INSERT INTO embedding_model_configs
+  (id, model_id, dimension, batch_size, input_modalities, max_retries,
+   retry_backoff, provider_options, created_at, updated_at)
 VALUES
-(3101, 'mdl_emb_ds', 1001, 'text-embedding-v3', '通义千问 Embedding V3', 'embedding',
-  0, 0, false, false, false,
-  '{"dimension":1024,"batch_size":10,"max_retries":3,"retry_backoff":1.0}',
-  'cheap', true, true, 100, NOW(), NOW())
-ON DUPLICATE KEY UPDATE name=VALUES(name);
+  (4101, 3101, 1024, 10, '["text"]', 3, 1.0, '{}', NOW(), NOW())
+ON DUPLICATE KEY UPDATE
+  batch_size=VALUES(batch_size),
+  input_modalities=VALUES(input_modalities),
+  max_retries=VALUES(max_retries),
+  retry_backoff=VALUES(retry_backoff),
+  provider_options=VALUES(provider_options);
 
--- ------------------------------------------------------------
--- 5. 模型 (models) — Reranker 模型 (model_type = 'reranker')
--- ------------------------------------------------------------
-INSERT INTO models (id, model_id, provider_id, name, display_name, model_type,
-  context_window, max_output_tokens,
-  supports_tools, supports_images, supports_thinking,
-  extra_params, cost_tier, is_enabled, is_default, priority, created_at, updated_at)
+-- 5. Reranker 模型配置
+INSERT INTO reranker_model_configs
+  (id, model_id, timeout_seconds, max_retries, retry_backoff,
+   truncation_strategy, max_doc_chars, monitor_threshold, provider_options,
+   created_at, updated_at)
 VALUES
-(3201, 'mdl_rerank_ds', 1001, 'gte-rerank', '通义千问 GTE Rerank', 'reranker',
-  0, 0, false, false, false,
-  '{"timeout":5.0,"truncation":{"strategy":"tail","max_doc_chars":4000,"monitor_threshold":0.1}}',
-  'cheap', true, true, 100, NOW(), NOW())
-ON DUPLICATE KEY UPDATE name=VALUES(name);
+  (4201, 3201, 5.0, 2, 1.0, 'tail', 4000, 0.1, '{}', NOW(), NOW())
+ON DUPLICATE KEY UPDATE
+  timeout_seconds=VALUES(timeout_seconds),
+  max_retries=VALUES(max_retries),
+  retry_backoff=VALUES(retry_backoff),
+  truncation_strategy=VALUES(truncation_strategy),
+  max_doc_chars=VALUES(max_doc_chars),
+  monitor_threshold=VALUES(monitor_threshold),
+  provider_options=VALUES(provider_options);
+
+-- 6. 系统模型绑定：仅创建角色，不自动选择模型
+INSERT INTO system_model_bindings
+  (id, role, model_id, version, updated_by, created_at, updated_at)
+VALUES
+  (4301, 'rag_embedding', NULL, 0, NULL, NOW(), NOW()),
+  (4302, 'semantic_history_embedding', NULL, 0, NULL, NOW(), NOW()),
+  (4303, 'rag_reranker', NULL, 0, NULL, NOW(), NOW())
+ON DUPLICATE KEY UPDATE role=VALUES(role);

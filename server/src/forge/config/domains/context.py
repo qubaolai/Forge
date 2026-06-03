@@ -48,7 +48,7 @@ class ContextSemanticRecallSettings(BaseSettings):
     有额外延迟/成本, 故 opt-in。关闭时 HybridFilter 走 NullScorer (= 仅近期锚点保留,
     等价 RecentFilter 行为), 与改动前完全一致。
 
-    依赖: 需配置可用的 embedding provider (settings.embedding); 不可用时整体降级 RecentFilter。
+    依赖: 需配置 semantic_history_embedding 系统模型绑定；不可用时整体降级 RecentFilter。
     """
     model_config = SettingsConfigDict(extra="ignore")
 

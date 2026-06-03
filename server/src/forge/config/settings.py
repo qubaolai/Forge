@@ -10,8 +10,7 @@
 
     # 工具模型: 业务层通过 LLMRequest(task_type="utility", model_profile="fast") 走 LLMGateway 即可
 
-    # 其他组件 (启动时定死 provider)
-    embedder_cfg = s.embedding.active_config()
+    # Embedding / Reranker 模型由数据库系统绑定选择。
 
 环境配置选择 (优先级从高到低):
     1. init_settings(path) 显式传入
@@ -49,7 +48,6 @@ from forge.config.domains.quota import UserQuotaSettings
 from forge.config.domains.retrieval import (
     BM25StoreConfig,
     ComponentConfig,
-    EmbeddingConfig,
     IngestConfig,
     RetrievalConfig,
 )
@@ -110,10 +108,8 @@ class Settings:
         self.utility_llm = UtilityLLMConfig(**utility_cfg)
 
         self.ingest = IngestConfig(**config.get("ingest", {}))
-        self.embedding = EmbeddingConfig(**config["embedding"])
         self.vector_store = ComponentConfig(**config["vector_store"])
         self.bm25_store = BM25StoreConfig(**config["bm25_store"])
-        self.reranker = ComponentConfig(**config["reranker"])
         self.retrieval = RetrievalConfig(**config.get("retrieval", {}))
         # 统一 agent_mode 治理: 工具白名单 / 模型档位 / 步数上限均移到 agent_profiles 段.
         self.agent_profiles = AgentProfilesConfig(**(config.get("agent_profiles") or {}))

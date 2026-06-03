@@ -23,7 +23,8 @@ export function DocumentsTab({ kbId }: Props) {
       const items = q.state.data?.items;
       if (!items) return false;
       const hasInProgress = items.some(
-        (d) => d.status !== 'indexed' && d.status !== 'failed',
+        (d) => (d.status !== 'indexed' && d.status !== 'failed')
+          || d.vector_index_status === 'rebuilding',
       );
       return hasInProgress ? 1500 : false;
     },
@@ -158,6 +159,30 @@ function StatusIndicator({ doc }: { doc: KnowledgeDocument }) {
   const status = doc.status;
 
   if (status === 'indexed') {
+    if (doc.vector_index_status === 'stale') {
+      return (
+        <span className="flex items-center gap-1 text-xs text-amber-600" title="BM25 检索可用，向量索引需要重建">
+          <AlertCircle size={13} />
+          BM25 可用 · 向量待重建
+        </span>
+      );
+    }
+    if (doc.vector_index_status === 'rebuilding') {
+      return (
+        <span className="flex items-center gap-1 text-xs text-blue-600">
+          <RefreshCw size={12} className="animate-spin" />
+          向量重建中
+        </span>
+      );
+    }
+    if (doc.vector_index_status === 'failed') {
+      return (
+        <span className="flex items-center gap-1 text-xs text-red-600" title={doc.vector_index_error}>
+          <AlertCircle size={13} />
+          向量索引失败
+        </span>
+      );
+    }
     return (
       <span className="flex items-center gap-1 text-xs text-green-600">
         <CheckCircle2 size={13} />

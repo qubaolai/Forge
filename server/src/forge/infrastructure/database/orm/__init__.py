@@ -14,10 +14,17 @@ from forge.infrastructure.database.orm.message_digest_orm import MessageDigestOr
 from forge.infrastructure.database.orm.message_embedding_orm import (
     MessageEmbeddingOrm,
 )
+from forge.infrastructure.database.orm.model_config_orm import (
+    ChatModelConfigOrm,
+    EmbeddingModelConfigOrm,
+    RerankerModelConfigOrm,
+)
 from forge.infrastructure.database.orm.model_orm import ModelOrm
 from forge.infrastructure.database.orm.model_provider_orm import ProviderOrm
 from forge.infrastructure.database.orm.provider_key_orm import ProviderKeyOrm
+from forge.infrastructure.database.orm.rag_index_rebuild_job_orm import RagIndexRebuildJobOrm
 from forge.infrastructure.database.orm.session_summary_orm import SessionSummaryOrm
+from forge.infrastructure.database.orm.system_model_binding_orm import SystemModelBindingOrm
 from forge.infrastructure.database.orm.user_orm import UserOrm
 
 __all__ = [
@@ -30,10 +37,15 @@ __all__ = [
     "MessageDigestOrm",
     "MessageEmbeddingOrm",
     "ModelOrm",
+    "ChatModelConfigOrm",
+    "EmbeddingModelConfigOrm",
+    "RerankerModelConfigOrm",
     "ProviderKeyOrm",
     "ProviderOrm",
+    "RagIndexRebuildJobOrm",
     "RefreshTokenBlacklist",
     "SessionSummaryOrm",
     "UserApiKey",
     "UserOrm",
+    "SystemModelBindingOrm",
 ]

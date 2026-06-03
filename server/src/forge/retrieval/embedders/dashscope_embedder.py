@@ -3,7 +3,7 @@
 模型: text-embedding-v3 / text-embedding-v2 / text-embedding-v1
 SDK: dashscope (官方)
 
-config 字段 (本类 __init__ 接受, 来自 yaml 的 embedding.providers.dashscope):
+config 字段 (本类 __init__ 接受, 来自数据库 embedding_model_configs):
     api_key:     必填
     model:       默认 "text-embedding-v3"
     dimension:   默认 1024 (v3 支持 512/768/1024/1536)

@@ -74,7 +74,6 @@ class KbService:
             owner_id=int(user_id),
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
-            embedding_model="",
         )
         await KnowledgeBaseRepository(session).create(kb)
         logger.info("KB 创建: id=%s name=%s owner=%s", kb.id, kb.name, user_id)

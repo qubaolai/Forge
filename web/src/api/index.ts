@@ -2,9 +2,10 @@ import { apiClient } from './client';
 import {
   Agent, AuthTokens, ChatMessage, ChatSession, KnowledgeBase,
   KnowledgeDocument, DocumentChunk, LoginPayload, LoginResponse,
-  ModelEndpoint, ModelUpsert, PaginatedData, PaginationParams,
-  ProviderAdmin, ProviderKey, ProviderModel, RetrievalResult,
-  RetrieveRequest, ToolDefinition, User, AuditLog,
+  GroupedModelsResponse, ModelType, ModelUpsert,
+  PaginatedData, PaginationParams, ProviderAdmin, ProviderKey, ProviderModel,
+  RagIndexJob, RagIndexStatus, RetrievalResult, RetrieveRequest,
+  SystemModelBinding, ToolDefinition, User, AuditLog,
 } from '@/types';
 
 export const authApi = {
@@ -96,10 +97,14 @@ export const toolsApi = {
   list: () => apiClient.get<ToolDefinition[]>('/tools'),
 };
 
-// 仅保留 list（agent 编辑器的 ModelTab / PreviewPanel 仍在用）。
-// 管理端的模型/供应商配置改用下方 providersApi / modelsAdminApi / providerKeysApi。
+// Agent 编辑器只允许选择 Chat 模型，返回扁平列表便于消费。
 export const modelsApi = {
-  list: () => apiClient.get<ModelEndpoint[]>('/models'),
+  list: async () => {
+    const response = await apiClient.get<GroupedModelsResponse>('/models', {
+      params: { model_type: 'chat' },
+    });
+    return response.models || response.groups.flatMap((group) => group.models);
+  },
 };
 
 // ---- 管理端：供应商（不支持新增供应商，仅启停 + 读取） ----
@@ -119,9 +124,23 @@ export const modelsAdminApi = {
     apiClient.put<ProviderModel>(`/models/${modelId}`, payload),
   toggle: (modelId: string, enabled: boolean) =>
     apiClient.put<ProviderModel>(`/models/${modelId}`, { enabled }),
-  setDefault: (modelId: string) =>
-    apiClient.put<ProviderModel>(`/models/${modelId}`, { is_default: true }),
   remove: (modelId: string) => apiClient.delete<void>(`/models/${modelId}`),
+};
+
+export const modelBindingsApi = {
+  list: () => apiClient.get<SystemModelBinding[]>('/admin/model-bindings'),
+  update: (role: string, modelId: string | null) =>
+    apiClient.put<Pick<SystemModelBinding, 'role' | 'model_id' | 'version'>>(
+      `/admin/model-bindings/${role}`,
+      { model_id: modelId },
+    ),
+};
+
+export const ragIndexAdminApi = {
+  status: () => apiClient.get<RagIndexStatus>('/admin/rag-index/status'),
+  rebuild: () => apiClient.post<RagIndexJob>('/admin/rag-index/rebuild'),
+  retry: (jobId: string) =>
+    apiClient.post<RagIndexJob>(`/admin/rag-index/rebuild/${jobId}/retry`),
 };
 
 // ---- 管理端：供应商 API-Key 增删改查 ----
@@ -140,33 +159,7 @@ export const auditApi = {
     apiClient.get<PaginatedData<AuditLog>>('/audit-logs', { params }),
 };
 
-export interface ModelInfo {
-  provider: string;
-  model_id: string;
-  name: string;
-  display_name: string;
-  model_type: string;
-  context_window: number;
-  supports_tools: boolean;
-  supports_images: boolean;
-  supports_thinking: boolean;
-  thinking: { options?: string[] | null; default?: string | null } | null;
-}
-
-export interface ModelGroup {
-  provider: string;
-  models: ModelInfo[];
-}
-
-export interface GroupedModelsResponse {
-  groups: ModelGroup[];
-  providers?: string[];
-  models?: ModelInfo[];
-  provider?: string;
-  model_type?: string;
-}
-
 export const systemApi = {
-  models: (params?: { provider?: string; model_type?: string }) =>
+  models: (params?: { provider?: string; model_type?: ModelType }) =>
     apiClient.get<GroupedModelsResponse>('/models', { params }),
 };

@@ -17,23 +17,19 @@ class _FakeCache:
                     "model_id": "mdl_a_1",
                     "name": "claude-sonnet-4-6",
                     "display_name": "Claude Sonnet 4.6",
-                    "model_type": "text",
-                    "context_window": 200000,
-                    "supports_tools": True,
-                    "supports_images": True,
-                    "supports_thinking": True,
-                    "thinking_options": ["standard", "low", "medium", "high", "xhigh"],
+                    "model_type": "chat",
+                    "config": {
+                        "context_window": 200000,
+                        "capabilities": ["tools", "vision", "thinking"],
+                        "thinking_options": ["standard", "low", "medium", "high", "xhigh"],
+                    },
                 },
                 {
                     "model_id": "mdl_a_2",
                     "name": "anthropic-embedding-v1",
                     "display_name": "Anthropic Embedding V1",
                     "model_type": "embedding",
-                    "context_window": 8192,
-                    "supports_tools": False,
-                    "supports_images": False,
-                    "supports_thinking": False,
-                    "thinking_options": None,
+                    "config": {"dimension": 1024},
                 },
             ],
             "openai": [
@@ -41,12 +37,12 @@ class _FakeCache:
                     "model_id": "mdl_o_1",
                     "name": "gpt-4.1",
                     "display_name": "GPT-4.1",
-                    "model_type": "text",
-                    "context_window": 128000,
-                    "supports_tools": True,
-                    "supports_images": True,
-                    "supports_thinking": True,
-                    "thinking_options": ["standard", "low", "medium", "high", "xhigh"],
+                    "model_type": "chat",
+                    "config": {
+                        "context_window": 128000,
+                        "capabilities": ["tools", "vision", "thinking"],
+                        "thinking_options": ["standard", "low", "medium", "high", "xhigh"],
+                    },
                 },
             ],
         }
@@ -68,7 +64,7 @@ async def test_list_models_grouped_by_provider() -> None:
         db=None,
         model_cache=_FakeCache(),
         provider=None,
-        model_type="text",
+        model_type="chat",
     )
     data = response["data"]
 
@@ -80,7 +76,7 @@ async def test_list_models_grouped_by_provider() -> None:
     assert anthropic_group["provider"] == "anthropic"
     assert len(anthropic_group["models"]) == 1
     assert anthropic_group["models"][0]["name"] == "claude-sonnet-4-6"
-    assert anthropic_group["models"][0]["supports_thinking"] is True
+    assert "thinking" in anthropic_group["models"][0]["config"]["capabilities"]
     assert anthropic_group["models"][0]["thinking"] == {
         "options": ["standard", "low", "medium", "high", "xhigh"],
         "default": "standard",
@@ -100,7 +96,7 @@ async def test_list_models_provider_filter() -> None:
         db=None,
         model_cache=_FakeCache(),
         provider="openai",
-        model_type="text",
+        model_type="chat",
     )
     data = response["data"]
 

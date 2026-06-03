@@ -55,7 +55,7 @@ _PROVIDERS = [
 
 # 文本模型列表 → 依附的供应商 name
 _TEXT_MODELS: list[tuple[str, str, str, str, dict | None]] = [
-    # (provider_name, model_name, display_name, cost_tier, extra_params)
+    # (provider_name, model_name, display_name, cost_tier, provider_options)
     ("dashscope",  "qwen3-max-preview", "通义千问 Max",           "mid",       {"temperature": 0.7}),
     ("dashscope",  "qwen-plus",         "通义千问 Plus",          "cheap",     {"temperature": 0.7}),
     ("dashscope",  "qwen3.6-plus",      "通义千问 qwen3.6-plus",  "mid",       {"temperature": 0.7}),
@@ -70,14 +70,14 @@ _TEXT_MODELS: list[tuple[str, str, str, str, dict | None]] = [
     ("anthropic",  "claude-opus-4-7",   "Claude Opus 4.7",        "expensive", {"temperature": 1.0, "max_tokens": 4096}),
 ]
 
-# 非文本模型 (embedding / reranker)
+# 非 Chat 模型 (embedding / reranker)
 _OTHER_MODELS = [
     ("dashscope", "text-embedding-v3", "通义千问 Embedding V3", "embedding",
      {"dimension": 1024, "batch_size": 10, "max_retries": 3, "retry_backoff": 1.0},
-     "cheap", True),
+     "cheap"),
     ("dashscope", "gte-rerank", "通义千问 GTE Rerank", "reranker",
      {"timeout": 5.0, "truncation": {"strategy": "tail", "max_doc_chars": 4000, "monitor_threshold": 0.1}},
-     "cheap", True),
+     "cheap"),
 ]
 
 
@@ -88,6 +88,7 @@ async def seed() -> None:
     from forge.infrastructure.database.orm.model_provider_orm import ProviderOrm
     from forge.infrastructure.database.orm.model_orm import ModelOrm
     from forge.infrastructure.database.repositories.model_repo import ModelRepository
+    from forge.infrastructure.database.repositories.model_config_repo import ModelConfigRepository
     from forge.utils.id_generator import new_id
 
     settings = get_settings()
@@ -133,6 +134,7 @@ async def seed() -> None:
         # ---- 2. 文本模型 ----
         logger.info("写入文本模型...")
         model_repo = ModelRepository(db)
+        config_repo = ModelConfigRepository(db)
         for provider_name, model_name, display_name, cost_tier, extra in _TEXT_MODELS:
             prov = providers.get(provider_name)
             if not prov:
@@ -145,27 +147,32 @@ async def seed() -> None:
             model_data = {
                 "name": model_name,
                 "display_name": display_name,
-                "model_type": "text",
-                "context_window": cap.get("context_window", 128000),
-                "max_output_tokens": (extra or {}).get("max_tokens", 4096) if extra else 4096,
-                "supports_tools": cap.get("supports_tools", True),
-                "supports_images": cap.get("supports_images", False),
-                "supports_thinking": thinking_raw is not None,
-                "thinking_options": thinking_options,
-                "extra_params": extra,
+                "model_type": "chat",
                 "cost_tier": cost_tier,
-                "is_default": (model_name == "qwen-plus" or model_name == "gpt-4o"
-                               or model_name == "deepseek-v4-pro" or model_name == "claude-sonnet-4-5"),
             }
             model, _ = await model_repo.sync_upsert(prov.id, model_data)
             model.cost_tier = model_data.get("cost_tier", model.cost_tier)
-            if model_data.get("is_default"):
-                model.is_default = True
+            capabilities = []
+            if cap.get("supports_tools", True):
+                capabilities.append("tools")
+            if cap.get("supports_images", False):
+                capabilities.append("vision")
+            if thinking_raw is not None:
+                capabilities.append("thinking")
+            await config_repo.update(model.id, "chat", {
+                "context_window": cap.get("context_window", 128000),
+                "max_output_tokens": (extra or {}).get("max_tokens", 4096) if extra else 4096,
+                "input_modalities": ["text", "image"] if cap.get("supports_images", False) else ["text"],
+                "output_modalities": ["text"],
+                "capabilities": capabilities,
+                "thinking_options": thinking_options,
+                "provider_options": extra or {},
+            })
         logger.info("  文本模型写入完成")
 
         # ---- 3. Embedding / Reranker 模型 ----
         logger.info("写入 Embedding / Reranker 模型...")
-        for provider_name, model_name, display_name, model_type, extra, cost_tier, is_default in _OTHER_MODELS:
+        for provider_name, model_name, display_name, model_type, extra, cost_tier in _OTHER_MODELS:
             prov = providers.get(provider_name)
             if not prov:
                 logger.warning("  供应商不存在, 跳过: %s:%s", provider_name, model_name)
@@ -174,19 +181,30 @@ async def seed() -> None:
                 "name": model_name,
                 "display_name": display_name,
                 "model_type": model_type,
-                "context_window": 0,
-                "max_output_tokens": 0,
-                "supports_tools": False,
-                "supports_images": False,
-                "supports_thinking": False,
-                "extra_params": extra,
                 "cost_tier": cost_tier,
-                "is_default": is_default,
             }
             model, _ = await model_repo.sync_upsert(prov.id, model_data)
             model.cost_tier = model_data.get("cost_tier", model.cost_tier)
-            if model_data.get("is_default"):
-                model.is_default = True
+            if model_type == "embedding":
+                await config_repo.update(model.id, model_type, {
+                    "dimension": extra.get("dimension", 1024),
+                    "batch_size": extra.get("batch_size", 10),
+                    "input_modalities": ["text"],
+                    "max_retries": extra.get("max_retries", 3),
+                    "retry_backoff": extra.get("retry_backoff", 1.0),
+                    "provider_options": {},
+                })
+            else:
+                truncation = extra.get("truncation", {})
+                await config_repo.update(model.id, model_type, {
+                    "timeout_seconds": extra.get("timeout", 5.0),
+                    "max_retries": extra.get("max_retries", 2),
+                    "retry_backoff": extra.get("retry_backoff", 1.0),
+                    "truncation_strategy": truncation.get("strategy", "tail"),
+                    "max_doc_chars": truncation.get("max_doc_chars", 4000),
+                    "monitor_threshold": truncation.get("monitor_threshold", 0.1),
+                    "provider_options": {},
+                })
         logger.info("  Embedding / Reranker 模型写入完成")
 
         await db.commit()

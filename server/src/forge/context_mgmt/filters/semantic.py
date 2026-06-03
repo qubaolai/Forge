@@ -57,12 +57,14 @@ class EmbeddingScorer(RelevanceScorer):
 
     def __init__(
         self,
-        embedder: Embedder,
+        embedder: Embedder | None,
         store: Any | None = None,
         *,
         model: str | None = None,
+        resolver=None,
     ) -> None:
         self._embedder = embedder
+        self._resolver = resolver
         # MessageEmbeddingStore (含 async batch_get(ids, model=...)); None 时全部走保留兜底
         self._store = store
         self._model = model or getattr(embedder, "model_name", "") or ""
@@ -73,12 +75,19 @@ class EmbeddingScorer(RelevanceScorer):
         if not messages:
             return []
 
+        embedder = self._embedder
+        if self._resolver is not None:
+            embedder = await self._resolver()
+        if embedder is None:
+            return [1.0] * len(messages)
+        model = str(getattr(embedder, "_forge_model_id", "") or getattr(embedder, "model_name", "") or self._model)
+
         # 1. 批量读候选消息的缓存向量 (按当前 model 匹配)
         cached: dict[str, list[float]] = {}
         if self._store is not None:
             try:
                 cached = await self._store.batch_get(
-                    [m.id for m in messages], model=self._model
+                    [m.id for m in messages], model=model
                 )
             except Exception as exc:  # noqa: BLE001 — 缓存读失败, 早期轮次全部保留
                 logger.warning("消息向量缓存读取失败, 保留全部: %s", exc)
@@ -87,7 +96,7 @@ class EmbeddingScorer(RelevanceScorer):
         # 2. query 向量 (同步 embed 放线程池避免阻塞事件循环)
         import asyncio
 
-        raw = await asyncio.to_thread(self._embedder.embed_query, query)
+        raw = await asyncio.to_thread(embedder.embed_query, query)
         query_vec = _as_vector(raw)
 
         # 3. 逐条算余弦; 无缓存向量 / 维度不符 -> 1.0 (保留, 不误删)
@@ -103,7 +112,7 @@ class EmbeddingScorer(RelevanceScorer):
 
 def _as_vector(raw: Any) -> list[float]:
     """把 embed_query 返回值规整成单条向量 list[float] (兼容嵌套 [[...]] 返回)。"""
-    if raw and isinstance(raw[0], (list, tuple)):
+    if raw and isinstance(raw[0], list | tuple):
         return list(raw[0])
     return list(raw or [])
 

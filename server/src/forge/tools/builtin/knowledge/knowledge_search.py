@@ -14,8 +14,6 @@
       aexecute 时跑在同一个 task 里, ContextVar 自然继承.
     - 计费: embedder/reranker 内部自带 check_budget + record. 超额抛
       LLMBudgetExceeded → 这里 catch 后转友好文本.
-    - 多 KB 不同 embedding_model: 直接报错让用户分次检索 (向量空间不一致,
-      搜出来分数无意义).
     - 实现 arun 而非 run: DB 走全局 async engine, 必须在创建它的 event loop
       上使用, 否则会出 "Future attached to a different loop". 异步原生入口
       天然在主 loop 上跑, 不需要起临时 loop.
@@ -35,7 +33,6 @@ from forge.infrastructure.database.repositories.knowledge_base_repo import (
     KnowledgeBaseRepository,
 )
 from forge.llm.cost_tracker import LLMBudgetExceeded
-from forge.retrieval.runtime import get_retriever, is_ready
 from forge.tools.base import Tool
 from forge.tools.registry import register_tool
 
@@ -90,9 +87,6 @@ class KnowledgeSearchTool(Tool):
         if not kb_names:
             return "错误: kb_names 不能为空, 必须明确指定要搜哪些知识库"
 
-        if not is_ready():
-            return "错误: 检索器未就绪 (服务可能未启用 RAG)"
-
         user_id = current_user_id() or ""
         if not user_id:
             logger.warning("knowledge_search 调用缺少 user_id, 拒绝执行")
@@ -127,25 +121,28 @@ class KnowledgeSearchTool(Tool):
                     f"知识库无法访问或不存在: {missing}. 已访问列表: {sorted(found_names) or '无'}"
                 )
 
-            # embedding_model 一致性校验 - 不同模型向量空间不互通
-            models = {kb.embedding_model for kb in kbs if kb.embedding_model}
-            if len(models) > 1:
-                return (
-                    f"错误: 所选知识库使用了不同的 embedding 模型 {sorted(models)}, "
-                    f"向量空间不兼容, 请分次检索 (每次只选用同一模型的 KB)"
-                )
-
             kb_ids = [str(kb.id) for kb in kbs]
             doc_repo = KbDocumentRepository(db)
             doc_ids = await doc_repo.list_indexed_doc_ids(kb_ids)
             if not doc_ids:
                 return f"所选知识库 {sorted(found_names)} 中没有已索引的文档, 无可检索内容"
 
-            retriever = get_retriever()
+            from forge.retrieval.rag_runtime import get_rag_runtime
+
+            runtime = get_rag_runtime()
+            embedder = await runtime.resolve_embedding()
+            vector_doc_ids = (
+                await doc_repo.list_vector_ready_doc_ids(
+                    kb_ids, str(getattr(embedder, "_forge_model_id"))
+                )
+                if embedder is not None else []
+            )
+            retriever = await runtime.build_retriever()
             results = await retriever.retrieve(
                 query=query,
                 session=db,
                 doc_id_filter=doc_ids,
+                vector_doc_id_filter=vector_doc_ids,
                 top_n=top_n,
             )
 

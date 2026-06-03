@@ -147,6 +147,22 @@ class KbDocumentRepository(BaseRepository, KbDocumentStore):
         result = await self.session.execute(stmt)
         return [row[0] for row in result.all()]
 
+    async def list_vector_ready_doc_ids(self, kb_ids: list[str], model_id: str) -> list[str]:
+        if not kb_ids:
+            return []
+        ids = [i for i in (_to_int(k) for k in kb_ids) if i is not None]
+        mid = _to_int(model_id)
+        if not ids or mid is None:
+            return []
+        stmt = select(KbDocumentOrm.id).where(
+            KbDocumentOrm.kb_id.in_(ids),
+            KbDocumentOrm.status == "indexed",
+            KbDocumentOrm.vector_index_status == "ready",
+            KbDocumentOrm.embedding_model_id == mid,
+        )
+        result = await self.session.execute(stmt)
+        return [str(row[0]) for row in result.all()]
+
     async def find_by_content_hash(
         self,
         kb_id: str,

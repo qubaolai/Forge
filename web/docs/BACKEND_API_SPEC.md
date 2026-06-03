@@ -182,7 +182,42 @@
 
 | 方法 | 路径 | 用途 | 必需 |
 |---|---|---|---|
-| GET | `/models` | 可用模型列表 | ✅(前端会查) |
+| GET | `/models?model_type=chat` | 可用 Chat 模型列表，按供应商分组 | ✅(前端会查) |
+| GET | `/models/{id}` | 管理端读取模型详情 | ✅ |
+| PUT | `/models/{id}` | 管理端更新模型与类型配置 | ✅ |
+| DELETE | `/models/{id}` | 管理端删除模型 | ✅ |
+| GET | `/admin/model-bindings` | 读取系统模型绑定 | ✅ |
+| PUT | `/admin/model-bindings/{role}` | 切换系统模型绑定 | ✅ |
+| GET | `/admin/rag-index/status` | 读取 RAG 向量索引状态 | ✅ |
+| POST | `/admin/rag-index/rebuild` | 提交 RAG 向量索引重建 | ✅ |
+
+`GET /models` 返回统一模型结构，不再返回旧的 `ModelEndpoint[]`：
+
+```json
+{
+  "groups": [
+    {
+      "provider": "openai",
+      "models": [
+        {
+          "provider": "openai",
+          "model_id": "123",
+          "name": "gpt-4o",
+          "display_name": "GPT-4o",
+          "model_type": "chat",
+          "config": {
+            "context_window": 128000,
+            "max_output_tokens": 4096,
+            "capabilities": ["tools"]
+          },
+          "thinking": null
+        }
+      ]
+    }
+  ],
+  "models": []
+}
+```
 
 ### 2.7 暂不实现(单 Agent 模式)
 
@@ -403,7 +438,6 @@ class KnowledgeBase:
     visibility: Literal["private", "workspace", "public"]
     owner_id: str
     collaborators: List[Collaborator]
-    embedding_model: str       # e.g. "bge-m3"
     chunk_size: int
     chunk_overlap: int
     document_count: int        # 计算字段
@@ -427,6 +461,10 @@ class KnowledgeDocument:
     status_message: Optional[str]   # 失败原因
     progress: int                    # 0-100
     chunk_count: int
+    embedding_model_id: Optional[str]     # 当前向量索引使用的 models.id
+    vector_index_status: Literal["ready", "stale", "rebuilding", "failed"]
+    vector_index_error: Optional[str]
+    vector_indexed_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
     indexed_at: Optional[datetime]

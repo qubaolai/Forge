@@ -104,6 +104,7 @@ class ParentChildRetriever:
         query: str,
         session: AsyncSession,
         doc_id_filter: list[str] | None = None,
+        vector_doc_id_filter: list[str] | None = None,
         top_n: int | None = None,
     ) -> list[RetrievedParent]:
         """检索.
@@ -134,7 +135,7 @@ class ParentChildRetriever:
         t0 = time.perf_counter()
 
         # 1. 多路召回
-        hits_per_source = self._run_recalls(query, doc_id_filter)
+        hits_per_source = self._run_recalls(query, doc_id_filter, vector_doc_id_filter)
         if not any(hits_per_source.values()):
             logger.info("retrieve: 全部 recall 路无命中, 返回 []")
             return []
@@ -219,6 +220,7 @@ class ParentChildRetriever:
         self,
         query: str,
         doc_id_filter: list[str] | None,
+        vector_doc_id_filter: list[str] | None = None,
     ) -> dict[str, list[ChildHit]]:
         """串行调两路 recall, 单路失败 ERROR 日志 + 该路返回空.
 
@@ -232,7 +234,7 @@ class ParentChildRetriever:
                 self._vector_recall,
                 query,
                 self._config.vector_top_k,
-                doc_id_filter,
+                vector_doc_id_filter if vector_doc_id_filter is not None else doc_id_filter,
             )
         if self._bm25_recall is not None:
             result[self._bm25_recall.name] = self._safe_recall(

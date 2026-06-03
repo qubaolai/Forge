@@ -268,17 +268,6 @@ ingest:
     # 必须小于 chunk_size。
     chunk_overlap: 50
 
-embedding:
-  # 向量模型 provider。
-  # 入库与召回必须一致。
-  provider: mock
-
-  providers:
-    mock:
-      # 向量维度。
-      # 单位: 维。
-      dimension: 768
-
 vector_store:
   # 向量库 provider。
   provider: chroma
@@ -311,14 +300,6 @@ bm25_store:
     # 分词器用户词典路径。
     # null 表示不加载自定义词典。
     user_dict: null
-
-reranker:
-  # 重排器 provider。
-  # DB 可用时优先读 models 表；这里是兜底。
-  provider: mock
-
-  providers:
-    mock: {}
 
 retrieval:
   # 最终返回父块数量。

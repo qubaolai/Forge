@@ -1,10 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Plus, Edit2, Trash2, Star, KeyRound, Server, Loader2,
+  Plus, Edit2, Trash2, KeyRound, Server, Loader2, RefreshCw,
 } from 'lucide-react';
-import { providersApi, modelsAdminApi, providerKeysApi } from '@/api';
-import { ApiError, ModelUpsert, ProviderAdmin, ProviderKey, ProviderModel } from '@/types';
+import {
+  providersApi, modelsAdminApi, providerKeysApi, modelBindingsApi, ragIndexAdminApi,
+} from '@/api';
+import {
+  ApiError, ModelUpsert, ProviderAdmin, ProviderKey, ProviderModel, RagIndexStatus,
+  SystemModelBinding,
+} from '@/types';
 import { toast } from '@/components/common/Toast';
 import { cn } from '@/lib/utils';
 import { confirm } from '@/components/common/ConfirmDialog';
@@ -24,6 +29,18 @@ export default function AdminModelsPage() {
     queryKey: PROVIDERS_KEY,
     queryFn: () => providersApi.listAdmin(),
   });
+  const { data: bindings } = useQuery({
+    queryKey: ['admin-model-bindings'],
+    queryFn: modelBindingsApi.list,
+  });
+  const { data: ragStatus } = useQuery({
+    queryKey: ['admin-rag-index-status'],
+    queryFn: ragIndexAdminApi.status,
+    refetchInterval: (query) => {
+      const jobs = query.state.data?.jobs || [];
+      return jobs.some((job) => job.status === 'pending' || job.status === 'running') ? 2000 : false;
+    },
+  });
 
   return (
     <div className="h-full overflow-y-auto">
@@ -34,6 +51,11 @@ export default function AdminModelsPage() {
             管理各供应商的启用状态、模型与 API-Key（不支持新增供应商）
           </p>
         </div>
+        <SystemBindings
+          providers={providers || []}
+          bindings={bindings || []}
+          ragStatus={ragStatus}
+        />
 
         {isLoading ? (
           <div className="py-12 text-center text-sm text-gray-400">加载中…</div>
@@ -45,7 +67,7 @@ export default function AdminModelsPage() {
         ) : (
           <div className="space-y-4">
             {providers.map((p) => (
-              <ProviderCard key={p.id} provider={p} />
+              <ProviderCard key={p.id} provider={p} bindings={bindings || []} />
             ))}
           </div>
         )}
@@ -54,10 +76,139 @@ export default function AdminModelsPage() {
   );
 }
 
+function roleLabel(role: SystemModelBinding['role']) {
+  return {
+    rag_embedding: 'RAG Embedding',
+    semantic_history_embedding: '语义历史 Embedding',
+    rag_reranker: 'RAG Reranker',
+  }[role];
+}
+
+function SystemBindings({
+  providers,
+  bindings,
+  ragStatus,
+}: {
+  providers: ProviderAdmin[];
+  bindings: SystemModelBinding[];
+  ragStatus?: RagIndexStatus;
+}) {
+  const qc = useQueryClient();
+  const models = providers
+    .filter((provider) => provider.is_enabled)
+    .flatMap((provider) => provider.models.map((model) => ({
+      ...model,
+      providerName: provider.name,
+    })));
+  const staleCount = ragStatus?.documents?.stale || 0;
+  const affectedCount = Object.values(ragStatus?.documents || {}).reduce((sum, count) => sum + count, 0);
+  const latestJob = ragStatus?.jobs?.[0];
+  const update = useMutation({
+    mutationFn: ({ role, modelId }: { role: string; modelId: string | null }) =>
+      modelBindingsApi.update(role, modelId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin-model-bindings'] });
+      qc.invalidateQueries({ queryKey: ['admin-rag-index-status'] });
+      toast.success('系统模型绑定已更新');
+    },
+    onError: (e) => toast.error((e as ApiError).message || '切换失败'),
+  });
+  const rebuild = useMutation({
+    mutationFn: ragIndexAdminApi.rebuild,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin-rag-index-status'] });
+      toast.success('已提交 RAG 索引重建任务');
+    },
+    onError: (e) => toast.error((e as ApiError).message || '提交重建失败'),
+  });
+  const retry = useMutation({
+    mutationFn: (jobId: string) => ragIndexAdminApi.retry(jobId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin-rag-index-status'] });
+      toast.success('已提交失败文档重试任务');
+    },
+    onError: (e) => toast.error((e as ApiError).message || '提交重试失败'),
+  });
+
+  return (
+    <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-3">
+      {bindings.map((binding) => {
+        const expected = binding.role === 'rag_reranker' ? 'reranker' : 'embedding';
+        const candidates = models.filter((m) => m.model_type === expected && m.is_enabled);
+        return (
+          <div key={binding.role} className="rounded-lg border bg-white p-4">
+            <div className="text-xs font-medium text-gray-500">{roleLabel(binding.role)}</div>
+            <select
+              value={binding.model_id || ''}
+              onChange={async (e) => {
+                const modelId = e.target.value || null;
+                if (binding.role === 'rag_embedding' && binding.model_id && modelId !== binding.model_id) {
+                  const ok = await confirm({
+                    message: `切换 RAG Embedding 会使 ${affectedCount} 个现有文档的向量索引失效，重建前将仅使用 BM25 检索。是否继续？`,
+                    confirmLabel: '继续切换',
+                    danger: true,
+                  });
+                  if (!ok) return;
+                }
+                update.mutate({ role: binding.role, modelId });
+              }}
+              className={cn(inputCls, 'mt-2 bg-white')}
+            >
+              {binding.optional && <option value="">关闭</option>}
+              {!binding.optional && <option value="">请选择模型</option>}
+              {candidates.map((m) => (
+                <option key={m.model_id} value={m.model_id}>
+                  {m.providerName} / {m.display_name || m.name}
+                </option>
+              ))}
+            </select>
+            {binding.role === 'rag_embedding' && (
+              <div className="mt-3 space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className={staleCount > 0 ? 'text-amber-600' : 'text-gray-400'}>
+                    {staleCount > 0 ? `${staleCount} 个文档待重建` : '索引状态正常'}
+                  </span>
+                  <button
+                    onClick={() => rebuild.mutate()}
+                    disabled={!binding.model_id || rebuild.isPending}
+                    className="inline-flex items-center gap-1 text-orange-600 disabled:text-gray-300"
+                  >
+                    <RefreshCw size={12} /> 重建索引
+                  </button>
+                </div>
+                {latestJob && (
+                  <div className="rounded bg-gray-50 px-2 py-1.5 text-gray-500">
+                    <div className="flex items-center justify-between">
+                      <span>最近任务：{latestJob.status}</span>
+                      <span>{latestJob.succeeded_documents}/{latestJob.total_documents}</span>
+                    </div>
+                    {latestJob.failed_documents > 0 && (
+                      <div className="mt-1 flex items-center justify-between text-red-500">
+                        <span>{latestJob.failed_documents} 个文档失败</span>
+                        <button
+                          onClick={() => retry.mutate(latestJob.id)}
+                          disabled={retry.isPending}
+                          className="text-orange-600 disabled:text-gray-300"
+                        >
+                          重试失败文档
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ============================================================================
 // 供应商卡片
 // ============================================================================
-function ProviderCard({ provider }: { provider: ProviderAdmin }) {
+function ProviderCard({ provider, bindings }: { provider: ProviderAdmin; bindings: SystemModelBinding[] }) {
   const qc = useQueryClient();
   const [creatingModel, setCreatingModel] = useState(false);
   const [editingModel, setEditingModel] = useState<ProviderModel | null>(null);
@@ -115,7 +266,12 @@ function ProviderCard({ provider }: { provider: ProviderAdmin }) {
         ) : (
           <div className="divide-y divide-gray-100">
             {provider.models.map((m) => (
-              <ModelRow key={m.model_id} model={m} onEdit={() => setEditingModel(m)} />
+              <ModelRow
+                key={m.model_id}
+                model={m}
+                bindings={bindings}
+                onEdit={() => setEditingModel(m)}
+              />
             ))}
           </div>
         )}
@@ -141,21 +297,15 @@ function ProviderCard({ provider }: { provider: ProviderAdmin }) {
 // ============================================================================
 // 模型行
 // ============================================================================
-function ModelRow({ model, onEdit }: { model: ProviderModel; onEdit: () => void }) {
+function ModelRow({
+  model, bindings, onEdit,
+}: { model: ProviderModel; bindings: SystemModelBinding[]; onEdit: () => void }) {
   const qc = useQueryClient();
   const invalidate = () => qc.invalidateQueries({ queryKey: PROVIDERS_KEY });
 
   const toggle = useMutation({
     mutationFn: (enabled: boolean) => modelsAdminApi.toggle(model.model_id, enabled),
     onSuccess: invalidate,
-    onError: (e) => toast.error((e as ApiError).message || '操作失败'),
-  });
-  const setDefault = useMutation({
-    mutationFn: () => modelsAdminApi.setDefault(model.model_id),
-    onSuccess: () => {
-      invalidate();
-      toast.success('已设为默认');
-    },
     onError: (e) => toast.error((e as ApiError).message || '操作失败'),
   });
   const remove = useMutation({
@@ -174,22 +324,13 @@ function ModelRow({ model, onEdit }: { model: ProviderModel; onEdit: () => void 
         <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500">
           {model.model_type}
         </span>
-        {model.is_default && (
-          <span className="inline-flex items-center gap-0.5 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-600">
-            <Star size={9} className="fill-amber-500 text-amber-500" /> 默认
+        {bindings.filter((b) => b.model_id === model.model_id).map((b) => (
+          <span key={b.role} className="rounded bg-orange-50 px-1.5 py-0.5 text-[10px] text-orange-600">
+            {roleLabel(b.role)}
           </span>
-        )}
+        ))}
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
-        {!model.is_default && model.is_enabled && (
-          <button
-            onClick={() => setDefault.mutate()}
-            className="rounded p-1 text-gray-400 hover:bg-amber-50 hover:text-amber-600"
-            title="设为默认"
-          >
-            <Star size={14} />
-          </button>
-        )}
         <button
           onClick={onEdit}
           className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
@@ -350,17 +491,28 @@ function ModelDialog({
   const modelDbId = model?.id ?? '';
   const [name, setName] = useState(model?.name || '');
   const [displayName, setDisplayName] = useState(model?.display_name || '');
-  const [modelType, setModelType] = useState(model?.model_type || 'text');
-  const [contextWindow, setContextWindow] = useState(model?.context_window ?? 128000);
+  const [modelType, setModelType] = useState<ProviderModel['model_type']>(model?.model_type || 'chat');
+  const initialConfig = model?.config || {};
+  const [contextWindow, setContextWindow] = useState(Number(initialConfig.context_window ?? 128000));
+  const [maxOutputTokens, setMaxOutputTokens] = useState(Number(initialConfig.max_output_tokens ?? 4096));
+  const [dimension, setDimension] = useState(Number(initialConfig.dimension ?? 1024));
+  const [batchSize, setBatchSize] = useState(Number(initialConfig.batch_size ?? 10));
+  const [timeoutSeconds, setTimeoutSeconds] = useState(Number(initialConfig.timeout_seconds ?? 5));
+  const [maxRetries, setMaxRetries] = useState(Number(initialConfig.max_retries ?? 3));
+  const [retryBackoff, setRetryBackoff] = useState(Number(initialConfig.retry_backoff ?? 1));
+  const [truncationStrategy, setTruncationStrategy] = useState(String(initialConfig.truncation_strategy ?? 'tail'));
+  const [maxDocChars, setMaxDocChars] = useState(Number(initialConfig.max_doc_chars ?? 4000));
+  const [monitorThreshold, setMonitorThreshold] = useState(Number(initialConfig.monitor_threshold ?? 0.1));
   const [costTier, setCostTier] = useState(model?.cost_tier || 'mid');
-  const [supportsTools, setSupportsTools] = useState(model?.supports_tools ?? true);
-  const [supportsImages, setSupportsImages] = useState(model?.supports_images ?? false);
-  const [supportsThinking, setSupportsThinking] = useState(model?.supports_thinking ?? false);
+  const initialCaps = (initialConfig.capabilities as string[] | undefined) || [];
+  const [supportsTools, setSupportsTools] = useState(initialCaps.includes('tools'));
+  const [supportsImages, setSupportsImages] = useState(initialCaps.includes('vision'));
+  const [supportsThinking, setSupportsThinking] = useState(initialCaps.includes('thinking'));
   const [thinkingOptions, setThinkingOptions] = useState<ThinkingLevel[]>(
-    (model?.thinking_options || []).filter(isThinkingLevel),
+    ((initialConfig.thinking_options as string[] | undefined) || []).filter(isThinkingLevel),
   );
-  const [extraParamsText, setExtraParamsText] = useState(
-    JSON.stringify(model?.extra_params ?? {}, null, 2),
+  const [providerOptionsText, setProviderOptionsText] = useState(
+    JSON.stringify(initialConfig.provider_options ?? {}, null, 2),
   );
 
   const { data: latestModel, isLoading: loadingDetail } = useQuery({
@@ -373,14 +525,25 @@ function ModelDialog({
     if (!latestModel) return;
     setName(latestModel.name || '');
     setDisplayName(latestModel.display_name || '');
-    setModelType(latestModel.model_type || 'text');
-    setContextWindow(latestModel.context_window ?? 128000);
+    setModelType(latestModel.model_type || 'chat');
+    const config = latestModel.config || {};
+    setContextWindow(Number(config.context_window ?? 128000));
+    setMaxOutputTokens(Number(config.max_output_tokens ?? 4096));
+    setDimension(Number(config.dimension ?? 1024));
+    setBatchSize(Number(config.batch_size ?? 10));
+    setTimeoutSeconds(Number(config.timeout_seconds ?? 5));
+    setMaxRetries(Number(config.max_retries ?? 3));
+    setRetryBackoff(Number(config.retry_backoff ?? 1));
+    setTruncationStrategy(String(config.truncation_strategy ?? 'tail'));
+    setMaxDocChars(Number(config.max_doc_chars ?? 4000));
+    setMonitorThreshold(Number(config.monitor_threshold ?? 0.1));
     setCostTier(latestModel.cost_tier || 'mid');
-    setSupportsTools(latestModel.supports_tools ?? true);
-    setSupportsImages(latestModel.supports_images ?? false);
-    setSupportsThinking(latestModel.supports_thinking ?? false);
-    setThinkingOptions((latestModel.thinking_options || []).filter(isThinkingLevel));
-    setExtraParamsText(JSON.stringify(latestModel.extra_params ?? {}, null, 2));
+    const caps = (config.capabilities as string[] | undefined) || [];
+    setSupportsTools(caps.includes('tools'));
+    setSupportsImages(caps.includes('vision'));
+    setSupportsThinking(caps.includes('thinking'));
+    setThinkingOptions(((config.thinking_options as string[] | undefined) || []).filter(isThinkingLevel));
+    setProviderOptionsText(JSON.stringify(config.provider_options ?? {}, null, 2));
   }, [latestModel]);
 
   const toggleThinkingOption = (level: ThinkingLevel) => {
@@ -394,43 +557,73 @@ function ModelDialog({
 
   const save = useMutation({
     mutationFn: () => {
-      let extraParams: Record<string, unknown> | null = null;
-      const raw = extraParamsText.trim();
+      let providerOptions: Record<string, unknown> = {};
+      const raw = providerOptionsText.trim();
       if (raw.length > 0) {
         let parsed: unknown;
         try {
           parsed = JSON.parse(raw);
         } catch {
-          throw new Error('extra_params 不是合法 JSON');
+          throw new Error('provider_options 不是合法 JSON');
         }
         if (parsed === null) {
-          extraParams = null;
+          providerOptions = {};
         } else if (typeof parsed === 'object' && !Array.isArray(parsed)) {
-          extraParams = parsed as Record<string, unknown>;
+          providerOptions = parsed as Record<string, unknown>;
         } else {
-          throw new Error('extra_params 必须是 JSON 对象');
+          throw new Error('provider_options 必须是 JSON 对象');
         }
       }
 
       const enabledThinkingOptions = THINKING_LEVELS.filter((l) => thinkingOptions.includes(l));
 
+      const capabilities = [
+        ...(supportsTools ? ['tools'] : []),
+        ...(supportsImages ? ['vision'] : []),
+        ...(supportsThinking ? ['thinking'] : []),
+      ];
+      const config: Record<string, unknown> = modelType === 'chat'
+        ? {
+            context_window: contextWindow,
+            max_output_tokens: maxOutputTokens,
+            input_modalities: supportsImages ? ['text', 'image'] : ['text'],
+            output_modalities: ['text'],
+            capabilities,
+            thinking_options: supportsThinking
+              ? (enabledThinkingOptions.length > 0 ? enabledThinkingOptions : null)
+              : null,
+            provider_options: providerOptions,
+          }
+        : modelType === 'embedding'
+          ? {
+              dimension,
+              batch_size: batchSize,
+              input_modalities: ['text'],
+              max_retries: maxRetries,
+              retry_backoff: retryBackoff,
+              provider_options: providerOptions,
+            }
+          : {
+              timeout_seconds: timeoutSeconds,
+              max_retries: maxRetries,
+              retry_backoff: retryBackoff,
+              truncation_strategy: truncationStrategy,
+              max_doc_chars: maxDocChars,
+              monitor_threshold: monitorThreshold,
+              provider_options: providerOptions,
+            };
       const payload: ModelUpsert = {
-        name: name.trim(),
         display_name: displayName.trim(),
-        model_type: modelType,
-        context_window: contextWindow,
         cost_tier: costTier,
-        supports_tools: supportsTools,
-        supports_images: supportsImages,
-        supports_thinking: supportsThinking,
-        thinking_options: supportsThinking
-          ? (enabledThinkingOptions.length > 0 ? enabledThinkingOptions : null)
-          : null,
-        extra_params: extraParams,
+        config,
       };
       return editing
         ? modelsAdminApi.update(model.model_id, payload)
-        : modelsAdminApi.create(providerName, payload);
+        : modelsAdminApi.create(providerName, {
+            ...payload,
+            name: name.trim(),
+            model_type: modelType,
+          });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: PROVIDERS_KEY });
@@ -456,6 +649,7 @@ function ModelDialog({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="gpt-4o"
+              disabled={editing}
               className={cn(inputCls, 'font-mono')}
             />
           </Field>
@@ -470,8 +664,13 @@ function ModelDialog({
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Field label="类型">
-            <select value={modelType} onChange={(e) => setModelType(e.target.value)} className={cn(inputCls, 'bg-white')}>
-              <option value="text">text</option>
+            <select
+              value={modelType}
+              disabled={editing}
+              onChange={(e) => setModelType(e.target.value as ProviderModel['model_type'])}
+              className={cn(inputCls, 'bg-white')}
+            >
+              <option value="chat">chat</option>
               <option value="embedding">embedding</option>
               <option value="reranker">reranker</option>
             </select>
@@ -484,40 +683,78 @@ function ModelDialog({
             </select>
           </Field>
         </div>
-        <Field label="上下文窗口">
-          <input
-            type="number"
-            value={contextWindow}
-            onChange={(e) => setContextWindow(Number(e.target.value) || 0)}
-            className={inputCls}
-          />
-        </Field>
-        <Field label="能力">
-          <div className="flex flex-wrap gap-2">
-            <CapToggle label="工具调用" on={supportsTools} onClick={() => setSupportsTools((v) => !v)} />
-            <CapToggle label="图片识别" on={supportsImages} onClick={() => setSupportsImages((v) => !v)} />
-            <CapToggle label="思考模式" on={supportsThinking} onClick={() => setSupportsThinking((v) => !v)} />
+        {modelType === 'chat' && (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="上下文窗口">
+                <input type="number" value={contextWindow} onChange={(e) => setContextWindow(Number(e.target.value) || 0)} className={inputCls} />
+              </Field>
+              <Field label="最大输出 Token">
+                <input type="number" value={maxOutputTokens} onChange={(e) => setMaxOutputTokens(Number(e.target.value) || 0)} className={inputCls} />
+              </Field>
+            </div>
+            <Field label="能力">
+              <div className="flex flex-wrap gap-2">
+                <CapToggle label="工具调用" on={supportsTools} onClick={() => setSupportsTools((v) => !v)} />
+                <CapToggle label="图片识别" on={supportsImages} onClick={() => setSupportsImages((v) => !v)} />
+                <CapToggle label="思考模式" on={supportsThinking} onClick={() => setSupportsThinking((v) => !v)} />
+              </div>
+            </Field>
+            <Field label="thinking_options">
+              <div className="flex flex-wrap gap-2">
+                {THINKING_LEVELS.map((level) => (
+                  <CapToggle key={level} label={level} on={thinkingOptions.includes(level)} onClick={() => toggleThinkingOption(level)} />
+                ))}
+              </div>
+            </Field>
+          </>
+        )}
+        {modelType === 'embedding' && (
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="向量维度">
+              <input type="number" value={dimension} disabled={editing} onChange={(e) => setDimension(Number(e.target.value) || 0)} className={inputCls} />
+            </Field>
+            <Field label="批大小">
+              <input type="number" value={batchSize} onChange={(e) => setBatchSize(Number(e.target.value) || 0)} className={inputCls} />
+            </Field>
           </div>
-        </Field>
-        <Field label="thinking_options (复选)">
-          <div className="flex flex-wrap gap-2">
-            {THINKING_LEVELS.map((level) => (
-              <CapToggle
-                key={level}
-                label={level}
-                on={thinkingOptions.includes(level)}
-                onClick={() => toggleThinkingOption(level)}
-              />
-            ))}
+        )}
+        {modelType === 'reranker' && (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="超时秒数">
+                <input type="number" value={timeoutSeconds} onChange={(e) => setTimeoutSeconds(Number(e.target.value) || 0)} className={inputCls} />
+              </Field>
+              <Field label="截断策略">
+                <select value={truncationStrategy} onChange={(e) => setTruncationStrategy(e.target.value)} className={cn(inputCls, 'bg-white')}>
+                  <option value="tail">tail</option>
+                </select>
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="单文档最大字符数">
+                <input type="number" value={maxDocChars} onChange={(e) => setMaxDocChars(Number(e.target.value) || 0)} className={inputCls} />
+              </Field>
+              <Field label="截断监控阈值">
+                <input type="number" step="0.01" value={monitorThreshold} onChange={(e) => setMonitorThreshold(Number(e.target.value) || 0)} className={inputCls} />
+              </Field>
+            </div>
+          </>
+        )}
+        {modelType !== 'chat' && (
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="最大重试次数">
+              <input type="number" value={maxRetries} onChange={(e) => setMaxRetries(Number(e.target.value) || 0)} className={inputCls} />
+            </Field>
+            <Field label="重试退避秒数">
+              <input type="number" value={retryBackoff} onChange={(e) => setRetryBackoff(Number(e.target.value) || 0)} className={inputCls} />
+            </Field>
           </div>
-          {!supportsThinking && (
-            <p className="mt-1 text-xs text-amber-600">当前未开启“思考模式”，保存时会清空 thinking_options。</p>
-          )}
-        </Field>
-        <Field label="extra_params (JSON)">
+        )}
+        <Field label="provider_options (JSON)">
           <textarea
-            value={extraParamsText}
-            onChange={(e) => setExtraParamsText(e.target.value)}
+            value={providerOptionsText}
+            onChange={(e) => setProviderOptionsText(e.target.value)}
             rows={6}
             placeholder="{}"
             className={cn(inputCls, 'font-mono')}

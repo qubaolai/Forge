@@ -5,12 +5,20 @@ import asyncio
 import pytest
 
 from forge.llm.dispatch.chain_builder import build_dispatch_chain as build_chain_from_settings
+from forge.llm.gateway import LLMGateway
 
 
 class _FakeCache:
-    def __init__(self, *, ready: bool = True, keys: list[dict] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        ready: bool = True,
+        keys: list[dict] | None = None,
+        model_type: str = "chat",
+    ) -> None:
         self._ready = ready
         self._keys = keys if keys is not None else [{"api_key": "sk-db", "weight": 1}]
+        self._model_type = model_type
 
     async def is_ready(self) -> bool:
         return self._ready
@@ -24,8 +32,16 @@ class _FakeCache:
     async def get_model_detail(self, provider: str, model: str) -> dict | None:
         return {
             "name": model,
-            "max_output_tokens": 4096,
-            "extra_params": {"temperature": 0.2},
+            "model_type": self._model_type,
+            "config": {
+                "max_output_tokens": 4096,
+                "provider_options": {
+                    "temperature": 0.2,
+                    "max_tokens": 2048,
+                    "top_p": 0.9,
+                    "vendor_flag": "enabled",
+                },
+            },
         }
 
     async def get_keys(self, provider: str) -> list[dict]:
@@ -89,4 +105,41 @@ def test_build_chain_uses_cache_key_and_pool(monkeypatch) -> None:
     assert chain.primary_spec.provider_name == "openai"
     assert chain.primary_spec.impl == "mock"
     assert chain.primary_spec.temperature == 0.2
+    assert chain.primary_spec.max_tokens == 2048
+    assert chain.primary_spec.top_p == 0.9
+    assert chain.primary_spec.extra == {"vendor_flag": "enabled"}
     assert pool.reconciled[0][1] == [{"api_key": "sk-db", "weight": 2}]
+
+
+def test_build_chain_rejects_non_chat_model() -> None:
+    with pytest.raises(ValueError, match="不是 Chat 模型"):
+        asyncio.run(
+            build_chain_from_settings(
+                _Settings(),
+                provider="openai",
+                model="gpt-4o",
+                model_cache=_FakeCache(model_type="embedding"),
+            )
+        )
+
+
+def test_gateway_router_candidates_only_include_chat_models() -> None:
+    class Cache:
+        async def is_ready(self) -> bool:
+            return True
+
+        async def get_providers_enabled(self) -> list[dict]:
+            return [{"name": "mock"}]
+
+        async def get_models(self, provider: str, enabled_only: bool = True) -> list[dict]:
+            _ = provider, enabled_only
+            return [
+                {"name": "chat-a", "model_type": "chat", "config": {}},
+                {"name": "embed-a", "model_type": "embedding", "config": {}},
+                {"name": "rerank-a", "model_type": "reranker", "config": {}},
+            ]
+
+    gateway = LLMGateway(_Settings(), model_cache=Cache())
+    candidates = asyncio.run(gateway._build_available_candidates())
+
+    assert [(provider, model.name) for provider, model in candidates] == [("mock", "chat-a")]

@@ -48,10 +48,10 @@ async def run_embedding_task(session_id: str) -> None:
     if not cfg.enabled:
         return
 
-    embedder = _build_embedder()
+    embedder = await _build_embedder()
     if embedder is None:
         return
-    model = embedder.model_name
+    model = str(getattr(embedder, "_forge_model_id", "") or embedder.model_name)
     dim = embedder.dimension
 
     init_engine()  # 幂等, worker 进程也安全
@@ -118,13 +118,12 @@ async def run_embedding_task(session_id: str) -> None:
     )
 
 
-def _build_embedder():
-    """构造 embedder (复用 RAG 同一进程内单例); 不可用返回 None。"""
+async def _build_embedder():
+    """按语义历史系统绑定解析 embedder；不可用返回 None。"""
     try:
-        from forge.config.settings import get_settings
-        from forge.retrieval.embedders.factory import build_embedder_from_settings
+        from forge.retrieval.bound_model_resolver import get_bound_model_resolver
 
-        return build_embedder_from_settings(get_settings())
+        return await get_bound_model_resolver().resolve("semantic_history_embedding")
     except Exception as exc:  # noqa: BLE001
         logger.warning("embedder 不可用, 跳过 embedding 任务: %s", exc)
         return None

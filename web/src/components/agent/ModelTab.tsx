@@ -32,21 +32,21 @@ export function ModelTab({ draft, update }: Props) {
           <div className="flex flex-col gap-2">
             {models.map((m) => (
               <div
-                key={m.id}
-                onClick={() => patchModel({ model_id: m.id })}
+                key={m.model_id}
+                onClick={() => patchModel({ model_id: m.model_id })}
                 className={cn(
                   'border rounded-md p-3 cursor-pointer transition-colors',
-                  draft.model.model_id === m.id
+                  draft.model.model_id === m.model_id
                     ? 'border-gray-900 bg-gray-50'
                     : 'border-gray-200 hover:border-gray-400',
                 )}
               >
                 <div className="flex items-center justify-between">
-                  <div className="text-sm font-medium">{m.name}</div>
+                  <div className="text-sm font-medium">{m.display_name || m.name}</div>
                   <div className="text-[10px] uppercase text-gray-400">{m.provider}</div>
                 </div>
                 <div className="text-xs text-gray-500 mt-0.5">
-                  {m.model_name} · 上下文 {m.context_window.toLocaleString()}
+                  {m.name} · 上下文 {(m.config.context_window || 0).toLocaleString()}
                 </div>
               </div>
             ))}

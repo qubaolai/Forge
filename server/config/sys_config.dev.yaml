@@ -91,12 +91,6 @@ ingest:
     chunk_size: 500
     chunk_overlap: 50
 
-embedding:
-  provider: mock
-  providers:
-    mock:
-      dimension: 768
-
 vector_store:
   provider: chroma
   providers:
@@ -113,11 +107,6 @@ bm25_store:
   tokenizer:
     type: jieba
     user_dict: null
-
-reranker:
-  provider: mock
-  providers:
-    mock: {}
 
 retrieval:
   top_n_parent: 5

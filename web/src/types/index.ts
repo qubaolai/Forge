@@ -92,7 +92,6 @@ export interface KnowledgeBase {
   owner_id: string;
   collaborators: Collaborator[];
   // 配置
-  embedding_model: string;
   chunk_size: number;
   chunk_overlap: number;
   // 统计
@@ -117,6 +116,10 @@ export interface KnowledgeDocument {
   status_message?: string;
   progress: number; // 0-100
   chunk_count: number;
+  embedding_model_id?: string;
+  vector_index_status: 'ready' | 'stale' | 'rebuilding' | 'failed';
+  vector_index_error?: string;
+  vector_indexed_at?: ISODateString;
   created_at: ISODateString;
   updated_at: ISODateString;
   indexed_at?: ISODateString;
@@ -149,7 +152,7 @@ export interface RetrieveRequest {
 // Agent
 // ============================================================================
 
-export interface ModelConfig {
+export interface AgentModelConfig {
   model_id: string;        // 后端模型 endpoint id
   temperature: number;
   max_tokens: number;
@@ -189,7 +192,7 @@ export interface Agent {
   // 配置
   system_prompt: string;
   opening_message?: string;
-  model: ModelConfig;
+  model: AgentModelConfig;
   retrieval: RetrievalConfig;
   tools: ToolBinding[];
   advanced: AgentAdvancedConfig;
@@ -212,19 +215,39 @@ export interface ToolDefinition {
   is_dangerous: boolean;
 }
 
-export type ModelProvider = 'ollama' | 'vllm' | 'openai' | 'anthropic' | 'custom';
+export type ModelType = 'chat' | 'embedding' | 'reranker';
 
-export interface ModelEndpoint {
-  id: string;
+export interface ChatModelConfig {
+  context_window?: number;
+  max_output_tokens?: number;
+  input_modalities?: string[];
+  output_modalities?: string[];
+  capabilities?: string[];
+  thinking_options?: string[] | null;
+  provider_options?: Record<string, unknown>;
+}
+
+export interface ModelInfo {
+  provider: string;
+  model_id: string;
   name: string;
-  provider: ModelProvider;
-  base_url: string;
-  model_name: string;
-  api_key_set: boolean;       // 不返回密钥本身,仅返回是否已设置
-  context_window: number;
-  capabilities: ('chat' | 'embedding' | 'vision' | 'tool_use')[];
-  enabled: boolean;
-  created_at: ISODateString;
+  display_name: string;
+  model_type: ModelType;
+  config: ChatModelConfig & Record<string, unknown>;
+  thinking: { options?: string[] | null; default?: string | null } | null;
+}
+
+export interface ModelGroup {
+  provider: string;
+  models: ModelInfo[];
+}
+
+export interface GroupedModelsResponse {
+  groups: ModelGroup[];
+  providers?: string[];
+  models?: ModelInfo[];
+  provider?: string;
+  model_type?: ModelType;
 }
 
 // ============================================================================
@@ -235,18 +258,12 @@ export interface ModelEndpoint {
 export interface ProviderModel {
   id: string;          // 雪花 ID 字符串 (与 model_id 同值)
   model_id: string;
+  provider_id: string;
   name: string;
   display_name: string;
-  model_type: string;        // text / embedding / reranker
-  context_window: number;
-  max_output_tokens: number;
-  supports_tools: boolean;
-  supports_images: boolean;
-  supports_thinking: boolean;
-  thinking_options: string[] | null;
-  extra_params: Record<string, unknown> | null;
+  model_type: ModelType;
+  config: Record<string, unknown>;
   is_enabled: boolean;
-  is_default: boolean;
   priority: number;
   cost_tier: string;         // cheap / mid / expensive
 }
@@ -280,18 +297,38 @@ export interface ProviderAdmin {
 export interface ModelUpsert {
   name?: string;
   display_name?: string;
-  model_type?: string;
-  context_window?: number;
-  max_output_tokens?: number;
-  supports_tools?: boolean;
-  supports_images?: boolean;
-  supports_thinking?: boolean;
-  thinking_options?: string[] | null;
-  extra_params?: Record<string, unknown> | null;
+  model_type?: ModelType;
+  config?: Record<string, unknown>;
   cost_tier?: string;
   priority?: number;
   enabled?: boolean;
-  is_default?: boolean;
+}
+
+export interface SystemModelBinding {
+  id: string;
+  role: 'rag_embedding' | 'semantic_history_embedding' | 'rag_reranker';
+  model_id: string | null;
+  version: number;
+  optional: boolean;
+  model: ProviderModel | null;
+}
+
+export interface RagIndexJob {
+  id: string;
+  model_id: string;
+  binding_version: number;
+  status: string;
+  total_documents: number;
+  succeeded_documents: number;
+  failed_documents: number;
+  error_message: string | null;
+  created_at?: ISODateString;
+  updated_at?: ISODateString;
+}
+
+export interface RagIndexStatus {
+  documents: Partial<Record<KnowledgeDocument['vector_index_status'], number>>;
+  jobs: RagIndexJob[];
 }
 
 // ============================================================================

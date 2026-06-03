@@ -26,22 +26,20 @@ def _key_fingerprint(api_key: str) -> str:
     return f"{head}***"[:12]
 
 
-def _model_to_dict(model) -> dict:
+async def _model_to_dict(db, model) -> dict:
+    from forge.infrastructure.database.repositories.model_config_repo import ModelConfigRepository
+
+    config_repo = ModelConfigRepository(db)
+    config = config_repo.to_dict(await config_repo.get(model.id, model.model_type))
     return {
         "id": str(model.id),
         "model_id": str(model.id),
+        "provider_id": str(model.provider_id),
         "name": model.name,
         "display_name": model.display_name,
         "model_type": model.model_type,
-        "context_window": model.context_window,
-        "max_output_tokens": model.max_output_tokens,
-        "supports_tools": model.supports_tools,
-        "supports_images": model.supports_images,
-        "supports_thinking": model.supports_thinking,
-        "thinking_options": model.thinking_options,
-        "extra_params": model.extra_params,
+        "config": config,
         "is_enabled": model.is_enabled,
-        "is_default": model.is_default,
         "priority": model.priority,
         "cost_tier": model.cost_tier,
     }
@@ -97,27 +95,7 @@ class AdminModelService:
                 "routing_config": p.routing_config,
                 "key_count": len(keys),
                 "model_count": len(models),
-                "models": [
-                    {
-                        "id": str(m.id),
-                        "model_id": str(m.id),
-                        "name": m.name,
-                        "display_name": m.display_name,
-                        "model_type": m.model_type,
-                        "context_window": m.context_window,
-                        "max_output_tokens": m.max_output_tokens,
-                        "supports_tools": m.supports_tools,
-                        "supports_images": m.supports_images,
-                        "supports_thinking": m.supports_thinking,
-                        "thinking_options": m.thinking_options,
-                        "extra_params": m.extra_params,
-                        "is_enabled": m.is_enabled,
-                        "is_default": m.is_default,
-                        "priority": m.priority,
-                        "cost_tier": m.cost_tier,
-                    }
-                    for m in models
-                ],
+                "models": [await _model_to_dict(self.db, m) for m in models],
             })
         return result
 
@@ -138,6 +116,8 @@ class AdminModelService:
         provider = await provider_repo.get_by_name(provider_name)
         if not provider:
             raise ValueError(f"供应商不存在: {provider_name!r}")
+        if not enabled:
+            await self._ensure_provider_not_bound(provider.id)
 
         provider.is_enabled = 1 if enabled else 0
         await self.db.flush()
@@ -158,6 +138,9 @@ class AdminModelService:
             pool_result = pool.reconcile_provider(impl, [], client_options)
 
         # 事件通知
+        from forge.retrieval.bound_model_resolver import get_bound_model_resolver
+
+        get_bound_model_resolver().clear()
         await get_event_bus().publish(EVENT_MODEL_CONFIG_CHANGED, {
             "type": "provider_toggled",
             "provider": provider_name,
@@ -191,6 +174,8 @@ class AdminModelService:
         model = await model_repo.get_by_model_id(model_id)
         if not model:
             raise ValueError(f"模型不存在: {model_id!r}")
+        if not enabled:
+            await self._ensure_model_not_bound(model.id, action="禁用")
 
         model.is_enabled = enabled
         await self.db.flush()
@@ -204,6 +189,9 @@ class AdminModelService:
         await cache.reload_all(self.db)
 
         # 事件通知
+        from forge.retrieval.bound_model_resolver import get_bound_model_resolver
+
+        get_bound_model_resolver().clear()
         await get_event_bus().publish(EVENT_MODEL_CONFIG_CHANGED, {
             "type": "model_toggled",
             "provider": provider_name,
@@ -215,33 +203,6 @@ class AdminModelService:
 
         return {"model_id": model_id, "enabled": enabled}
 
-    async def set_default_model(self, model_id: str) -> dict:
-        """设为默认模型。"""
-        from datetime import datetime
-
-        from forge.infrastructure.database.orm.model_provider_orm import ProviderOrm
-        from forge.infrastructure.database.repositories.model_repo import ModelRepository
-
-        model_repo = ModelRepository(self.db)
-        model = await model_repo.get_by_model_id(model_id)
-        if not model:
-            raise ValueError(f"模型不存在: {model_id!r}")
-        ok = await model_repo.set_default(model_id)
-        if not ok:
-            raise ValueError(f"模型不存在: {model_id!r}")
-        await self.db.commit()
-        cache = self._cache
-        await cache.reload_all(self.db)
-        provider = await self.db.get(ProviderOrm, model.provider_id)
-        await get_event_bus().publish(EVENT_MODEL_CONFIG_CHANGED, {
-            "type": "model_default_changed",
-            "provider": provider.name if provider else "unknown",
-            "model": model.name,
-            "model_type": model.model_type,
-            "timestamp": datetime.utcnow().isoformat(),
-        })
-        return {"model_id": model_id, "is_default": True}
-
     async def get_model_by_id(self, model_db_id: int) -> dict:
         """按数据库 id 获取模型详情。"""
         from forge.infrastructure.database.repositories.model_repo import ModelRepository
@@ -249,7 +210,7 @@ class AdminModelService:
         model = await ModelRepository(self.db).get_by_id(model_db_id)
         if not model:
             raise ValueError(f"模型不存在: id={model_db_id}")
-        return _model_to_dict(model)
+        return await _model_to_dict(self.db, model)
 
     # ------------------------------------------------------------------
     # 模型手动 CRUD
@@ -257,6 +218,9 @@ class AdminModelService:
 
     async def create_model(self, provider_name: str, data: dict) -> dict:
         """管理端在某供应商下手动新增模型。"""
+        from forge.infrastructure.database.repositories.model_config_repo import (
+            ModelConfigRepository,
+        )
         from forge.infrastructure.database.repositories.model_provider_repo import (
             ProviderRepository,
         )
@@ -266,14 +230,19 @@ class AdminModelService:
         if not provider:
             raise ValueError(f"供应商不存在: {provider_name!r}")
         model = await ModelRepository(self.db).create(provider.id, data)
+        await ModelConfigRepository(self.db).create(model.id, model.model_type, data["config"])
         await self.db.commit()
         await self._cache.reload_all(self.db)
         await self._publish_model_event("model_created", provider.name, model.name, model.model_type)
-        return _model_to_dict(model)
+        return await _model_to_dict(self.db, model)
 
     async def update_model_fields(self, model_id: str, data: dict) -> dict:
-        """管理端更新模型（全字段，含 enabled / is_default）。"""
+        """管理端更新模型与类型配置。"""
+        from forge.api.schemas.admin import validate_model_config
         from forge.infrastructure.database.orm.model_provider_orm import ProviderOrm
+        from forge.infrastructure.database.repositories.model_config_repo import (
+            ModelConfigRepository,
+        )
         from forge.infrastructure.database.repositories.model_repo import ModelRepository
 
         model_repo = ModelRepository(self.db)
@@ -281,16 +250,25 @@ class AdminModelService:
         if not model:
             raise ValueError(f"模型不存在: {model_id!r}")
 
-        # is_default 单独处理（需取消同类型其他默认）
-        if data.get("is_default"):
-            await model_repo.set_default(model_id)
-
-        # 其余字段（enabled -> is_enabled）
-        fields = {k: v for k, v in data.items() if k != "is_default"}
+        config_data = data.pop("config", None)
+        fields = dict(data)
         if "enabled" in fields:
             fields["is_enabled"] = fields.pop("enabled")
+        if fields.get("is_enabled") is False:
+            await self._ensure_model_not_bound(model.id, action="禁用")
         if fields:
             await model_repo.update_fields(model_id, fields)
+        if config_data is not None:
+            validated = validate_model_config(model.model_type, config_data)
+            config_repo = ModelConfigRepository(self.db)
+            existing = await config_repo.get(model.id, model.model_type)
+            if (
+                model.model_type == "embedding"
+                and existing is not None
+                and int(validated["dimension"]) != int(existing.dimension)
+            ):
+                raise ValueError("Embedding dimension 不可编辑，请新增模型后切换绑定")
+            await config_repo.update(model.id, model.model_type, validated)
 
         await self.db.commit()
         await self._cache.reload_all(self.db)
@@ -298,7 +276,7 @@ class AdminModelService:
         await self._publish_model_event(
             "model_updated", provider.name if provider else "unknown", model.name, model.model_type
         )
-        return _model_to_dict(model)
+        return await _model_to_dict(self.db, model)
 
     async def delete_model(self, model_id: str) -> dict:
         """管理端删除模型。"""
@@ -309,10 +287,17 @@ class AdminModelService:
         model = await model_repo.get_by_model_id(model_id)
         if not model:
             raise ValueError(f"模型不存在: {model_id!r}")
+        await self._ensure_model_not_bound(model.id, action="删除")
         provider = await self.db.get(ProviderOrm, model.provider_id)
         provider_name = provider.name if provider else "unknown"
         model_name, model_type = model.name, model.model_type
 
+        from forge.infrastructure.database.repositories.model_config_repo import (
+            ModelConfigRepository,
+        )
+        config = await ModelConfigRepository(self.db).get(model.id, model.model_type)
+        if config is not None:
+            await self.db.delete(config)
         await model_repo.delete(model_id)
         await self.db.commit()
         await self._cache.reload_all(self.db)
@@ -401,6 +386,35 @@ class AdminModelService:
     # 内部工具
     # ------------------------------------------------------------------
 
+    async def _ensure_model_not_bound(self, model_id: int, *, action: str) -> None:
+        from sqlalchemy import select
+
+        from forge.infrastructure.database.orm.system_model_binding_orm import (
+            SystemModelBindingOrm,
+        )
+
+        bound = (await self.db.execute(
+            select(SystemModelBindingOrm).where(SystemModelBindingOrm.model_id == model_id)
+        )).scalars().first()
+        if bound is not None:
+            raise ValueError(f"模型正在被系统角色 {bound.role} 使用，不能{action}")
+
+    async def _ensure_provider_not_bound(self, provider_id: int) -> None:
+        from sqlalchemy import select
+
+        from forge.infrastructure.database.orm.model_orm import ModelOrm
+        from forge.infrastructure.database.orm.system_model_binding_orm import (
+            SystemModelBindingOrm,
+        )
+
+        bound = (await self.db.execute(
+            select(SystemModelBindingOrm)
+            .join(ModelOrm, ModelOrm.id == SystemModelBindingOrm.model_id)
+            .where(ModelOrm.provider_id == provider_id)
+        )).scalars().first()
+        if bound is not None:
+            raise ValueError(f"供应商存在系统角色 {bound.role} 使用的模型，不能禁用")
+
     async def _sync_provider_pool(self, provider) -> dict:
         """刷新 Redis 缓存 + 按当前已启用 Key 重整 LLMClientPool。"""
         from forge.llm.client_pool import get_llm_pool
@@ -417,6 +431,9 @@ class AdminModelService:
     ) -> None:
         from datetime import datetime
 
+        from forge.retrieval.bound_model_resolver import get_bound_model_resolver
+
+        get_bound_model_resolver().clear()
         await get_event_bus().publish(EVENT_MODEL_CONFIG_CHANGED, {
             "type": event_type,
             "provider": provider_name,
@@ -428,6 +445,9 @@ class AdminModelService:
     async def _publish_key_event(self, event_type: str, provider_name: str) -> None:
         from datetime import datetime
 
+        from forge.retrieval.bound_model_resolver import get_bound_model_resolver
+
+        get_bound_model_resolver().clear()
         await get_event_bus().publish(EVENT_MODEL_CONFIG_CHANGED, {
             "type": event_type,
             "provider": provider_name,

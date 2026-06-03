@@ -36,10 +36,20 @@ class KbDocumentOrm(Base, BigIntPKMixin):
     progress: Mapped[int] = mapped_column(default=0, nullable=False, comment="进度 0-100")
     chunk_count: Mapped[int] = mapped_column(default=0, nullable=False, comment="切分后的分块数")
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="完成索引时间")
+    embedding_model_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, comment="生成当前向量索引的 embedding models.id"
+    )
+    vector_index_status: Mapped[str] = mapped_column(
+        String(16), default="stale", nullable=False,
+        comment="ready / stale / rebuilding / failed"
+    )
+    vector_index_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vector_indexed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     __table_args__ = table_args(
         Index("ix_kb_docs_kb_created", "kb_id", "created_at"),
         Index("ix_kb_docs_status", "kb_id", "status"),
         Index("ix_kb_docs_hash", "content_hash"),
+        Index("ix_kb_docs_vector_status", "vector_index_status"),
         comment="知识库文档表 (用户上传)",
     )

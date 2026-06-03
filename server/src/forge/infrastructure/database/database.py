@@ -68,6 +68,10 @@ async def ping() -> None:
 # 形如 (表名, 列名, DDL 类型片段)。SQLite / MySQL 均接受 "INTEGER NULL"。
 _ADDITIVE_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("chat_messages", "token_count", "INTEGER NULL"),
+    ("kb_documents", "embedding_model_id", "BIGINT NULL"),
+    ("kb_documents", "vector_index_status", "VARCHAR(16) NOT NULL DEFAULT 'stale'"),
+    ("kb_documents", "vector_index_error", "TEXT NULL"),
+    ("kb_documents", "vector_indexed_at", "DATETIME NULL"),
 )
 
 
@@ -93,6 +97,90 @@ def _ensure_additive_columns(sync_conn) -> None:
         )
 
 
+def _migrate_model_configs(sync_conn) -> None:
+    """把旧 models 扁平字段幂等迁移到按调用类型配置表。"""
+    from sqlalchemy import inspect, select, update
+
+    from forge.infrastructure.database.orm.model_config_orm import (
+        ChatModelConfigOrm,
+        EmbeddingModelConfigOrm,
+        RerankerModelConfigOrm,
+    )
+    from forge.infrastructure.database.orm.model_orm import ModelOrm
+    from forge.infrastructure.database.orm.system_model_binding_orm import (
+        SystemModelBindingOrm,
+    )
+
+    tables = set(inspect(sync_conn).get_table_names())
+    required = {
+        "models",
+        "chat_model_configs",
+        "embedding_model_configs",
+        "reranker_model_configs",
+        "system_model_bindings",
+    }
+    if not required.issubset(tables):
+        return
+
+    models = sync_conn.execute(select(ModelOrm.__table__)).mappings().all()
+    existing_chat = set(sync_conn.execute(select(ChatModelConfigOrm.model_id)).scalars())
+    existing_embedding = set(sync_conn.execute(select(EmbeddingModelConfigOrm.model_id)).scalars())
+    existing_reranker = set(sync_conn.execute(select(RerankerModelConfigOrm.model_id)).scalars())
+
+    for row in models:
+        model_id = row["id"]
+        model_type = "chat" if row["model_type"] == "text" else row["model_type"]
+        extra = dict(row.get("extra_params") or {})
+        if model_type == "chat" and model_id not in existing_chat:
+            caps = []
+            if row.get("supports_tools"):
+                caps.append("tools")
+            if row.get("supports_images"):
+                caps.append("vision")
+            if row.get("supports_thinking"):
+                caps.append("thinking")
+            sync_conn.execute(ChatModelConfigOrm.__table__.insert().values(
+                model_id=model_id,
+                context_window=row.get("context_window") or 128000,
+                max_output_tokens=row.get("max_output_tokens") or 4096,
+                input_modalities=["text", "image"] if row.get("supports_images") else ["text"],
+                output_modalities=["text"],
+                capabilities=caps,
+                thinking_options=row.get("thinking_options"),
+                provider_options=extra or None,
+            ))
+        elif model_type == "embedding" and model_id not in existing_embedding:
+            sync_conn.execute(EmbeddingModelConfigOrm.__table__.insert().values(
+                model_id=model_id,
+                dimension=int(extra.pop("dimension", 1024)),
+                batch_size=int(extra.pop("batch_size", 10)),
+                input_modalities=["text"],
+                max_retries=int(extra.pop("max_retries", 3)),
+                retry_backoff=float(extra.pop("retry_backoff", 1.0)),
+                provider_options=extra or None,
+            ))
+        elif model_type == "reranker" and model_id not in existing_reranker:
+            truncation = dict(extra.pop("truncation", {}) or {})
+            sync_conn.execute(RerankerModelConfigOrm.__table__.insert().values(
+                model_id=model_id,
+                timeout_seconds=float(extra.pop("timeout", 5.0)),
+                max_retries=int(extra.pop("max_retries", 2)),
+                retry_backoff=float(extra.pop("retry_backoff", 1.0)),
+                truncation_strategy=truncation.pop("strategy", "tail"),
+                max_doc_chars=int(truncation.pop("max_doc_chars", 4000)),
+                monitor_threshold=float(truncation.pop("monitor_threshold", 0.1)),
+                provider_options={**extra, **truncation} or None,
+            ))
+
+    sync_conn.execute(
+        update(ModelOrm.__table__).where(ModelOrm.model_type == "text").values(model_type="chat")
+    )
+    existing_roles = set(sync_conn.execute(select(SystemModelBindingOrm.role)).scalars())
+    for role in ("rag_embedding", "semantic_history_embedding", "rag_reranker"):
+        if role not in existing_roles:
+            sync_conn.execute(SystemModelBindingOrm.__table__.insert().values(role=role, version=0))
+
+
 async def bootstrap_schema() -> None:
     """启动期 schema bootstrap — 幂等执行 create_all + 增量列 ALTER，所有驱动通用。
 
@@ -107,6 +195,7 @@ async def bootstrap_schema() -> None:
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_ensure_additive_columns)
+        await conn.run_sync(_migrate_model_configs)
 
 
 def get_engine() -> AsyncEngine:

@@ -5,11 +5,6 @@
     - 实现类用 @register_embedder("xxx") 装饰自己, import 时自动落表
     - 工厂的 create() 根据 provider 实例化对应类
 
-模型网关入口 (build_embedder_from_settings):
-    - 业务侧唯一入口. 启动期装配 1 次, 全生命周期复用。
-    - 进程内单例: settings 不可变, 装配结果可直接 memo. 不需要复合 key 池.
-    - 测试隔离: reset_embedder_cache() 清空, 配合 reset_settings() 用.
-
 新增 provider 的步骤:
     1. 写一个继承 Embedder 的类
     2. 加 @register_embedder("your_name") 装饰器
@@ -19,13 +14,8 @@
 from __future__ import annotations
 
 import logging
-import threading
-from typing import TYPE_CHECKING
 
 from .base import Embedder
-
-if TYPE_CHECKING:
-    from forge.config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -64,34 +54,6 @@ class EmbedderFactory:
     @staticmethod
     def list_providers() -> list[str]:
         return sorted(_REGISTRY.keys())
-
-
-# ----------------------------------------------------------------------
-# 模型网关: 启动期装配, 进程内单例 memo
-# ----------------------------------------------------------------------
-_built: Embedder | None = None
-_build_lock = threading.Lock()
-
-
-def build_embedder_from_settings(settings: Settings) -> Embedder:
-    """从全局 settings 构造单一 Embedder，进程内 memo."""
-    global _built
-    if _built is not None:
-        return _built
-
-    with _build_lock:
-        if _built is not None:
-            return _built
-
-        cfg = settings.embedding
-        _built = EmbedderFactory.create(cfg.provider, cfg.providers[cfg.provider])
-        return _built
-
-
-def reset_embedder_cache() -> None:
-    """清空进程内 embedder 缓存. 测试隔离用, 配合 reset_settings()."""
-    global _built
-    _built = None
 
 
 def _autoload() -> None:

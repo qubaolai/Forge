@@ -78,6 +78,9 @@ class ModelConfigCache:
 
     async def reload_all(self, db: AsyncSession) -> None:
         """从 DB 全量加载到 Redis。"""
+        from forge.infrastructure.database.repositories.model_config_repo import (
+            ModelConfigRepository,
+        )
         from forge.infrastructure.database.repositories.model_provider_repo import (
             ProviderRepository,
         )
@@ -90,6 +93,7 @@ class ModelConfigCache:
 
         provider_repo = ProviderRepository(db)
         model_repo = ModelRepository(db)
+        config_repo = ModelConfigRepository(db)
         providers = await provider_repo.list_enabled()
 
         await self._clear_namespace()
@@ -137,22 +141,16 @@ class ModelConfigCache:
             models_hash: dict[str, str] = {}
             enabled_hash: dict[str, str] = {}
             for model in models:
+                config = config_repo.to_dict(await config_repo.get(model.id, model.model_type))
                 model_json = json.dumps(
                     {
                         "model_id": str(model.id),
                         "name": model.name,
                         "display_name": model.display_name,
                         "model_type": model.model_type,
-                        "context_window": model.context_window,
-                        "max_output_tokens": model.max_output_tokens,
-                        "supports_tools": model.supports_tools,
-                        "supports_images": model.supports_images,
-                        "supports_thinking": model.supports_thinking,
-                        "thinking_options": model.thinking_options,
-                        "extra_params": model.extra_params,
+                        "config": config,
                         "cost_tier": model.cost_tier,
                         "is_enabled": model.is_enabled,
-                        "is_default": model.is_default,
                         "priority": model.priority,
                         "is_stale": model.is_stale,
                     },
@@ -267,13 +265,3 @@ class ModelConfigCache:
             return None
         data_str = raw.get(model_name)
         return json.loads(data_str) if data_str else None
-
-    async def get_default_model(self, provider_name: str, model_type: str = "text") -> dict | None:
-        models = await self.get_models(provider_name, enabled_only=True)
-        for model in models:
-            if model.get("model_type") == model_type and model.get("is_default"):
-                return model
-        for model in models:
-            if model.get("model_type") == model_type:
-                return model
-        return None

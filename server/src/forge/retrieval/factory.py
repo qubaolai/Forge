@@ -7,8 +7,8 @@
     - 装配代码集中一处, 主程序里只调一次 RetrieverFactory.create.
 
 配置访问约定:
-    settings 是已加载的 Settings 对象. 工厂通过属性访问: settings.retrieval,
-    settings.reranker 等. 字段名约定见 sys_config.yaml 重构方案.
+    settings 是已加载的 Settings 对象. 工厂只读取 settings.retrieval；
+    Reranker 实例由系统模型绑定解析后传入.
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ from .fusion.factory import AggregatorFactory, FusionFactory
 from .pipeline import ParentChildRetriever
 from .recall.bm25_recall import BM25Recall
 from .recall.vector_recall import VectorRecall
-from .rerankers.factory import build_reranker_from_settings
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +35,9 @@ class RetrieverFactory:
     @staticmethod
     def create(
         settings: Any,
-        child_store: ChildVectorStore,
+        child_store: ChildVectorStore | None,
         bm25_store: BM25Store,
-        embedder: Embedder,
+        embedder: Embedder | None,
         reranker=None,
     ) -> ParentChildRetriever:
         """
@@ -55,7 +54,7 @@ class RetrieverFactory:
         # ----- 1. Recall 路 -----
         recall_cfg = rcfg.recall
         vector_recall = None
-        if recall_cfg.vector.enabled:
+        if recall_cfg.vector.enabled and child_store is not None and embedder is not None:
             vector_recall = VectorRecall(child_store, embedder)
 
         bm25_recall = None
@@ -81,15 +80,11 @@ class RetrieverFactory:
         # ----- 3. Aggregator -----
         aggregator = AggregatorFactory.create(rcfg.aggregation.score_agg)
 
-        # ----- 4. Reranker (优先用传入实例，否则走 settings 构建) -----
-        if reranker is None:
-            rerank_enabled = bool(rcfg.rerank.enabled)
-            if rerank_enabled:
-                reranker = build_reranker_from_settings(settings)
-            else:
-                logger.info("rerank 流程已禁用 (retrieval.rerank.enabled=false)")
-        else:
-            rerank_enabled = True
+        # ----- 4. Reranker: 仅使用系统绑定传入的实例 -----
+        rerank_enabled = reranker is not None and bool(rcfg.rerank.enabled)
+        if not rerank_enabled:
+            reranker = None
+            logger.info("rerank 流程未绑定模型或已禁用")
 
         # ----- 5. RetrievalConfig -----
         config = RetrievalConfig(
