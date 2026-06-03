@@ -59,15 +59,29 @@ class MessageAssembler:
         # ---- 2. 历史裁剪 (按 dialogue_budget) ----
         history_chunk = self._first_chunk(chunks, "history")
         history_messages = history_chunk.messages if history_chunk else []
+        # Provider 已算好的每条 token 数 (digest 折叠后), 裁剪时直接用免重复 tiktoken
+        history_costs = history_chunk.message_tokens if history_chunk else []
         candidate = history_chunk.message_count if history_chunk else 0
         candidate_was_filtered = history_chunk.truncated if history_chunk else False
 
-        kept_history, dropped = self._trim_history_by_budget(
-            history_messages, budget.dialogue_budget
+        kept_history, dropped, dlg_tokens = self._trim_history_by_budget(
+            history_messages, history_costs, budget.dialogue_budget
         )
         history_filtered_count = (
             (candidate - len(history_messages)) if candidate_was_filtered else 0
         )
+        # 降级职责收敛: 单条超长已由 DigestPolicy 折叠保留 (anchor+引用, 可回读);
+        # 这里的「硬丢弃」是 digest 折叠后整体仍超 dialogue_budget 时的最后兜底,
+        # 与折叠是两种不同的「降级」—— 折叠保留信息可回读, 硬丢弃则整条移出窗口。
+        if dropped > 0:
+            history_chunk_flags = (
+                (history_chunk.degraded + history_chunk.info) if history_chunk else []
+            )
+            logger.info(
+                "history 累计预算裁剪: 保留=%d 硬丢弃=%d dialogue_budget=%d 折叠标记=%s",
+                len(kept_history), dropped, budget.dialogue_budget,
+                history_chunk_flags or "无",
+            )
 
         # ---- 3. 当前用户消息 (包 <current_question> 标签) ----
         current_msg = Message(
@@ -89,6 +103,7 @@ class MessageAssembler:
             chunks=chunks,
             workspace_tokens=workspace_tokens,
             kept_history=kept_history,
+            dlg_tokens=dlg_tokens,
             current_msg=current_msg,
             budget=budget,
         )
@@ -177,20 +192,28 @@ class MessageAssembler:
     # 内部: 历史裁剪 (从最新往前累加, 超预算停止)
     # ------------------------------------------------------------------
     def _trim_history_by_budget(
-        self, messages: list[Message], budget: int
-    ) -> tuple[list[Message], int]:
+        self, messages: list[Message], costs: list[int], budget: int
+    ) -> tuple[list[Message], int, int]:
+        """按 dialogue_budget 从最新往旧累加裁剪.
+
+        costs: 与 messages 等长的每条 token 数 (Provider 已算好, 通常是 digest 折叠后体积);
+               长度不匹配 / 为空时回退实时 count (兼容)。
+        返回 (kept, dropped, kept_tokens)。kept_tokens 供 dialogue 层用量直接复用。
+        """
         if budget <= 0 or not messages:
-            return [], len(messages)
+            return [], len(messages), 0
+        use_costs = costs if (costs and len(costs) == len(messages)) else None
         kept_reversed: list[Message] = []
         used = 0
-        for m in reversed(messages):
-            cost = self._meter.count_messages([m])
+        for i in range(len(messages) - 1, -1, -1):
+            m = messages[i]
+            cost = use_costs[i] if use_costs is not None else self._meter.count_messages([m])
             if used + cost > budget:
                 break
             kept_reversed.append(m)
             used += cost
         kept = list(reversed(kept_reversed))
-        return kept, len(messages) - len(kept)
+        return kept, len(messages) - len(kept), used
 
     # ------------------------------------------------------------------
     # 内部: 聚合各层 token 用量, 产出 LayerUsage 列表
@@ -202,6 +225,7 @@ class MessageAssembler:
         chunks: dict[str, list[ContentChunk]],
         workspace_tokens: int,
         kept_history: list[Message],
+        dlg_tokens: int,
         current_msg: Message,
         budget: WindowBudget,
     ) -> list[LayerUsage]:
@@ -246,8 +270,7 @@ class MessageAssembler:
             ratio=summary_tokens / cw if cw else 0.0,
         ))
 
-        # 5. dialogue 层 (kept_history 实际 token, 不用 chunk 预估)
-        dlg_tokens = self._meter.count_messages(kept_history) if kept_history else 0
+        # 5. dialogue 层 (用 trim 累加出的 kept_tokens, 免再次 count_messages)
         history_chunk = self._first_chunk(chunks, "history")
         dlg_truncated = (
             history_chunk is not None

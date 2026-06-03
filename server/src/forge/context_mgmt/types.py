@@ -125,6 +125,10 @@ class ContentChunk:
     truncated: bool = False
     degraded: list[str] = field(default_factory=list)
     info: list[str] = field(default_factory=list)
+    # 与 messages 等长对齐的「每条 token 数」(history chunk 用): 由 Provider 在
+    # digest 折叠时一并算出, 让 MessageAssembler 裁剪/聚合时免重复 tiktoken。
+    # 为空表示未提供, 下游回退实时 count。
+    message_tokens: list[int] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +154,9 @@ class HistoryMessage:
     tool_name: str | None = None
     tool_result_tokens: int = 0
     relevance_score: float = 1.0
+    # content 的 token 数 (落库时算好, 由 _rows_to_history_messages 注入);
+    # None 表示无缓存 (存量数据 / 跨实现), 热路径回退实时 count。
+    token_count: int | None = None
 
 
 # ---------------------------------------------------------------------------

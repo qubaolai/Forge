@@ -105,11 +105,15 @@ class TurnPreparer:
                 sess_repo = ChatSessionRepository(db)
                 msg_repo = ChatMessageRepository(db)
 
+                # 用户消息 token 数落库算一次 (供上下文组装热路径读, 免重复 tiktoken)
+                from forge.context_mgmt.meter.token_meter import get_token_meter
+
                 user_msg = await msg_repo.add(
                     session_id=session_id_actual,
                     role="user",
                     content=message,
                     status="done",
+                    token_count=get_token_meter().count_text(message),
                 )
                 asst_msg = await msg_repo.add(
                     session_id=session_id_actual,

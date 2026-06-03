@@ -105,3 +105,82 @@ def split_segments(content: str) -> list[RawSegment]:
         flush_prose(len(lines))
 
     return segments
+
+
+# ---------------------------------------------------------------------------
+# prose 段内的语义子分段 (按 markdown 标题 / 段落切)
+# ---------------------------------------------------------------------------
+
+# ATX 标题: # ~ ###### + 空格 + 文本 (允许尾随 #)。要求 # 后必须有空白,
+# 以避免把 "#tag" / "#!/bin/sh" 之类误判为标题。
+_HEADING_RE = re.compile(r"^[ \t]*(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
+
+
+@dataclass
+class ProseSection:
+    """prose 段内的语义子段 (按 markdown 标题切分).
+
+    heading: 子段起始的 markdown 标题文本 (无标题则 None)。
+    start_line / end_line: 在 **原文** 中的绝对 1-based 闭区间。
+    text: 子段原文 (含标题行)。
+    """
+
+    heading: str | None
+    start_line: int
+    end_line: int
+    text: str
+
+
+def split_prose_sections(text: str, base_line: int = 1) -> list[ProseSection]:
+    """把一段 prose 文本按 markdown 标题切成语义子段.
+
+    规则:
+        - 以 ATX 标题行 (# ~ ######) 作为子段边界, 标题归入其后子段。
+        - 标题前的内容自成一段 (heading=None)。
+        - 无标题的整段不再细切 (保持整体, 由上层取首句作锚点)。
+
+    行号: 返回 start_line/end_line 为原文绝对 1-based 闭区间
+    (= base_line + 段内相对行号), 供 read_message(line_range) 定向回读。
+    空内容返回 []。
+    """
+    if not text:
+        return []
+    lines = text.split("\n")
+    sections: list[ProseSection] = []
+
+    cur_start_rel = 0          # 当前子段相对起始行 (0-based)
+    cur_heading: str | None = None
+    cur_lines: list[str] = []
+
+    def flush(end_rel: int) -> None:
+        nonlocal cur_lines
+        body = "\n".join(cur_lines)
+        if body.strip():
+            sections.append(
+                ProseSection(
+                    heading=cur_heading,
+                    start_line=base_line + cur_start_rel,
+                    end_line=base_line + end_rel,
+                    text=body,
+                )
+            )
+        cur_lines = []
+
+    for rel, line in enumerate(lines):
+        m = _HEADING_RE.match(line)
+        if m:
+            # 标题行: 先收尾上一子段 (到标题前一行), 再以标题开新子段
+            if cur_lines:
+                flush(rel - 1)
+            cur_start_rel = rel
+            cur_heading = m.group(2).strip()
+            cur_lines = [line]
+            continue
+        if not cur_lines:
+            cur_start_rel = rel
+        cur_lines.append(line)
+
+    if cur_lines:
+        flush(len(lines) - 1)
+
+    return sections

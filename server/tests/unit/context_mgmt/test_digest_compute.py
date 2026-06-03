@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from forge.context_mgmt.digest.code_skeleton import build_code_segment
-from forge.context_mgmt.digest.segmenter import split_segments
+from forge.context_mgmt.digest.prose_skeleton import build_prose_segments
+from forge.context_mgmt.digest.segmenter import split_prose_sections, split_segments
 from forge.infrastructure.storage.content_store import (
     parse_ref,
     payload_to_text,
@@ -47,6 +48,39 @@ def test_segmenter_unclosed_fence_treated_as_code():
     assert segs[0].kind == "code"
     assert segs[0].language == "js"
     assert segs[0].start_line == 2  # 代码体从围栏下一行起
+
+
+# ---------------------------------------------------------------------------
+# prose 语义分段 (修订 C)
+# ---------------------------------------------------------------------------
+def test_split_prose_sections_by_headings():
+    text = "\n".join([
+        "前言一句。",          # 1
+        "",                   # 2
+        "# 设计目标",          # 3
+        "讲清楚做什么。",       # 4
+        "## 实现",            # 5
+        "分段后逐段处理。",     # 6
+    ])
+    secs = split_prose_sections(text, base_line=1)
+    # 前言 (无标题) + 两个标题段
+    assert [s.heading for s in secs] == [None, "设计目标", "实现"]
+    # 行号绝对、连续、可回读
+    assert (secs[0].start_line, secs[0].end_line) == (1, 2)
+    assert secs[1].start_line == 3
+    assert secs[2].start_line == 5
+
+
+def test_build_prose_segments_have_anchor_and_lines():
+    [raw] = [
+        s for s in split_segments("# 标题甲\n正文内容很长很长。\n## 标题乙\n第二段。")
+        if s.kind == "prose"
+    ]
+    segs = build_prose_segments(raw)
+    assert [s.kind for s in segs] == ["prose", "prose"]
+    # 锚点含标题 + 行号区间, 供 read_message 定向回读
+    assert "标题甲 (L1-" in segs[0].anchor
+    assert "标题乙 (L" in segs[1].anchor
 
 
 # ---------------------------------------------------------------------------

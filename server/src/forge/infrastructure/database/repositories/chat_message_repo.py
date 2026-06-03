@@ -99,6 +99,7 @@ class ChatMessageRepository(MessageStore):
         content: str,
         status: str = "done",
         parent_id: str | None = None,
+        token_count: int | None = None,
     ) -> ChatMessageView:
         row = ChatMessageOrm(
             session_id=_to_int(session_id),
@@ -106,6 +107,7 @@ class ChatMessageRepository(MessageStore):
             content=content,
             status=status,
             parent_id=_to_int(parent_id),
+            token_count=token_count,
         )
         self.db.add(row)
         await self.db.flush()
@@ -169,6 +171,7 @@ class ChatMessageRepository(MessageStore):
             context_meta=msg.context_meta,
             reasoning_content=msg.reasoning_content,
             reasoning_duration_ms=msg.reasoning_duration_ms,
+            token_count=msg.token_count,
         )
 
     async def update(
@@ -184,6 +187,7 @@ class ChatMessageRepository(MessageStore):
         context_meta: dict | None = None,
         reasoning_content: str | None = None,
         reasoning_duration_ms: int | None = None,
+        token_count: int | None = None,
     ) -> ChatMessageView:
         values: dict = {"updated_at": datetime.now(UTC)}
         if content is not None:
@@ -204,6 +208,8 @@ class ChatMessageRepository(MessageStore):
             values["reasoning_content"] = reasoning_content
         if reasoning_duration_ms is not None:
             values["reasoning_duration_ms"] = reasoning_duration_ms
+        if token_count is not None:
+            values["token_count"] = token_count
 
         await self.db.execute(
             update(ChatMessageOrm)
@@ -254,6 +260,7 @@ class ChatMessageRepository(MessageStore):
             context_meta=row.context_meta or {},
             reasoning_content=row.reasoning_content,
             reasoning_duration_ms=row.reasoning_duration_ms,
+            token_count=row.token_count,
             created_at=row.created_at or datetime.now(UTC),
             updated_at=row.updated_at or datetime.now(UTC),
         )

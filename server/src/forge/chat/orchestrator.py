@@ -98,7 +98,7 @@ class TurnOrchestrator:
         self._resumer = TurnResumer()
 
     # ------------------------------------------------------------------
-    # 新对话
+    # 新消息
     # ------------------------------------------------------------------
     async def start_turn(
         self,
@@ -147,7 +147,7 @@ class TurnOrchestrator:
         # 3. 启动背景执行 (返回 task 但不 await)
         run.attach_task(self._execute_new_turn(run, ctx, body))
         logger.info(
-            "TurnRun 已启动 (新对话) session=%s message_id=%s",
+            "TurnRun 已启动 (新消息) session=%s message_id=%s",
             ctx.session_id, ctx.assistant_msg_id,
         )
         return run

@@ -79,16 +79,24 @@ async def run_digest_task(session_id: str) -> None:
     meter = get_token_meter()
     store = DigestStore(factory)
 
-    # 1. 粗筛候选: 字节数下界 (tiktoken token 数 <= UTF-8 字节数), 短消息直接跳过,
-    #    避免对一堆短消息做无谓的 tiktoken 计数。
+    # 1. 粗筛候选: 优先用落库的 token_count (免 tiktoken); 缺列时用字节数下界粗筛
+    #    (tiktoken token 数 <= UTF-8 字节数) 跳过短消息, 再对剩余做精确计数。
     candidates: list[tuple] = []  # (row, content, approx_tokens, source_hash)
     for row in rows:
         if row.role not in ("user", "assistant"):
             continue
         content = row.content or ""
-        if not content or len(content.encode("utf-8")) <= min_tokens:
+        if not content:
             continue
-        approx_tokens = meter.count_messages([Message(role=cast(Role, row.role), content=content)])
+        tc = getattr(row, "token_count", None)
+        if tc is not None:
+            approx_tokens = tc
+        else:
+            if len(content.encode("utf-8")) <= min_tokens:
+                continue
+            approx_tokens = meter.count_messages(
+                [Message(role=cast(Role, row.role), content=content)]
+            )
         if approx_tokens <= min_tokens:
             continue
         source_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -163,9 +171,15 @@ def _build_summarizer():
 
 
 async def _compute_segments(content: str, summarizer) -> tuple[list, str | None]:
-    """切分 + 计算每段 digest. 返回 (segments, 使用的模型名 | None)。"""
+    """切分 + 计算每段 digest. 返回 (segments, 使用的模型名 | None)。
+
+    prose 段再按 markdown 标题/段落做语义子分段 (split_prose_sections), 逐子段摘要,
+    每子段带 anchor (标题/首句 + 行号) —— 与同步骨架共用 segmenter / section_anchor,
+    使长文章也能被 read_message 按 line_range 定向回读。
+    """
     from forge.context_mgmt.digest.code_skeleton import build_code_segment
-    from forge.context_mgmt.digest.segmenter import split_segments
+    from forge.context_mgmt.digest.prose_skeleton import section_anchor
+    from forge.context_mgmt.digest.segmenter import split_prose_sections, split_segments
     from forge.context_mgmt.digest.types import Segment
 
     raw_segments = split_segments(content)
@@ -176,26 +190,27 @@ async def _compute_segments(content: str, summarizer) -> tuple[list, str | None]
         if raw.kind == "code":
             segments.append(build_code_segment(raw))
             continue
-        # prose: 短文本截断保留, 长文本 LLM 摘要 (失败回退截断)
-        text = raw.text.strip()
-        if len(text) <= _PROSE_VERBATIM_MAX_CHARS or summarizer is None:
-            digest_text = _truncate(text)
-        else:
-            summary = await summarizer.summarize(text)
-            if summary:
-                digest_text = summary
-                model_used = "utility-fast"
-            else:
+        # prose: 语义子分段 → 逐段处理 (短段截断保留, 长段 LLM 摘要, 失败回退截断)
+        for sec in split_prose_sections(raw.text, raw.start_line):
+            text = sec.text.strip()
+            if len(text) <= _PROSE_VERBATIM_MAX_CHARS or summarizer is None:
                 digest_text = _truncate(text)
-        segments.append(
-            Segment(
-                kind="prose",
-                start_line=raw.start_line,
-                end_line=raw.end_line,
-                anchor=None,
-                digest_text=digest_text,
+            else:
+                summary = await summarizer.summarize(text)
+                if summary:
+                    digest_text = summary
+                    model_used = "utility-fast"
+                else:
+                    digest_text = _truncate(text)
+            segments.append(
+                Segment(
+                    kind="prose",
+                    start_line=sec.start_line,
+                    end_line=sec.end_line,
+                    anchor=section_anchor(sec),
+                    digest_text=digest_text,
+                )
             )
-        )
     return segments, model_used
 
 

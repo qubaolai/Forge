@@ -149,6 +149,13 @@ class TurnFinalizer:
         snapshot: ContextSnapshot,
         status: str,
     ) -> None:
+        # assistant 消息 token 数落库算一次 (供上下文组装热路径读, 免重复 tiktoken)
+        from forge.context_mgmt.meter.token_meter import get_token_meter
+
+        token_count = (
+            get_token_meter().count_text(result.content) if result.content else None
+        )
+
         factory = get_session_factory()
         async with factory() as db:
             repo = ChatMessageRepository(db)
@@ -164,6 +171,7 @@ class TurnFinalizer:
                     reasoning_content=result.reasoning_content,
                     reasoning_duration_ms=result.reasoning_duration_ms,
                     error_message=result.error_message,
+                    token_count=token_count,
                 )
             await db.commit()
 

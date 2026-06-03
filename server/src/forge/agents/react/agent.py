@@ -248,7 +248,7 @@ class ReActAgent(BaseAgent):
                     if lifecycle is not None:
                         try:
                             decision = await lifecycle.before_step(step_ctx)
-                        except Exception:  # noqa: BLE001
+                        except Exception:
                             logger.exception("lifecycle.before_step 失败, 本步跳过引导")
                             decision = None
                         if decision is not None:
@@ -570,7 +570,7 @@ class ReActAgent(BaseAgent):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.exception("ReAct stream 异常")
             await self._invoke_on_error(
                 lifecycle, e,

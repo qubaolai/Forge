@@ -33,10 +33,18 @@ async def handle_context_digest(*, session_id: str) -> None:
     await run_digest_task(session_id)
 
 
+async def handle_context_embedding(*, session_id: str) -> None:
+    """本地执行会话消息 embedding 冷路径任务 (语义召回)."""
+    from forge.context_mgmt.recall.tasks import run_embedding_task
+
+    await run_embedding_task(session_id)
+
+
 _DEFAULT_HANDLERS: dict[str, TaskHandler] = {
     "memory.summarize": handle_memory_summarize,
     "observability.cost.flush": handle_cost_flush,
     "context.digest": handle_context_digest,
+    "context.embedding": handle_context_embedding,
 }
 
 

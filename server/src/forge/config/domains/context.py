@@ -41,7 +41,29 @@ class ContextDigestSettings(BaseSettings):
         return self
 
 
+class ContextSemanticRecallSettings(BaseSettings):
+    """语义历史召回配置 (HybridFilter 的早期轮次按语义相似度过滤).
+
+    默认关闭: 启用后每轮要对当前问题做一次 query embedding + 读消息向量缓存,
+    有额外延迟/成本, 故 opt-in。关闭时 HybridFilter 走 NullScorer (= 仅近期锚点保留,
+    等价 RecentFilter 行为), 与改动前完全一致。
+
+    依赖: 需配置可用的 embedding provider (settings.embedding); 不可用时整体降级 RecentFilter。
+    """
+    model_config = SettingsConfigDict(extra="ignore")
+
+    # 总开关 (默认关, opt-in)。
+    enabled: bool = False
+    # 早期轮次保留的相似度阈值 (低于此分的整轮剔除)。
+    min_score: float = 0.6
+    # 最近多少轮无条件保留 (保证对话连贯, 不受语义过滤影响)。
+    anchor_turns: int = 3
+    # 冷路径每次为多少条近期消息补算 embedding。
+    scan_limit: int = 50
+
+
 class ContextSettings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
     digest: ContextDigestSettings = ContextDigestSettings()
+    semantic_recall: ContextSemanticRecallSettings = ContextSemanticRecallSettings()

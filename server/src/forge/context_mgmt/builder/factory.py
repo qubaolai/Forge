@@ -12,6 +12,7 @@ build_context_builder(mode, message_store, ...) 根据 ContextMode 选择默认�
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from forge.context_mgmt.budget.policy import DefaultBudgetPolicy
@@ -41,12 +42,25 @@ from forge.context_mgmt.types import ContextMode
 from forge.infrastructure.storage import MessageStore
 from forge.memory.base import MemoryStore
 
+logger = logging.getLogger(__name__)
+
+
+# 语义召回不可用 (embedder 构造失败) 的进程内记忆, 避免每请求重复尝试构造。
+_semantic_recall_unavailable = False
+
+
+def reset_semantic_recall_cache() -> None:
+    """测试隔离用: 清空语义召回不可用标记。"""
+    global _semantic_recall_unavailable
+    _semantic_recall_unavailable = False
+
 
 def _default_history_filter(mode: ContextMode) -> HistoryFilter:
     """按 mode 选默认 HistoryFilter.
 
-    CHAT:     HybridFilter (近期锚点 + 语义过滤; 当前 SemanticFilter NullScorer 兜底,
-              等价 RecentFilter 行为, 接入 embedder 后即时生效)
+    CHAT:     HybridFilter (近期锚点 + 语义过滤)。settings.context.semantic_recall 开启
+              且 embedder 可用时, 用 EmbeddingScorer (读缓存向量) 给早期轮次打分;
+              否则 NullScorer 兜底 (= 仅近期锚点保留, 等价 RecentFilter 行为)。
     TASK:     NullFilter (不要历史)
     WORKFLOW: StepScopedFilter (按 step 隔离)
     其他:     RecentFilter (兜底)
@@ -56,8 +70,43 @@ def _default_history_filter(mode: ContextMode) -> HistoryFilter:
     if mode == ContextMode.WORKFLOW:
         return StepScopedFilter()
     if mode == ContextMode.CHAT:
-        return HybridFilter()
+        return _build_chat_history_filter()
     return RecentFilter()
+
+
+def _build_chat_history_filter() -> HistoryFilter:
+    """CHAT 模式 HybridFilter 装配 (含语义召回 opt-in)。
+
+    关闭 / embedder 不可用 / 任何异常时回退默认 HybridFilter (NullScorer),
+    行为与改动前完全一致 (近期锚点保留)。
+    """
+    global _semantic_recall_unavailable
+    try:
+        from forge.config.settings import get_settings
+        cfg = get_settings().context.semantic_recall
+    except Exception:  # noqa: BLE001 — 无配置环境 (单测) 走默认
+        return HybridFilter()
+
+    if not cfg.enabled or _semantic_recall_unavailable:
+        return HybridFilter(anchor_turns=cfg.anchor_turns if cfg.enabled else 3)
+
+    try:
+        from forge.context_mgmt.filters.semantic import EmbeddingScorer, SemanticFilter
+        from forge.context_mgmt.recall.embedding_store import MessageEmbeddingStore
+        from forge.infrastructure.database.database import get_session_factory
+        from forge.retrieval.embedders.factory import build_embedder_from_settings
+
+        embedder = build_embedder_from_settings(get_settings())
+        store = MessageEmbeddingStore(get_session_factory())
+        scorer = EmbeddingScorer(embedder, store)
+        return HybridFilter(
+            SemanticFilter(scorer, min_score=cfg.min_score),
+            anchor_turns=cfg.anchor_turns,
+        )
+    except Exception as exc:  # noqa: BLE001 — embedder/DB 不可用, 整体降级
+        _semantic_recall_unavailable = True
+        logger.warning("语义召回不可用, 降级为近期锚点保留: %s", exc)
+        return HybridFilter()
 
 
 def _default_tool_result_policy(mode: ContextMode) -> ToolResultPolicy:

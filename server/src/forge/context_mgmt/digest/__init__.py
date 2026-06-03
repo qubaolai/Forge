@@ -7,11 +7,18 @@
 阶段 1 (止血):
     - DigestPolicy: 读时把单条超长消息折叠为「引用占位 + 摘录」, 防止一条长消息
       挤爆 dialogue 预算或在 _trim_history_by_budget 触发 break 丢弃全部历史。
-    - 无缓存命中时降级为廉价同步截断 (标记 digest_pending)。
+    - 无缓存命中时降级为 **同步结构化骨架兜底** (复用 segmenter + code_skeleton +
+      prose_skeleton, 带 anchor+行号, 标记 digest_pending), 而非旧版盲截断。
 
 阶段 2 (增强, 见计划):
     - 新表 message_digests + 异步 prose_summarizer / code_skeleton 计算无损 digest。
     - read_message / get_artifact(line_range) 按需回读。
+
+降级职责收敛 (修订 E):
+    - 单条超长一律先 digest 折叠 (保留信息、可回读); MessageAssembler 的「硬丢弃」
+      (history_truncated_by_budget) 退为「折叠后整体仍超 budget」的最后兜底。
+    - 折叠使被挤掉的历史变少, ContextAssembler.should_compact (依赖 history dropped)
+      触发频率随之下降, 属预期非异常。
 """
 
 from __future__ import annotations

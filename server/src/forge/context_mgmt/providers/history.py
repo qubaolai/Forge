@@ -90,14 +90,18 @@ class HistoryProvider(ContentProvider):
         # 与 MessageAssembler 的累计预算闸形成「单条 cap + 累计 budget」双闸。
         digest_flags: list[str] = []
         digest_info: list[str] = []
+        costs: list[int] | None = None
         if self._digest_policy is not None and self._digest_cap > 0:
-            lookup: DigestLookup | None = await self._build_digest_lookup(filtered)
+            lookup: DigestLookup | None = await self._build_digest_lookup(
+                filtered, self._digest_cap
+            )
             result = self._digest_policy.apply(
                 filtered, cap=self._digest_cap, meter=self._meter, lookup=lookup
             )
             filtered = result.messages
             digest_flags = result.degraded_flags
             digest_info = result.info_flags
+            costs = result.message_tokens  # 折叠后每条 token 数 (供 assembler 免重复算)
             if result.substituted or result.pending:
                 # 命中率可观测: 无损命中 vs 降级 (缓存未命中) 计数
                 logger.info(
@@ -107,7 +111,11 @@ class HistoryProvider(ContentProvider):
 
         # 转换为 Message 列表 (按 turn_index 顺序)
         out_messages: list[Message] = [hm.message for hm in filtered]
-        estimated = self._meter.count_messages(out_messages)
+        # 每条 token 数: 优先用 digest 折叠时算出的 costs (未折叠用落库携带值),
+        # digest 旁路时用携带值/实时算 —— 避免在热路径对历史重复 tiktoken。
+        if costs is None:
+            costs = [self._msg_cost(hm) for hm in filtered]
+        estimated = sum(costs) if costs else 0
 
         chunk = ContentChunk(
             kind="history",
@@ -118,23 +126,38 @@ class HistoryProvider(ContentProvider):
             truncated=(len(filtered) < candidate_count),
             degraded=digest_flags,
             info=digest_info,
+            message_tokens=costs,
         )
         return [chunk]
 
+    def _msg_cost(self, hm: HistoryMessage) -> int:
+        """单条 token 数: 优先落库携带值, 缺则实时算 (兼容存量数据)。"""
+        if hm.token_count is not None:
+            return hm.token_count
+        return self._meter.count_messages([hm.message])
+
     async def _build_digest_lookup(
-        self, messages: list[HistoryMessage]
+        self, messages: list[HistoryMessage], cap: int
     ) -> DigestLookup | None:
         """批量预取已缓存 digest (一次 IN 查询, 避免逐条查库)。
 
-        无 digest_store / 查询失败时返回 None -> DigestPolicy 走廉价截断降级,
-        由异步 content.digest 任务下一轮补上缓存。
+        只查可能超 cap 的候选 (携带 token_count 已知且 <= cap 的直接跳过),
+        缩小 IN 查询规模。token_count 未知 (存量无列) 的保守纳入。
+        无 digest_store / 无候选 / 查询失败时返回 None -> DigestPolicy 走结构化骨架兜底,
+        由异步 context.digest 任务下一轮补上缓存。
         """
         if self._digest_store is None or not messages:
             return None
+        ids = [
+            hm.id for hm in messages
+            if hm.token_count is None or hm.token_count > cap
+        ]
+        if not ids:
+            return None
         try:
-            return await self._digest_store.batch_get([hm.id for hm in messages])
+            return await self._digest_store.batch_get(ids)
         except Exception as exc:  # noqa: BLE001 — 缓存读失败软降级
-            logger.warning("digest 缓存预取失败, 走截断降级: %s", exc)
+            logger.warning("digest 缓存预取失败, 走结构化骨架兜底: %s", exc)
             return None
 
     # aborted / error 消息不应带入 LLM 上下文
@@ -164,6 +187,8 @@ class HistoryProvider(ContentProvider):
                     message=Message(role=r.role, content=r.content),
                     id=r.id,
                     turn_index=idx,
+                    # 落库时算好的 content token 数 (存量无列时为 None, 下游回退实时算)
+                    token_count=getattr(r, "token_count", None),
                 )
             )
         return out

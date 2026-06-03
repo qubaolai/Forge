@@ -79,3 +79,93 @@ async def test_digest_store_batch_get_meta(factory):
     )
     metas = await store.batch_get_meta(["123", "999"])
     assert metas == {"123": ("h1", "done")}
+
+
+# ---------------------------------------------------------------------------
+# token_count 列: add/update 写入 + 读回 (修订 B)
+# ---------------------------------------------------------------------------
+async def test_token_count_roundtrip(factory):
+    from forge.infrastructure.database.repositories.chat_message_repo import (
+        ChatMessageRepository,
+    )
+    from forge.infrastructure.database.repositories.chat_session_repo import (
+        ChatSessionRepository,
+    )
+
+    async with factory() as db:
+        sess = await ChatSessionRepository(db).create(user_id="1", title="t")
+        repo = ChatMessageRepository(db)
+        msg = await repo.add(
+            session_id=sess.id, role="user", content="hi", token_count=42
+        )
+        await db.commit()
+
+        got = await repo.get_by_id(msg.id)
+        assert got.token_count == 42
+
+        # update 也能改 token_count
+        await repo.update(got, token_count=99)
+        await db.commit()
+        assert (await repo.get_by_id(msg.id)).token_count == 99
+
+
+# ---------------------------------------------------------------------------
+# 幂等增量列迁移: 给缺 token_count 的旧表补列 (修订 B)
+# ---------------------------------------------------------------------------
+async def test_additive_column_migration_idempotent():
+    from sqlalchemy import inspect
+
+    from forge.infrastructure.database.database import _ensure_additive_columns
+
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+
+    def _cols(sync_conn) -> set[str]:
+        return {c["name"] for c in inspect(sync_conn).get_columns("chat_messages")}
+
+    async with engine.begin() as conn:
+        # 建一个「旧版」chat_messages 表 (无 token_count 列)
+        await conn.exec_driver_sql(
+            "CREATE TABLE chat_messages (id INTEGER PRIMARY KEY, content TEXT)"
+        )
+        assert "token_count" not in await conn.run_sync(_cols)
+        # 第一次迁移: 补上列
+        await conn.run_sync(_ensure_additive_columns)
+        assert "token_count" in await conn.run_sync(_cols)
+        # 第二次迁移: 幂等, 不报错
+        await conn.run_sync(_ensure_additive_columns)
+        assert "token_count" in await conn.run_sync(_cols)
+
+    await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# MessageEmbeddingStore: upsert + batch_get (按 model 匹配) + 幂等去重 (修订 D)
+# ---------------------------------------------------------------------------
+async def test_message_embedding_store_roundtrip(factory):
+    from forge.context_mgmt.recall.embedding_store import MessageEmbeddingStore
+
+    store = MessageEmbeddingStore(factory)
+    await store.upsert(
+        message_id="11", session_id="22", model="m-fast", dim=3,
+        vector=[0.1, 0.2, 0.3], source_hash="h1",
+    )
+
+    # 模型匹配 -> 命中
+    got = await store.batch_get(["11", "999"], model="m-fast")
+    assert got == {"11": [0.1, 0.2, 0.3]}
+    # 模型不匹配 -> 未命中 (不混用)
+    assert await store.batch_get(["11"], model="other") == {}
+    # meta 供冷路径去重
+    metas = await store.batch_get_meta(["11"])
+    assert metas == {"11": ("h1", "m-fast")}
+
+    # upsert 覆盖 (regenerate / 模型切换)
+    await store.upsert(
+        message_id="11", session_id="22", model="m-strong", dim=2,
+        vector=[0.5, 0.6], source_hash="h2",
+    )
+    assert await store.batch_get(["11"], model="m-strong") == {"11": [0.5, 0.6]}

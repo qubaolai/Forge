@@ -62,6 +62,13 @@ context:
     per_message_token_cap: ${CONTEXT_DIGEST_CAP:6000}
     # 异步 digest 任务的最小处理阈值
     min_tokens: ${CONTEXT_DIGEST_MIN_TOKENS:6000}
+  # 语义历史召回 (默认关; 开启需配置 embedding provider, 每轮多一次 query embedding)
+  semantic_recall:
+    enabled: ${CONTEXT_SEMANTIC_RECALL_ENABLED:false}
+    # 早期轮次保留的相似度阈值 (低于此分整轮剔除)
+    min_score: ${CONTEXT_SEMANTIC_MIN_SCORE:0.6}
+    # 最近多少轮无条件保留 (保证对话连贯)
+    anchor_turns: ${CONTEXT_SEMANTIC_ANCHOR_TURNS:3}
 
 llm:
   provider: ${LLM_PROVIDER:}
@@ -160,7 +167,7 @@ agent_profiles:
       readonly_tools: []
       sub_agents_allowed: []
       plan_mode_initial: false
-      max_steps: 50
+      max_steps: 999
       persistence: chat_db
       model_profile: smart
 

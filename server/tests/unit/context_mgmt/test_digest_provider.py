@@ -22,12 +22,31 @@ class _CharMeter(TokenMeter):
         return sum(len(m.content or "") for m in messages)
 
 
+class _CountingMeter(TokenMeter):
+    """记录 tiktoken 调用次数, 验证热路径是否复用落库携带值."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def count_text(self, text: str) -> int:
+        self.calls += 1
+        return len(text)
+
+    def count_messages(self, messages: list[Message]) -> int:
+        self.calls += 1
+        return sum(len(m.content or "") for m in messages)
+
+
 class _FakeRow:
-    def __init__(self, rid: str, role: str, content: str, status: str = "done") -> None:
+    def __init__(
+        self, rid: str, role: str, content: str, status: str = "done",
+        token_count: int | None = None,
+    ) -> None:
         self.id = rid
         self.role = role
         self.content = content
         self.status = status
+        self.token_count = token_count
 
 
 class _FakeMessageStore:
@@ -94,6 +113,32 @@ async def test_cache_hit_uses_lossless_digest():
     assert "hi" in contents                    # 短消息原样保留
     assert chunk.degraded == []                # 无损路径不计降级
     assert chunk.info == ["digest_substituted"]  # 走信息通道而非降级通道
+
+
+@pytest.mark.asyncio
+async def test_carried_token_count_avoids_recount():
+    """携带落库 token_count 时, 热路径不再逐条 tiktoken, 且 message_tokens 透出."""
+    rows = [
+        _FakeRow("m1", "user", "hi", token_count=5),
+        _FakeRow("m2", "assistant", "yo", token_count=7),
+    ]
+    meter = _CountingMeter()
+    provider = HistoryProvider(
+        _FakeMessageStore(rows),
+        RecentFilter(),
+        VerbatimPolicy(),
+        meter,
+        digest_policy=DigestPolicy(),
+        digest_cap=50,
+        digest_store=None,
+    )
+
+    [chunk] = await provider.provide(_request())
+
+    # 每条 token 数来自携带值, 估算 = 求和, 全程零 tiktoken 调用
+    assert chunk.message_tokens == [5, 7]
+    assert chunk.estimated_tokens == 12
+    assert meter.calls == 0
 
 
 @pytest.mark.asyncio

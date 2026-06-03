@@ -56,13 +56,11 @@ def build_code_segment(raw: RawSegment) -> Segment:
     sigs = _extract_signatures(language, code, start_line)
     label = f"{language or 'code'} block (L{start_line}-{end_line})"
 
+    # digest_text 不再重复 label —— label 已作为 anchor, Segment.render 会渲染 [anchor]
     if sigs:
-        body = "\n".join(
-            f"L{s}-{e}: {sig}" for sig, s, e in sigs
-        )
-        digest_text = f"{label}\n{body}"
+        digest_text = "\n".join(f"L{s}-{e}: {sig}" for sig, s, e in sigs)
     else:
-        digest_text = _heuristic_skeleton(label, code)
+        digest_text = _heuristic_skeleton(code)
 
     return Segment(
         kind="code",
@@ -120,11 +118,11 @@ def _extract_signatures(
     return out
 
 
-def _heuristic_skeleton(label: str, code: str) -> str:
-    """无 tree-sitter 时的降级: 标签 + 前若干行 + 总行数。"""
+def _heuristic_skeleton(code: str) -> str:
+    """无 tree-sitter 时的降级: 前若干行 + 总行数 (label 由 anchor 承载, 此处不重复)。"""
     lines = code.split("\n")
     head = list(lines[:_HEURISTIC_HEAD_LINES])
     preview = "\n".join(head)
     more = max(0, len(lines) - len(head))
     suffix = f"\n... (共 {len(lines)} 行, 余 {more} 行折叠; 用 read_message 回读)" if more else ""
-    return f"{label}\n{preview}{suffix}"
+    return f"{preview}{suffix}"

@@ -8,7 +8,7 @@
 
 Claude Code / Cursor 等成熟 agent 的做法: **退出靠 LLM 自己判断 (它输出文本不调工具 → 自然退出)**. 死循环极少发生; 即便发生, 也是通过给 LLM 注入引导让它自己收尾, 而不是直接抛错.
 
-R3 把 `max_steps` 从 **5 → 50**, 配合本目录的 4 个 LoopGuard 做软兜底.
+把 `max_steps` 从 **5 → 50**, 配合本目录的 4 个 LoopGuard 做软兜底.
 
 ## LoopGuard 通用契约
 
@@ -56,7 +56,7 @@ class Guidance:
 0 (理论不会)                        →   force_stop 兜底
 ```
 
-这是 R3 替代旧 `max_steps=5` 硬限制的核心. 跟 R5 配合: 即便真到 50 步还没结束, 也是 task_partial 而不是 error, 用户能继续.
+这是替代旧 `max_steps=5` 硬限制的核心. 即便真到 50 步还没结束, 也是 task_partial 而不是 error, 用户能继续.
 
 ### 2. StuckDetector — 死循环检测
 
@@ -198,7 +198,7 @@ class EarlyToolBlockGuard:
 ### 配置化 Guards (未来)
 
 目前 guard 阈值是构造参数. 后续可:
-- 让 `AgentOrm` 加 `guard_config` JSON 字段
+- 让 配置文件 加 `guard_config` 字段
 - ReActRunner 从 chat profile 加载，按 profile 使用不同阈值
 - "客服 Agent" 用更严格的限制, "代码助手 Agent" 用更宽松的
 

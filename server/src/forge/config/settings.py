@@ -32,7 +32,11 @@ import yaml
 from forge.config._env import expand_env, load_env_files
 from forge.config.domains.agent_profiles import AgentProfilesConfig
 from forge.config.domains.app import AppConfig, MiddlewareConfig
-from forge.config.domains.context import ContextDigestSettings, ContextSettings
+from forge.config.domains.context import (
+    ContextDigestSettings,
+    ContextSemanticRecallSettings,
+    ContextSettings,
+)
 from forge.config.domains.db import CelerySettings, DBSettings, RedisSettings
 from forge.config.domains.llm import LLMConfig, UtilityLLMConfig
 from forge.config.domains.memory import (
@@ -95,6 +99,9 @@ class Settings:
         ctx_cfg = config.get("context", {}) or {}
         self.context = ContextSettings(
             digest=ContextDigestSettings(**(ctx_cfg.get("digest") or {})),
+            semantic_recall=ContextSemanticRecallSettings(
+                **(ctx_cfg.get("semantic_recall") or {})
+            ),
         )
 
         self.llm = LLMConfig(**config["llm"])

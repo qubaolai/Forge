@@ -83,6 +83,71 @@ async def test_semantic_filter_scorer_failure_fallback():
 
 
 # ---------------------------------------------------------------------------
+# EmbeddingScorer (修订 D): 读缓存向量 + query 实时 embedding, 算余弦
+# ---------------------------------------------------------------------------
+class _FakeEmbedder:
+    model_name = "fake-emb"
+    dimension = 3
+
+    def embed_query(self, text: str) -> list[float]:
+        return [1.0, 0.0, 0.0]
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [[1.0, 0.0, 0.0] for _ in texts]
+
+
+class _FakeEmbStore:
+    def __init__(self, mapping: dict[str, list[float]]) -> None:
+        self._m = mapping
+
+    async def batch_get(self, ids, *, model):
+        return {k: v for k, v in self._m.items() if k in ids}
+
+
+@pytest.mark.asyncio
+async def test_embedding_scorer_uses_cached_vectors():
+    from forge.context_mgmt.filters.semantic import EmbeddingScorer
+
+    msgs = [_msg(0), _msg(1), _msg(2)]
+    # m0 与 query 同向 (1.0); m1 正交 (0.0); m2 无缓存 (保留 1.0)
+    store = _FakeEmbStore({"m0": [1.0, 0.0, 0.0], "m1": [0.0, 1.0, 0.0]})
+    scorer = EmbeddingScorer(_FakeEmbedder(), store)
+
+    scores = await scorer.score("q", msgs)
+    assert scores[0] == pytest.approx(1.0)
+    assert scores[1] == pytest.approx(0.0)
+    assert scores[2] == 1.0  # 无缓存向量 -> 保留, 不误删
+
+
+@pytest.mark.asyncio
+async def test_embedding_scorer_no_store_keeps_all():
+    from forge.context_mgmt.filters.semantic import EmbeddingScorer
+
+    scorer = EmbeddingScorer(_FakeEmbedder(), None)
+    scores = await scorer.score("q", [_msg(0), _msg(1)])
+    assert scores == [1.0, 1.0]  # 无 store -> 全部保留
+
+
+@pytest.mark.asyncio
+async def test_embedding_scorer_drops_irrelevant_via_hybrid():
+    """EmbeddingScorer 接入 HybridFilter: 早期正交轮被剔除, 锚点保留."""
+    from forge.context_mgmt.filters.semantic import EmbeddingScorer
+
+    msgs = [_msg(i) for i in range(6)]
+    # 早期 m0 相关(同向), m1/m2 正交; 后 3 轮是锚点 (anchor_turns=3)
+    store = _FakeEmbStore({
+        "m0": [1.0, 0.0, 0.0], "m1": [0.0, 1.0, 0.0], "m2": [0.0, 1.0, 0.0],
+    })
+    hf = HybridFilter(
+        semantic=SemanticFilter(EmbeddingScorer(_FakeEmbedder(), store), min_score=0.5),
+        anchor_turns=3,
+    )
+    out = await hf.filter(msgs, "q", ContextMode.CHAT)
+    # m0 相关保留 + m3,m4,m5 锚点; m1/m2 正交剔除
+    assert [m.turn_index for m in out] == [0, 3, 4, 5]
+
+
+# ---------------------------------------------------------------------------
 # HybridFilter
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio

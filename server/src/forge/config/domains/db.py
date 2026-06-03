@@ -112,4 +112,5 @@ class CelerySettings(BaseSettings):
         "forge.memory.tasks",
         "forge.observability.cost.tasks",
         "forge.context_mgmt.digest.tasks",
+        "forge.context_mgmt.recall.tasks",
     ]

@@ -12,7 +12,7 @@ import logging
 from typing import Any
 
 from forge.agents.lifecycle import (
-    NoopLifecycle,
+    AgentLifecycle,
     RunContext,
     StepContext,
     StepDecision,
@@ -24,7 +24,7 @@ from forge.core.types.message import Message, ToolCall
 logger = logging.getLogger(__name__)
 
 
-class GuardLifecycleAdapter(NoopLifecycle):
+class GuardLifecycleAdapter(AgentLifecycle):
     """把 LoopGuard 列表适配为 AgentLifecycle."""
 
     def __init__(self, guards: list[LoopGuard]) -> None:

@@ -60,6 +60,46 @@ def test_over_cap_without_cache_falls_back_and_flags_pending():
     assert hm.message.content == long_content
 
 
+def test_fallback_is_structural_not_blind_truncation():
+    """缓存未命中 -> 同步结构化骨架 (带 anchor+行号), 而非首尾盲截断."""
+    meter = _CharMeter()
+    content = (
+        "# 设计目标\n讲清楚要做什么。\n\n"
+        "## 实现\n分段后逐段处理。\n\n"
+        "```python\ndef login(u, p):\n    return auth(u, p)\n```\n\n"
+        "## 收尾\n输出综合报告。"
+    )
+    hm = _msg("mx", content)
+    result = DigestPolicy().apply([hm], cap=5, meter=meter)
+
+    folded = result.messages[0].message.content
+    assert result.pending == 1
+    assert "[ref:msg:mx]" in folded
+    # markdown 标题成为带行号的 anchor (可被 read_message 定向回读)
+    assert "设计目标 (L1-" in folded
+    assert "收尾 (L" in folded
+    # 代码块抽出签名 + 行号 (有/无 tree-sitter 都应含函数名)
+    assert "def login" in folded
+    # 不再出现旧首尾截断的专有短语
+    assert "首尾摘录" not in folded
+
+
+def test_single_huge_message_folds_under_control():
+    """单条巨型消息 (无缓存) 也被折叠为有界占位 —— 单条爆窗被兜住."""
+    meter = _CharMeter()
+    # 200 个函数的超大代码块
+    big = "```python\n" + "\n".join(
+        f"def fn_{i}():\n    return {i}" for i in range(200)
+    ) + "\n```"
+    hm = _msg("huge", big)
+    result = DigestPolicy(max_segments=40).apply([hm], cap=10, meter=meter)
+
+    folded = result.messages[0].message.content
+    assert result.pending == 1
+    # 折叠后远小于原文 (有界)
+    assert len(folded) < len(big)
+
+
 def test_over_cap_with_cache_uses_lossless_digest():
     """超 cap 且命中缓存 -> 用无损 digest 替换, 不计降级."""
     meter = _CharMeter()

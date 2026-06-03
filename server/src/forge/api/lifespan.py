@@ -132,6 +132,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:  # noqa: BLE001
         logger.exception("digest hooks 安装失败, digest 任务不会被派发")
 
+    # 2.4 语义召回 hooks (软: 失败仅日志; 默认关闭, 与 digest/memory 各自独立订阅)
+    from forge.context_mgmt.recall.hooks import install_embedding_hooks
+
+    try:
+        install_embedding_hooks(
+            event_bus,
+            task_queue,
+            enabled=settings.context.semantic_recall.enabled,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("语义召回 hooks 安装失败, embedding 任务不会被派发")
+
     # 3. Redis + ModelConfigCache: 从 DB 全量加载供应商和 Key 到 Redis
     from forge.infrastructure.cache.redis_client import RedisClient
 

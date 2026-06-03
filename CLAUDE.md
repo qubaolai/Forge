@@ -1,5 +1,5 @@
 # Forge
-所有代码注释 日志打印都必须是中文为主 必须以简体中文回复我
+所有代码注释 日志打印都必须是中文为主 必须以简体中文回复我 思考过程也只能使用中文展示
 
 > 配套文档：[docs/architecture.md](docs/architecture.md)（架构 / 扩展点 / 解耦设计）、[docs/learning_path.md](docs/learning_path.md)（由浅入深代码阅读路线）。
 

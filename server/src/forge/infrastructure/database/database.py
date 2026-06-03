@@ -64,11 +64,40 @@ async def ping() -> None:
         await conn.execute(text("SELECT 1"))
 
 
-async def bootstrap_schema() -> None:
-    """启动期 schema bootstrap — 幂等执行 create_all，所有驱动通用。
+# 既有表的增量列 (create_all 只建新表、不改已存在表; 这些列要补 ALTER)。
+# 形如 (表名, 列名, DDL 类型片段)。SQLite / MySQL 均接受 "INTEGER NULL"。
+_ADDITIVE_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("chat_messages", "token_count", "INTEGER NULL"),
+)
 
-    SQLAlchemy create_all 对已存在的表会跳过（不报错），
-    新表自动创建，已有表不改动。
+
+def _ensure_additive_columns(sync_conn) -> None:
+    """对既有表补充新增列 (幂等)。
+
+    create_all 不会给已存在的表加列, 而本项目无 Alembic, 故用 inspector 检测
+    缺失列再 ALTER TABLE ADD COLUMN。基于「列是否存在」判断而非异常文本,
+    SQLite / MySQL 通用。新表 (create_all 刚建全) 直接跳过。
+    """
+    from sqlalchemy import inspect
+
+    insp = inspect(sync_conn)
+    existing_tables = set(insp.get_table_names())
+    for table, column, ddl_type in _ADDITIVE_COLUMNS:
+        if table not in existing_tables:
+            continue  # 新表由 create_all 建全, 无需补列
+        cols = {c["name"] for c in insp.get_columns(table)}
+        if column in cols:
+            continue
+        sync_conn.exec_driver_sql(
+            f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"
+        )
+
+
+async def bootstrap_schema() -> None:
+    """启动期 schema bootstrap — 幂等执行 create_all + 增量列 ALTER，所有驱动通用。
+
+    SQLAlchemy create_all 对已存在的表会跳过（不报错），新表自动创建、已有表不改动；
+    已有表的新增列由 _ensure_additive_columns 补 ALTER (无 Alembic 的工程取舍)。
     """
     if _engine is None:
         raise RuntimeError("Engine 尚未初始化")
@@ -77,6 +106,7 @@ async def bootstrap_schema() -> None:
 
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_ensure_additive_columns)
 
 
 def get_engine() -> AsyncEngine:

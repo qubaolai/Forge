@@ -71,6 +71,8 @@ class ChatMessageView:
     error_message: str | None = None
     reasoning_content: str | None = None
     reasoning_duration_ms: int | None = None
+    # content 的 token 数 (落库算一次, 上下文组装热路径读它免重复 tiktoken; 缺则 None)
+    token_count: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -138,6 +140,7 @@ class MessageStore(ABC):
         content: str,
         status: str = "done",
         parent_id: str | None = None,
+        token_count: int | None = None,
     ) -> ChatMessageView: ...
 
     @abstractmethod
@@ -172,6 +175,7 @@ class MessageStore(ABC):
         context_meta: dict | None = None,
         reasoning_content: str | None = None,
         reasoning_duration_ms: int | None = None,
+        token_count: int | None = None,
     ) -> ChatMessageView: ...
 
     @abstractmethod
