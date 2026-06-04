@@ -24,6 +24,16 @@ def _config(**overrides) -> dict:
 
 
 @pytest.mark.parametrize(
+    "model",
+    ["tongyi-embedding-vision-plus-2026-03-06", "multimodal-embedding-v1", "Foo-Vision-Bar"],
+)
+def test_rejects_multimodal_vision_models(model: str) -> None:
+    """多模态/视觉向量模型走文本 TextEmbedding 接口必失败, 应在构造期 fail-fast。"""
+    with pytest.raises(ValueError, match=r"不支持多模态 / 视觉向量模型"):
+        DashScopeEmbedder(_config(model=model))
+
+
+@pytest.mark.parametrize(
     "field",
     ["model", "dimension", "batch_size", "supported_dimensions", "max_batch_size"],
 )

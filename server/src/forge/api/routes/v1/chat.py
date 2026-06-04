@@ -40,7 +40,7 @@ from forge.chat.supervisor import get_chat_supervisor
 from forge.core.exceptions import NotFound
 from forge.core.request_context import set_client_type
 from forge.core.response import success
-from forge.infrastructure.database.database import get_session_factory
+from forge.infrastructure.database.database import session_scope
 from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
 from forge.infrastructure.database.repositories.chat_session_repo import ChatSessionRepository
 from forge.quota import get_usage_quota_manager
@@ -212,8 +212,7 @@ async def chat_stop(body: ChatStopIn, user: AuthenticatedUser):
 
     # 兜底: 进程内无活跃 turn (服务重启 / 已 evict), 但 DB 仍是 streaming
     # → 直接落 status=aborted, 不写 content (本来也没活的可写)
-    factory = get_session_factory()
-    async with factory() as db:
+    async with session_scope() as db:
         repo = ChatMessageRepository(db)
         sess_repo = ChatSessionRepository(db)
         asst = await repo.get_by_id(body.message_id)
@@ -238,8 +237,7 @@ async def chat_stop(body: ChatStopIn, user: AuthenticatedUser):
 @router.post("/regenerate")
 async def chat_regenerate(body: ChatRegenerateIn, user: AuthenticatedUser):
     """重新生成 assistant 消息."""
-    factory = get_session_factory()
-    async with factory() as db:
+    async with session_scope() as db:
         repo = ChatMessageRepository(db)
         sess_repo = ChatSessionRepository(db)
         asst = await repo.get_by_id(body.message_id)

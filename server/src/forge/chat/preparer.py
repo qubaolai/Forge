@@ -20,7 +20,7 @@ import logging
 from forge.api.schemas.chat import ModelOptionsIn
 from forge.chat.model_meta import DEFAULT_CONTEXT_WINDOW, resolve_context_window
 from forge.chat.types import TurnContext
-from forge.infrastructure.database.database import get_session_factory
+from forge.infrastructure.database.database import session_scope
 from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
 from forge.infrastructure.database.repositories.chat_session_repo import ChatSessionRepository
 from forge.llm.providers.base import ChatMessage
@@ -63,7 +63,6 @@ class TurnPreparer:
                         持有 DB 连接的窗口缩到 0.
           段2 (事务): 写 user_msg + assistant 占位, 必要时改名, commit.
         """
-        factory = get_session_factory()
         with span(
             "chat.prepare",
             user_id=user_id,
@@ -71,7 +70,7 @@ class TurnPreparer:
             input_len=len(message or ""),
         ) as s:
             # ---- 段1: 会话解析 / 重命名判定 ----
-            async with factory() as db:
+            async with session_scope() as db:
                 sess_repo = ChatSessionRepository(db)
                 msg_repo = ChatMessageRepository(db)
 
@@ -101,7 +100,7 @@ class TurnPreparer:
                 new_title = await _make_title_with_utility_llm(message, model_options)
 
             # ---- 段2: 写消息 + 必要时改名 ----
-            async with factory() as db:
+            async with session_scope() as db:
                 sess_repo = ChatSessionRepository(db)
                 msg_repo = ChatMessageRepository(db)
 

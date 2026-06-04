@@ -33,7 +33,7 @@ def _build_fake_db(*, session):
 
 def _patches(factory, msg_repo, sess_repo):
     return [
-        patch("forge.chat.preparer.get_session_factory", return_value=factory),
+        patch("forge.chat.preparer.session_scope", side_effect=factory),
         patch("forge.chat.preparer.ChatMessageRepository", return_value=msg_repo),
         patch("forge.chat.preparer.ChatSessionRepository", return_value=sess_repo),
     ]

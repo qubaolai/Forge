@@ -65,16 +65,13 @@ def install_memory_hooks(
             workspace_id = None
 
         # 本地 import, 避免 hooks 模块在 worker / 测试场景无端拉 DB 依赖.
-        from forge.infrastructure.database.database import (
-            get_session_factory,
-        )
+        from forge.infrastructure.database.database import session_scope
         from forge.infrastructure.database.repositories.chat_message_repo import (
             ChatMessageRepository,
         )
 
         try:
-            factory = get_session_factory()
-            async with factory() as db:
+            async with session_scope() as db:
                 repo = ChatMessageRepository(db)
                 count = await repo.count_by_session(session_id)
         except Exception as exc:  # noqa: BLE001

@@ -103,7 +103,7 @@ async def test_chat_system_prompt_only_lists_chat_tools() -> None:
         patch("forge.chat.tools.ToolRegistry.get_all", return_value=tools),
         patch("forge.chat.orchestrator.get_settings", return_value=settings),
         patch("forge.chat.orchestrator.fetch_kb_list", AsyncMock(return_value=[])),
-        patch("forge.chat.orchestrator.get_session_factory", return_value=lambda: _DbContext()),
+        patch("forge.chat.orchestrator.session_scope", side_effect=lambda: _DbContext()),
         patch("forge.chat.orchestrator.build_context_builder", return_value=builder),
     ):
         snapshot = await orchestrator._context_manager.build(  # noqa: SLF001
@@ -151,7 +151,7 @@ async def test_chat_build_once_uses_fresh_db_session_each_time() -> None:
 
     with (
         patch("forge.chat.orchestrator.fetch_kb_list", AsyncMock(return_value=[])),
-        patch("forge.chat.orchestrator.get_session_factory", return_value=lambda: _DbContext()),
+        patch("forge.chat.orchestrator.session_scope", side_effect=lambda: _DbContext()),
         patch("forge.chat.orchestrator.build_context_builder", return_value=builder),
     ):
         await orchestrator._context_manager._build_once(request)  # noqa: SLF001

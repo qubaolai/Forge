@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import time
 
-from forge.llm.circuit_breaker import (
+from forge.llm.resilience.circuit_breaker import (
     BreakerConfig,
     BreakerState,
     CircuitBreaker,

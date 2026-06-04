@@ -46,10 +46,7 @@ class SummaryService:
             InfrastructureError: LLM 初始化 / DB 写入失败.
         """
         from forge.config.settings import get_settings
-        from forge.infrastructure.database.database import (
-            get_session_factory,
-            init_engine,
-        )
+        from forge.infrastructure.database.database import get_session_factory, init_engine
         from forge.infrastructure.database.repositories.chat_message_repo import (
             ChatMessageRepository,
         )
@@ -59,6 +56,7 @@ class SummaryService:
 
         init_engine()  # 幂等, worker 进程也安全
         settings = get_settings()
+        # factory 既喂给只读 history 查询, 也注入 SummaryStore (其内部自管会话).
         factory = get_session_factory()
 
         # 1. 加载 history

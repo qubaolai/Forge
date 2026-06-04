@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from forge.llm.retry import call_with_retry, is_retryable
+from forge.llm.resilience.retry import call_with_retry, is_retryable
 
 
 def test_is_retryable_matches_hints():
@@ -42,7 +42,7 @@ def test_call_with_retry_succeeds_after_retries():
             raise Exception("timeout")
         return "ok"
 
-    with patch("forge.llm.retry.time.sleep") as m:  # 不真睡
+    with patch("forge.llm.resilience.retry.time.sleep") as m:  # 不真睡
         result = call_with_retry(fn, max_retries=3, backoff_seconds=0.01)
     assert result == "ok"
     assert calls["n"] == 3
@@ -54,7 +54,7 @@ def test_call_with_retry_gives_up_after_max():
         raise Exception("timeout")
 
     with (
-        patch("forge.llm.retry.time.sleep"),
+        patch("forge.llm.resilience.retry.time.sleep"),
         pytest.raises(Exception, match="timeout"),
     ):
         call_with_retry(fn, max_retries=2, backoff_seconds=0.01)
@@ -82,7 +82,7 @@ def test_call_with_retry_on_retry_callback():
             raise Exception("503 server error")
         return "done"
 
-    with patch("forge.llm.retry.time.sleep"):
+    with patch("forge.llm.resilience.retry.time.sleep"):
         result = call_with_retry(
             fn,
             max_retries=3,

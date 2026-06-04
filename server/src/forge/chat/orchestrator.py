@@ -58,7 +58,7 @@ from forge.context_mgmt.types import (
 from forge.core.content_merge import ResumeStreamDedup
 from forge.core.request_context import set_trace_id, set_user_id
 from forge.core.types.message import Message, ToolCall
-from forge.infrastructure.database.database import get_session_factory
+from forge.infrastructure.database.database import session_scope
 from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
 from forge.llm import GatewayBinding, GatewayLLMAdapter, get_llm_gateway
 from forge.prompts import get_registry
@@ -514,7 +514,7 @@ def build_turn_orchestrator() -> TurnOrchestrator:
 
         tools_meta = [
             {"name": tool.name, "description": tool.description}
-            for tool in resolve_chat_tools(get_settings())
+            for tool in resolve_chat_tools()
         ]
         kb_list = await fetch_kb_list(request.user_id)
         system_prompt = get_registry().render(
@@ -527,8 +527,7 @@ def build_turn_orchestrator() -> TurnOrchestrator:
         )
         build_request = replace(request, system_prompt_override=system_prompt)
 
-        factory = get_session_factory()
-        async with factory() as db:
+        async with session_scope() as db:
             builder = build_context_builder(
                 mode=ContextMode.CHAT,
                 message_store=ChatMessageRepository(db),
@@ -561,28 +560,7 @@ def build_turn_orchestrator() -> TurnOrchestrator:
     return TurnOrchestrator(context_manager)
 
 
-# 兼容老 API: get_active_streams 返回 supervisor 的 abort_event view.
-# 旧版返回 dict[message_id, asyncio.Event]; 这里包装一下保持签名.
-class _ActiveStreamsCompat:
-    """兼容 _ACTIVE_STREAMS 旧 dict API. 仅 .get(mid) + 'in' 操作."""
-
-    def get(self, message_id: str):
-        run = get_chat_supervisor().get(message_id)
-        if run is None or run.is_terminal:
-            return None
-        return run.abort_event
-
-    def __contains__(self, message_id: str) -> bool:
-        return self.get(message_id) is not None
-
-
-def get_active_streams() -> _ActiveStreamsCompat:
-    """兼容旧 API. 新代码请用 get_chat_supervisor()."""
-    return _ActiveStreamsCompat()
-
-
 __all__ = [
     "TurnOrchestrator",
     "build_turn_orchestrator",
-    "get_active_streams",
 ]

@@ -39,6 +39,12 @@ logger = logging.getLogger(__name__)
 
 _PROVIDER_NAME = "dashscope"
 
+# DashScope 多模态 / 视觉向量模型 (multimodal-embedding-* / *-vision-*) 必须走
+# MultiModalEmbedding 接口 (输入是 text/image/video 内容结构), 与本类的纯文本
+# TextEmbedding.call 不兼容。误绑这类模型会在每轮 embed 时报
+# "InvalidParameter: url error" 且无法自愈, 故在构造期 fail-fast。
+_MULTIMODAL_MARKERS = ("vision", "multimodal")
+
 
 @register_embedder("dashscope")
 class DashScopeEmbedder(Embedder):
@@ -51,6 +57,13 @@ class DashScopeEmbedder(Embedder):
         model = config.get("model")
         if not model:
             raise ValueError("DashScopeEmbedder 需要 config['model']")
+        model_lower = str(model).lower()
+        if any(marker in model_lower for marker in _MULTIMODAL_MARKERS):
+            raise ValueError(
+                f"DashScopeEmbedder 不支持多模态 / 视觉向量模型 model={model}; "
+                "文本向量(知识库 rag_embedding / 语义历史召回 semantic_history_embedding)"
+                "请绑定文本向量模型, 例如 text-embedding-v3 或 text-embedding-v4"
+            )
         dimension = config.get("dimension")
         if dimension is None:
             raise ValueError("DashScopeEmbedder 需要 config['dimension']")

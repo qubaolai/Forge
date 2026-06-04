@@ -26,7 +26,7 @@ from typing import Any
 
 from forge.chat.model_meta import DEFAULT_CONTEXT_WINDOW, resolve_context_window
 from forge.chat.types import ResumeState, TurnContext
-from forge.infrastructure.database.database import get_session_factory
+from forge.infrastructure.database.database import session_scope
 from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
 from forge.infrastructure.database.repositories.chat_session_repo import ChatSessionRepository
 from forge.observability.tracing.tracer import span
@@ -199,13 +199,11 @@ class TurnResumer:
             2. 取 session + 校验所有权
             3. 校验 status ∈ {aborted, partial}
             4. 取 parent (原 user_msg) -> 拿原始问题文本
-            5. 取 agent (若有)
-            6. 把 assistant_msg.status 置回 "streaming" + 同事务 commit
-            7. 构造 ResumeState (含 prev_*) + TurnContext + _AgentSnapshot
+            5. 把 assistant_msg.status 置回 "streaming" + 同事务 commit
+            6. 构造 ResumeState (含 prev_*) + TurnContext
         """
-        factory = get_session_factory()
         with span("chat.resume.prepare", user_id=user_id, message_id=message_id) as s:
-            async with factory() as db:
+            async with session_scope() as db:
                 msg_repo = ChatMessageRepository(db)
                 sess_repo = ChatSessionRepository(db)
 

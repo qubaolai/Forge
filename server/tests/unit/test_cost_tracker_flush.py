@@ -14,7 +14,7 @@ from forge.llm.cost_tracker import CostTracker
 async def test_flush_empty_stats_returns_zero(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("ASSISTANT_HOME", str(tmp_path / "home"))
     t = CostTracker()
-    written = await t.flush_to_db(session_factory=None)
+    written = await t.flush_to_db()
     assert written == 0
 
 
@@ -28,7 +28,7 @@ async def test_flush_writes_costlog_and_clears_memory(
     t.record("anthropic", "claude-opus-4", {"input_tokens": 30, "output_tokens": 10}, user_id="u1")
     t.record("openai", "gpt-4o", {"prompt_tokens": 5, "completion_tokens": 5}, user_id="u2")
 
-    written = await t.flush_to_db(session_factory=None)
+    written = await t.flush_to_db()
     assert written == 3
     assert t.snapshot() == {}
     assert t._db_baseline["u1"] > 0
@@ -44,10 +44,10 @@ async def test_hydrate_baseline_from_existing_costlog(
     t1.record(
         "openai", "gpt-4o", {"prompt_tokens": 1_000_000, "completion_tokens": 0}, user_id="u1"
     )
-    await t1.flush_to_db(session_factory=None)
+    await t1.flush_to_db()
 
     t2 = CostTracker()
-    await t2.hydrate_baseline(session_factory=None)
+    await t2.hydrate_baseline()
     assert t2._db_baseline["u1"] == pytest.approx(2.5, rel=1e-3)
 
 
@@ -75,7 +75,7 @@ async def test_hydrate_baseline_ignores_old_days(monkeypatch: pytest.MonkeyPatch
     )
 
     t = CostTracker()
-    await t.hydrate_baseline(session_factory=None)
+    await t.hydrate_baseline()
     assert t._db_baseline.get("u1", 0.0) == 0.0
 
 

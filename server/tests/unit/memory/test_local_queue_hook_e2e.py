@@ -23,6 +23,8 @@ async def test_hook_dispatches_to_local_queue_and_runs_summary_service(
     install_memory_hooks(bus, queue, every_n_turns=1, enabled=True)
 
     fake_session = MagicMock()
+    fake_session.commit = AsyncMock()
+    fake_session.rollback = AsyncMock()
     ctx = AsyncMock()
     ctx.__aenter__.return_value = fake_session
     ctx.__aexit__.return_value = None

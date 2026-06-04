@@ -22,15 +22,24 @@ session 校验 / agent 加载 / 消息持久化 / SSE 生命周期事件 / syste
 ```
 chat/
 ├── types.py            ← TurnContext (frozen 上下文) / RunResult (累计结果) / ResumeState (恢复快照)
-├── llm_selection.py    ← build_llm_chain_for_agent: agent.model_id → LLMFallbackChain
 ├── preparer.py         ← TurnPreparer: DB 校验 + user_msg 持久化 + assistant 占位
-├── runner.py           ← AgentRunner ABC + ReActRunner + mode 注册表
+├── runner.py           ← ReActRunner.from_profile: 按 agent_profile 装配 agent + lifecycle
+├── tools.py            ← resolve_chat_tools: 按 chat profile.tools_allowed 过滤工具
+├── kb_resolver.py      ← 解析用户可见知识库列表 (供 system prompt)
+├── model_meta.py       ← 模型上下文窗口解析
 ├── guards/             ← LoopGuard 框架: StepSafetyNet / StuckDetector / TokenBudget / WallClock
 ├── finalizer.py        ← TurnFinalizer: 落库 + 发终态事件 + publish turn.completed
 ├── resumer.py          ← TurnResumer: aborted/partial 消息回滚 streaming + 抓快照
-├── orchestrator.py     ← TurnOrchestrator: run_turn / resume_turn 两条主线
-└── __init__.py         ← 对外仅暴露 build_turn_orchestrator + get_active_streams
+├── orchestrator.py     ← TurnOrchestrator: 新 turn / resume 两条主线 (调 ContextManager)
+├── turn_run.py         ← ChatTurnRun: 背景 asyncio.Task + abort_event + 订阅
+├── broadcaster.py      ← SSE 实时广播
+├── event_store.py      ← ChatEventStore: chat_runs/<message_id>/events.jsonl (断线回放)
+├── supervisor.py       ← ChatTurnSupervisor: turn 进程内注册表 + evict + 磁盘清理
+└── __init__.py         ← 对外仅暴露 build_turn_orchestrator
 ```
+
+> 注: 上下文构建已统一走 `context_mgmt.ContextManager`（不再有 `chat/assembler.py` 与
+> `forge.context` 双层兼容架构）；LLM 选择由 `ReActRunner.from_profile` + `GatewayBinding` 承接。
 
 ## 总体架构
 

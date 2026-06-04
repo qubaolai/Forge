@@ -12,10 +12,10 @@ llm/
 │   ├── anthropic.py        AnthropicLLM
 │   ├── google.py           GoogleLLM (Gemini)
 │   └── mock.py             单元测试用 MockLLM / MockStreamLLM
-├── gateway.py              注册表 + 工厂 (@register_llm + LLMFactory + build_chain_from_settings)
-├── fallback.py             LLMFallbackChain — retry + provider 切换 + 成本记账
-├── cost_tracker.py         按 provider:model 维度的 token 计数
-├── retry.py                指数退避重试 (区分可重试/不可重试错误)
+├── gateway.py              LLMGateway — 业务层唯一入口 (Pre/Post pipeline + dispatcher)
+├── dispatch/dispatcher.py  LLMDispatcher (旧名 LLMFallbackChain) — router/chain/熔断/重试/fallback
+├── cost_tracker.py         按 provider:model 维度的 token 计数 + 预算控制
+├── resilience/             retry (指数退避, 区分可重试/不可重试) + circuit_breaker + bulkhead
 ├── token_counter.py        prompt token 估算
 ├── streaming.py            (备用) 流式辅助
 ├── caching/                (扩展点) 响应缓存

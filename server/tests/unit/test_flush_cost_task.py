@@ -48,4 +48,5 @@ async def test_run_flush_cost_task_flushes_tracker() -> None:
         written = await run_flush_cost_task()
 
     assert written == 3
-    fake_tracker.flush_to_db.assert_awaited_once_with(fake_factory)
+    # flush_to_db 不再吃 session_factory(成本只落 cost.jsonl);工厂仅用于就绪门控。
+    fake_tracker.flush_to_db.assert_awaited_once_with()

@@ -55,7 +55,7 @@ def _build_fake_db(*, asst, session, parent, agent=None):
 def _patches(factory, msg_repo, sess_repo):
     """一组 patch (按 resumer 内部 import 的位置)."""
     return [
-        patch("forge.chat.resumer.get_session_factory", return_value=factory),
+        patch("forge.chat.resumer.session_scope", side_effect=factory),
         patch("forge.chat.resumer.ChatMessageRepository", return_value=msg_repo),
         patch("forge.chat.resumer.ChatSessionRepository", return_value=sess_repo),
     ]

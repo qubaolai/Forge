@@ -7,7 +7,8 @@
 - 单机模式默认 SQLite, 启动期通过 bootstrap_schema 创建最小 schema
 """
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
@@ -232,11 +233,23 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
     return _session_factory
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """FastAPI 依赖:为每个请求提供一个 session,自动管理事务。
+@asynccontextmanager
+async def session_scope() -> AsyncIterator[AsyncSession]:
+    """通用 DB 会话上下文:非 HTTP 路径(后台任务 / 服务 / 钩子)统一事务边界。
 
-    请求正常结束 → commit;抛异常 → rollback。
-    Repo 内部只 flush 不 commit,事务边界由这里统一控制。
+    与 FastAPI 的 get_db 同语义:
+        - 正常退出 → commit;块内抛异常 → rollback 后向上抛。
+        - Repo 内部只 flush 不 commit,事务边界由本上下文统一管理。
+        - 只读块也可直接用:提交一个未改动的会话是 no-op,无副作用。
+
+    用法::
+
+        async with session_scope() as db:
+            repo = ChatMessageRepository(db)
+            ...
+
+    取代散落各处的 ``factory = get_session_factory(); async with factory() as db``
+    样板,避免提交 / 回滚语义在调用点各写一遍而漂移。
     """
     factory = get_session_factory()
     async with factory() as session:
@@ -246,5 +259,9 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
-        finally:
-            await session.close()
+
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """FastAPI 依赖:为每个请求提供一个 session,事务边界同 session_scope。"""
+    async with session_scope() as session:
+        yield session

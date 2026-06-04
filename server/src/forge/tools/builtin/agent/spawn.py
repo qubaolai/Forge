@@ -10,8 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
-from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 from forge.core.types.errors import ToolValidationError
 from forge.tools.base import Tool
@@ -51,11 +50,6 @@ SUBAGENT_CHANNEL_NOTICE: str = (
     "3. 需要上游产出时只读: 用 get_artifact / search_artifact / read_file / grep.\n"
     "4. 完成任务请直接给出最终文本结果, 不需要 ack / 客套."
 )
-
-
-@dataclass(frozen=True)
-class _AgentSnapshot:
-    model_id: str | None = None
 
 
 @register_tool
@@ -139,9 +133,6 @@ async def _default_subagent_runner(target_role: str, task: str, max_steps: int) 
         task_type="tool_use",
     )
     llm = GatewayLLMAdapter(binding)
-    _ = _AgentSnapshot  # 保留类定义, 测试桩可用; 不再注入 chain
-    _ = cast  # noqa: F841 (兼容旧 typing import)
-    _ = Any   # noqa: F841
     tools = resolve_subagent_tools(role.allowed_tools)
     system_prompt = get_registry().render(
         role.prompt_template,

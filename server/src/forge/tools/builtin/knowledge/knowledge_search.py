@@ -25,7 +25,7 @@ import logging
 from typing import Any
 
 from forge.core.request_context import current_user_id
-from forge.infrastructure.database.database import get_session_factory
+from forge.infrastructure.database.database import session_scope
 from forge.infrastructure.database.repositories.kb_document_repo import (
     KbDocumentRepository,
 )
@@ -108,8 +108,7 @@ class KnowledgeSearchTool(Tool):
         top_n: int,
         user_id: str,
     ) -> str:
-        session_factory = get_session_factory()
-        async with session_factory() as db:
+        async with session_scope() as db:
             kb_repo = KnowledgeBaseRepository(db)
             kbs = await kb_repo.find_accessible_by_names(kb_names, user_id)
 

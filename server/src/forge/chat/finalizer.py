@@ -16,7 +16,7 @@ from forge.agents.base import AgentEvent
 from forge.chat.types import ResumeState, RunResult, TurnContext
 from forge.context_mgmt.types import ContextSnapshot
 from forge.core.content_merge import strip_overlap
-from forge.infrastructure.database.database import get_session_factory
+from forge.infrastructure.database.database import session_scope
 from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
 from forge.observability.tracing.tracer import span
 
@@ -156,8 +156,7 @@ class TurnFinalizer:
             get_token_meter().count_text(result.content) if result.content else None
         )
 
-        factory = get_session_factory()
-        async with factory() as db:
+        async with session_scope() as db:
             repo = ChatMessageRepository(db)
             msg = await repo.get_by_id(ctx.assistant_msg_id)
             if msg:
@@ -237,8 +236,7 @@ class TurnFinalizer:
         finish_reason: str,
         error_message: str,
     ) -> None:
-        factory = get_session_factory()
-        async with factory() as db:
+        async with session_scope() as db:
             repo = ChatMessageRepository(db)
             msg = await repo.get_by_id(ctx.assistant_msg_id)
             if msg:

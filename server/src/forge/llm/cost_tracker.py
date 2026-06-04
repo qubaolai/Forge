@@ -2,7 +2,7 @@
 
 设计:
     - 进程内累计 (按 user_id × provider × model 三维) 作为"delta since last flush".
-    - flush_to_db(session_factory) 把 delta 追加到 cost.jsonl, 然后清零内存
+    - flush_to_db() 把 delta 追加到 cost.jsonl, 然后清零内存
       并刷新 db_baseline (该进程对当日累计的本地缓存).
     - check_budget 使用 (db_baseline + 内存 delta) 估算当日总额, 决策是否抛 LLMBudgetExceeded.
 
@@ -281,16 +281,12 @@ class CostTracker:
     # ------------------------------------------------------------------
     # 持久化 (异步, 由 Celery beat 任务 / lifespan 调用)
     # ------------------------------------------------------------------
-    async def flush_to_db(self, session_factory) -> int:
+    async def flush_to_db(self) -> int:
         """把内存 delta 追加到 cost.jsonl, 清零内存, 刷新 db_baseline.
-
-        Args:
-            session_factory: 兼容旧签名保留, 当前实现不使用.
 
         Returns:
             写入条目数 (不含 0 调用条目).
         """
-        _ = session_factory  # 兼容旧签名
         # 1. 原子地把当前 stats 取出 + 清零, 避免 flush 期间 record() 丢失
         from datetime import datetime
 
@@ -347,12 +343,11 @@ class CostTracker:
         )
         return written
 
-    async def hydrate_baseline(self, session_factory) -> None:
+    async def hydrate_baseline(self) -> None:
         """启动期从 cost.jsonl 装载当日累计到 db_baseline.
 
         web / worker 进程在启动后调一次, 确保第一次 check_budget 能看到真值.
         """
-        _ = session_factory  # 兼容旧签名
         from datetime import datetime
 
         today = datetime.now(UTC).date()

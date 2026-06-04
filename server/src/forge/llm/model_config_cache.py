@@ -184,11 +184,6 @@ class ModelConfigCache:
             len(all_types),
         )
 
-    async def reload_provider(self, db: AsyncSession, provider_name: str) -> None:
-        """兼容旧调用：当前策略统一执行全量重建。"""
-        logger.info("ModelConfigCache 刷新请求 provider=%s，采用全量重建策略", provider_name)
-        await self.reload_all(db)
-
     async def get_providers_enabled(self) -> list[dict]:
         raw = await self._redis.hgetall(_PFX_PROVIDERS)
         if not raw:

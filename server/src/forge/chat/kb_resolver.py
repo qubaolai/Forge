@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from forge.infrastructure.database.database import get_session_factory
+from forge.infrastructure.database.database import session_scope
 from forge.infrastructure.database.repositories.knowledge_base_repo import KnowledgeBaseRepository
 
 logger = logging.getLogger(__name__)
@@ -15,8 +15,7 @@ async def fetch_kb_list(user_id: str) -> list[dict]:
     if not user_id:
         return []
     try:
-        factory = get_session_factory()
-        async with factory() as db:
+        async with session_scope() as db:
             kb_repo = KnowledgeBaseRepository(db)
             kbs = await kb_repo.list_for_user(user_id)
             return [

@@ -46,6 +46,8 @@ def _patch_repo_count(count: int):
     get_session_factory 让 async with 不真去开连接."""
     fake_session = MagicMock()
     fake_session.close = AsyncMock()
+    fake_session.commit = AsyncMock()
+    fake_session.rollback = AsyncMock()
 
     ctx = AsyncMock()
     ctx.__aenter__.return_value = fake_session

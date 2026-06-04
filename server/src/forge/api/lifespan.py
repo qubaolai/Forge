@@ -153,11 +153,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from forge.llm.model_config_cache import ModelConfigCache
 
     model_cache = ModelConfigCache.get_global(redis_client)
-    from forge.infrastructure.database.database import get_session_factory
+    from forge.infrastructure.database.database import session_scope
 
-    session_factory = get_session_factory()
     try:
-        async with session_factory() as cache_db:
+        async with session_scope() as cache_db:
             await model_cache.reload_all(cache_db)
         logger.info("模型缓存加载完成: ready=%s", await model_cache.is_ready())
     except Exception:
@@ -269,7 +268,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
 
         try:
-            await cost_tracker.hydrate_baseline(db_module.get_session_factory())
+            await cost_tracker.hydrate_baseline()
         except Exception:  # noqa: BLE001
             logger.exception("CostTracker baseline hydrate 失败, 预算检查仍可用 (按内存累计)")
         try:

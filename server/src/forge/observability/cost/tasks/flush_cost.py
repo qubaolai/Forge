@@ -50,7 +50,7 @@ async def run_flush_cost_task() -> int:
     if factory is None:  # 防御式兼容旧调用方 mock
         logger.warning("cost flush: session_factory 为空, 跳过")
         return 0
-    return await get_cost_tracker().flush_to_db(factory)
+    return await get_cost_tracker().flush_to_db()
 
 
 @shared_task(name="observability.cost.flush", bind=True, max_retries=3, default_retry_delay=30)

@@ -7,7 +7,7 @@ import threading
 from sqlalchemy import select
 
 from forge.core.crypto import resolve_key
-from forge.infrastructure.database.database import get_session_factory
+from forge.infrastructure.database.database import session_scope
 from forge.infrastructure.database.orm.model_provider_orm import ProviderOrm
 from forge.infrastructure.database.orm.system_model_binding_orm import SystemModelBindingOrm
 from forge.infrastructure.database.repositories.model_config_repo import ModelConfigRepository
@@ -25,8 +25,7 @@ class BoundModelResolver:
             self._cache.clear()
 
     async def resolve(self, role: str):
-        factory = get_session_factory()
-        async with factory() as db:
+        async with session_scope() as db:
             binding = (await db.execute(
                 select(SystemModelBindingOrm).where(SystemModelBindingOrm.role == role)
             )).scalar_one_or_none()

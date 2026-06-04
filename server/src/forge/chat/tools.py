@@ -16,11 +16,11 @@ from forge.tools.registry import ToolRegistry
 logger = logging.getLogger(__name__)
 
 
-def resolve_chat_tools(settings=None) -> tuple[Tool, ...]:  # noqa: ARG001
+def resolve_chat_tools() -> tuple[Tool, ...]:
     """按 chat profile 的 tools_allowed 过滤 ToolRegistry.
 
-    settings 参数保留是为了兼容历史调用约定; 现版本不读它, profile loader
-    自身依赖全局 Settings 单例.
+    工具集来源是 agent_profiles.profiles.chat.tools_allowed; profile loader
+    自身依赖全局 Settings 单例, 故此处不需要显式传入 settings.
     """
     try:
         profile = get_agent_profile("chat")

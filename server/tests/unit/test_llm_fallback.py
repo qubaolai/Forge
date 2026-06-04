@@ -15,7 +15,7 @@ from forge.config.domains.llm import LLMCallSpec
 from forge.config.domains.quota import UsageQuotaWindowSettings, UserQuotaSettings
 from forge.core.request_context import user_id_scope
 from forge.llm.cost_tracker import get_cost_tracker
-from forge.llm.fallback import LLMFallbackChain
+from forge.llm.dispatch.dispatcher import LLMDispatcher as LLMFallbackChain
 from forge.llm.providers.base import LLM, ChatChunk, ChatMessage, ChatResult
 from forge.quota import UserQuotaExceeded, get_usage_quota_manager
 
@@ -292,7 +292,7 @@ def test_chain_chat_with_tools_falls_back():
 # ---------------------------------------------------------------------------
 def test_chain_skips_open_breaker_without_calling_provider():
     """primary 的 breaker 已经 OPEN 时, chain 应该直接跳过, 不再调用 provider."""
-    from forge.llm.circuit_breaker import (
+    from forge.llm.resilience.circuit_breaker import (
         BreakerConfig,
         CircuitBreakerRegistry,
         get_breaker_registry,
@@ -323,7 +323,7 @@ def test_chain_skips_open_breaker_without_calling_provider():
 
 def test_chain_records_failure_to_breaker_on_provider_error():
     """provider 调用失败时, breaker 应记录失败; 累积到阈值后会 OPEN."""
-    from forge.llm.circuit_breaker import (
+    from forge.llm.resilience.circuit_breaker import (
         BreakerConfig,
         BreakerState,
         get_breaker_registry,
@@ -373,7 +373,7 @@ def test_rate_limit_marks_cooldown_and_switches_same_model_key(monkeypatch):
             self.calls.append((impl, api_key, seconds))
 
     pool = _Pool()
-    monkeypatch.setattr("forge.llm.fallback.get_llm_pool", lambda: pool)
+    monkeypatch.setattr("forge.llm.dispatch.dispatcher.get_llm_pool", lambda: pool)
 
     primary = _MockLLM("p", fail_first=100, raise_msg="429 rate limit retry-after: 10")
     backup = _MockLLM("b")
