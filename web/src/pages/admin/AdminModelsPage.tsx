@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Plus, Edit2, Trash2, KeyRound, Server, Loader2, RefreshCw,
+  Brain, Database, Edit2, KeyRound, Layers, Loader2, Plus, RefreshCw,
+  Search, Server, ShieldCheck, Trash2,
 } from 'lucide-react';
 import {
   providersApi, modelsAdminApi, providerKeysApi, modelBindingsApi, ragIndexAdminApi,
@@ -19,12 +20,33 @@ const inputCls =
   'w-full rounded-md border px-3 py-1.5 text-sm outline-none focus:border-orange-400';
 const THINKING_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
 type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+type ModelTypeFilter = ProviderModel['model_type'] | 'all';
+type ModelStatusFilter = 'enabled' | 'disabled' | 'all';
+type AdminModelItem = ProviderModel & {
+  providerName: string;
+  providerEnabled: boolean;
+  providerBaseUrl: string | null;
+  keyCount: number;
+};
+
+const ROLE_ORDER: SystemModelBinding['role'][] = [
+  'rag_embedding',
+  'semantic_history_embedding',
+  'rag_reranker',
+];
 
 function isThinkingLevel(value: string): value is ThinkingLevel {
   return THINKING_LEVELS.includes(value as ThinkingLevel);
 }
 
 export default function AdminModelsPage() {
+  const [typeFilter, setTypeFilter] = useState<ModelTypeFilter>('all');
+  const [providerFilter, setProviderFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState<ModelStatusFilter>('all');
+  const [createProviderSelection, setCreateProviderSelection] = useState('');
+  const [creatingProviderName, setCreatingProviderName] = useState('');
+  const [editingModel, setEditingModel] = useState<ProviderModel | null>(null);
+
   const { data: providers, isLoading } = useQuery({
     queryKey: PROVIDERS_KEY,
     queryFn: () => providersApi.listAdmin(),
@@ -41,35 +63,108 @@ export default function AdminModelsPage() {
       return jobs.some((job) => job.status === 'pending' || job.status === 'running') ? 2000 : false;
     },
   });
+  const providerList = providers || [];
+  const createProviderName = createProviderSelection || providerList.find((p) => p.is_enabled)?.name || providerList[0]?.name || '';
+  const modelItems: AdminModelItem[] = providerList.flatMap((provider) =>
+    provider.models.map((model) => ({
+      ...model,
+      providerName: provider.name,
+      providerEnabled: provider.is_enabled,
+      providerBaseUrl: provider.base_url,
+      keyCount: provider.key_count,
+    })),
+  );
+  const filteredModels = modelItems.filter((model) => {
+    if (typeFilter !== 'all' && model.model_type !== typeFilter) return false;
+    if (providerFilter !== 'all' && model.providerName !== providerFilter) return false;
+    if (statusFilter === 'enabled' && !model.is_enabled) return false;
+    if (statusFilter === 'disabled' && model.is_enabled) return false;
+    return true;
+  });
+  const stats = {
+    total: modelItems.length,
+    chat: modelItems.filter((m) => m.model_type === 'chat').length,
+    embedding: modelItems.filter((m) => m.model_type === 'embedding').length,
+    reranker: modelItems.filter((m) => m.model_type === 'reranker').length,
+    enabled: modelItems.filter((m) => m.is_enabled).length,
+  };
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-5xl px-8 py-8">
-        <div className="mb-6">
-          <h1 className="text-xl font-semibold">模型配置</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            管理各供应商的启用状态、模型与 API-Key（不支持新增供应商）
-          </p>
+    <div className="h-full overflow-y-auto bg-gray-50/40">
+      <div className="mx-auto max-w-7xl px-8 py-8">
+        <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-orange-50 px-2.5 py-1 text-xs text-orange-700">
+              <ShieldCheck size={13} />
+              系统模型运行时配置
+            </div>
+            <h1 className="text-2xl font-semibold tracking-tight">模型配置</h1>
+            <p className="mt-1 max-w-2xl text-sm text-gray-500">
+              统一管理 Chat、Embedding、Reranker 模型，并为 RAG 与语义历史选择当前系统绑定模型。
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-white p-2 shadow-sm">
+            <select
+              value={createProviderName}
+              onChange={(e) => setCreateProviderSelection(e.target.value)}
+              disabled={providerList.length === 0}
+              className={cn(inputCls, 'w-44 bg-white')}
+            >
+              {providerList.length === 0 ? (
+                <option value="">无供应商</option>
+              ) : providerList.map((provider) => (
+                <option key={provider.id} value={provider.name}>
+                  {provider.name}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => setCreatingProviderName(createProviderName)}
+              disabled={!createProviderName}
+              className="inline-flex items-center gap-1.5 rounded-md bg-gray-900 px-3 py-1.5 text-sm text-white hover:bg-gray-800 disabled:opacity-40"
+            >
+              <Plus size={14} />
+              新增模型
+            </button>
+          </div>
         </div>
+
+        <StatsStrip stats={stats} />
+
         <SystemBindings
-          providers={providers || []}
+          providers={providerList}
           bindings={bindings || []}
           ragStatus={ragStatus}
         />
 
-        {isLoading ? (
-          <div className="py-12 text-center text-sm text-gray-400">加载中…</div>
-        ) : !providers || providers.length === 0 ? (
-          <div className="rounded-lg border-2 border-dashed border-gray-200 py-16 text-center">
-            <Server className="mx-auto text-gray-300" size={40} />
-            <p className="mt-3 text-sm text-gray-500">还没有供应商</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {providers.map((p) => (
-              <ProviderCard key={p.id} provider={p} bindings={bindings || []} />
-            ))}
-          </div>
+        <ModelInventory
+          models={filteredModels}
+          providers={providerList}
+          bindings={bindings || []}
+          isLoading={isLoading}
+          typeFilter={typeFilter}
+          providerFilter={providerFilter}
+          statusFilter={statusFilter}
+          onTypeFilterChange={setTypeFilter}
+          onProviderFilterChange={setProviderFilter}
+          onStatusFilterChange={setStatusFilter}
+          onEdit={setEditingModel}
+        />
+
+        <ProviderAccessPanel
+          providers={providerList}
+          onCreateModel={(providerName) => setCreatingProviderName(providerName)}
+        />
+
+        {(creatingProviderName || editingModel) && (
+          <ModelDialog
+            providerName={editingModel ? '' : creatingProviderName}
+            model={editingModel}
+            onClose={() => {
+              setCreatingProviderName('');
+              setEditingModel(null);
+            }}
+          />
         )}
       </div>
     </div>
@@ -82,6 +177,61 @@ function roleLabel(role: SystemModelBinding['role']) {
     semantic_history_embedding: '语义历史 Embedding',
     rag_reranker: 'RAG Reranker',
   }[role];
+}
+
+function roleDescription(role: SystemModelBinding['role']) {
+  return {
+    rag_embedding: '知识库向量入库与向量召回使用的 Embedding 模型',
+    semantic_history_embedding: '上下文语义历史捞取使用的 Embedding 模型',
+    rag_reranker: 'RAG 检索结果二次排序使用的 Reranker 模型',
+  }[role];
+}
+
+function roleIcon(role: SystemModelBinding['role']) {
+  if (role === 'rag_embedding') return <Database size={18} />;
+  if (role === 'semantic_history_embedding') return <Brain size={18} />;
+  return <Layers size={18} />;
+}
+
+function modelTypeLabel(type: ProviderModel['model_type']) {
+  return {
+    chat: 'Chat',
+    embedding: 'Embedding',
+    reranker: 'Reranker',
+  }[type];
+}
+
+function modelTypeTone(type: ProviderModel['model_type']) {
+  return {
+    chat: 'bg-blue-50 text-blue-700 border-blue-100',
+    embedding: 'bg-emerald-50 text-emerald-700 border-emerald-100',
+    reranker: 'bg-purple-50 text-purple-700 border-purple-100',
+  }[type];
+}
+
+function fmtNumber(value: unknown) {
+  const num = Number(value || 0);
+  return num > 0 ? num.toLocaleString() : '-';
+}
+
+function StatsStrip({ stats }: { stats: { total: number; chat: number; embedding: number; reranker: number; enabled: number } }) {
+  const items = [
+    { label: '全部模型', value: stats.total, hint: `${stats.enabled} 个已启用` },
+    { label: 'Chat', value: stats.chat, hint: '文本与多模态对话' },
+    { label: 'Embedding', value: stats.embedding, hint: 'RAG / 语义历史' },
+    { label: 'Reranker', value: stats.reranker, hint: '检索重排' },
+  ];
+  return (
+    <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      {items.map((item) => (
+        <div key={item.label} className="rounded-lg border bg-white px-4 py-3 shadow-sm">
+          <div className="text-xs text-gray-500">{item.label}</div>
+          <div className="mt-1 text-2xl font-semibold">{item.value}</div>
+          <div className="mt-1 text-xs text-gray-400">{item.hint}</div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function SystemBindings({
@@ -101,7 +251,10 @@ function SystemBindings({
       providerName: provider.name,
     })));
   const staleCount = ragStatus?.documents?.stale || 0;
-  const affectedCount = Object.values(ragStatus?.documents || {}).reduce((sum, count) => sum + count, 0);
+  const readyCount = ragStatus?.documents?.ready || 0;
+  const rebuildingCount = ragStatus?.documents?.rebuilding || 0;
+  const failedCount = ragStatus?.documents?.failed || 0;
+  const affectedCount = Object.values(ragStatus?.documents || {}).reduce((sum, count) => sum + (count || 0), 0);
   const latestJob = ragStatus?.jobs?.[0];
   const update = useMutation({
     mutationFn: ({ role, modelId }: { role: string; modelId: string | null }) =>
@@ -131,18 +284,60 @@ function SystemBindings({
   });
 
   return (
-    <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-3">
-      {bindings.map((binding) => {
-        const expected = binding.role === 'rag_reranker' ? 'reranker' : 'embedding';
+    <section className="mb-6">
+      <div className="mb-3 flex items-end justify-between">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-900">系统当前使用模型</h2>
+          <p className="mt-0.5 text-xs text-gray-500">
+            这些绑定会被 RAG、语义历史和重排运行时实时解析；RAG Embedding 切换后需要重建向量索引。
+          </p>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+      {ROLE_ORDER.map((role) => {
+        const binding = bindings.find((item) => item.role === role);
+        const expected = role === 'rag_reranker' ? 'reranker' : 'embedding';
         const candidates = models.filter((m) => m.model_type === expected && m.is_enabled);
+        const current = binding
+          ? models.find((m) => m.model_id === binding.model_id)
+          : undefined;
         return (
-          <div key={binding.role} className="rounded-lg border bg-white p-4">
-            <div className="text-xs font-medium text-gray-500">{roleLabel(binding.role)}</div>
+          <div key={role} className="rounded-xl border bg-white p-4 shadow-sm">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gray-900 text-white">
+                {roleIcon(role)}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-semibold">{roleLabel(role)}</div>
+                  {binding && (
+                    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-500">
+                      v{binding.version}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-0.5 line-clamp-2 text-xs text-gray-500">{roleDescription(role)}</p>
+              </div>
+            </div>
+            <div className="mt-4 rounded-lg bg-gray-50 px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wide text-gray-400">当前绑定</div>
+              <div className="mt-1 truncate text-sm font-medium">
+                {current ? (
+                  <>
+                    {current.providerName} / {current.display_name || current.name}
+                  </>
+                ) : (
+                  <span className="text-amber-600">未配置</span>
+                )}
+              </div>
+            </div>
             <select
-              value={binding.model_id || ''}
+              value={binding?.model_id || ''}
+              disabled={!binding}
               onChange={async (e) => {
                 const modelId = e.target.value || null;
-                if (binding.role === 'rag_embedding' && binding.model_id && modelId !== binding.model_id) {
+                if (!binding) return;
+                if (role === 'rag_embedding' && binding.model_id && modelId !== binding.model_id) {
                   const ok = await confirm({
                     message: `切换 RAG Embedding 会使 ${affectedCount} 个现有文档的向量索引失效，重建前将仅使用 BM25 检索。是否继续？`,
                     confirmLabel: '继续切换',
@@ -154,23 +349,29 @@ function SystemBindings({
               }}
               className={cn(inputCls, 'mt-2 bg-white')}
             >
-              {binding.optional && <option value="">关闭</option>}
-              {!binding.optional && <option value="">请选择模型</option>}
+              {binding?.optional && <option value="">关闭</option>}
+              {!binding?.optional && <option value="">请选择模型</option>}
               {candidates.map((m) => (
                 <option key={m.model_id} value={m.model_id}>
                   {m.providerName} / {m.display_name || m.name}
                 </option>
               ))}
             </select>
-            {binding.role === 'rag_embedding' && (
+            {role === 'rag_embedding' && (
               <div className="mt-3 space-y-2 text-xs">
-                <div className="flex items-center justify-between">
+                <div className="grid grid-cols-4 gap-1.5">
+                  <IndexPill label="ready" value={readyCount} />
+                  <IndexPill label="stale" value={staleCount} warn />
+                  <IndexPill label="rebuild" value={rebuildingCount} />
+                  <IndexPill label="failed" value={failedCount} danger />
+                </div>
+                <div className="flex items-center justify-between pt-1">
                   <span className={staleCount > 0 ? 'text-amber-600' : 'text-gray-400'}>
-                    {staleCount > 0 ? `${staleCount} 个文档待重建` : '索引状态正常'}
+                    {staleCount > 0 ? '需要重建向量索引' : '向量索引状态正常'}
                   </span>
                   <button
                     onClick={() => rebuild.mutate()}
-                    disabled={!binding.model_id || rebuild.isPending}
+                    disabled={!binding?.model_id || rebuild.isPending}
                     className="inline-flex items-center gap-1 text-orange-600 disabled:text-gray-300"
                   >
                     <RefreshCw size={12} /> 重建索引
@@ -201,107 +402,152 @@ function SystemBindings({
           </div>
         );
       })}
+      </div>
+    </section>
+  );
+}
+
+function IndexPill({
+  label,
+  value,
+  warn,
+  danger,
+}: {
+  label: string;
+  value: number;
+  warn?: boolean;
+  danger?: boolean;
+}) {
+  return (
+    <div className={cn(
+      'rounded-md px-2 py-1 text-center',
+      danger ? 'bg-red-50 text-red-600' : warn ? 'bg-amber-50 text-amber-700' : 'bg-gray-50 text-gray-500',
+    )}>
+      <div className="text-sm font-semibold">{value}</div>
+      <div className="text-[10px]">{label}</div>
     </div>
   );
 }
 
-// ============================================================================
-// 供应商卡片
-// ============================================================================
-function ProviderCard({ provider, bindings }: { provider: ProviderAdmin; bindings: SystemModelBinding[] }) {
-  const qc = useQueryClient();
-  const [creatingModel, setCreatingModel] = useState(false);
-  const [editingModel, setEditingModel] = useState<ProviderModel | null>(null);
-
-  const toggle = useMutation({
-    mutationFn: (enabled: boolean) => providersApi.toggle(provider.name, enabled),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: PROVIDERS_KEY });
-      toast.success(provider.is_enabled ? '已禁用供应商' : '已启用供应商');
-    },
-    onError: (e) => toast.error((e as ApiError).message || '操作失败'),
-  });
-
+function ModelInventory({
+  models,
+  providers,
+  bindings,
+  isLoading,
+  typeFilter,
+  providerFilter,
+  statusFilter,
+  onTypeFilterChange,
+  onProviderFilterChange,
+  onStatusFilterChange,
+  onEdit,
+}: {
+  models: AdminModelItem[];
+  providers: ProviderAdmin[];
+  bindings: SystemModelBinding[];
+  isLoading: boolean;
+  typeFilter: ModelTypeFilter;
+  providerFilter: string;
+  statusFilter: ModelStatusFilter;
+  onTypeFilterChange: (value: ModelTypeFilter) => void;
+  onProviderFilterChange: (value: string) => void;
+  onStatusFilterChange: (value: ModelStatusFilter) => void;
+  onEdit: (model: ProviderModel) => void;
+}) {
   return (
-    <div className="rounded-lg border bg-white">
-      {/* 供应商头部 */}
-      <div className="flex items-center justify-between border-b px-5 py-3.5">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-orange-50">
-            <Server className="text-orange-500" size={18} />
-          </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="font-medium">{provider.name}</span>
-              {provider.impl && provider.impl !== provider.name && (
-                <span className="text-xs text-gray-400">{provider.impl}</span>
-              )}
-            </div>
-            <div className="text-xs text-gray-400">
-              {provider.model_count} 个模型 · {provider.key_count} 个 Key
-              {provider.base_url ? ` · ${provider.base_url}` : ''}
-            </div>
-          </div>
+    <section className="mb-6 rounded-xl border bg-white shadow-sm">
+      <div className="flex flex-col gap-3 border-b px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-900">模型清单</h2>
+          <p className="mt-0.5 text-xs text-gray-500">统一模型注册表，按调用类型维护不同配置。</p>
         </div>
-        <Switch
-          checked={provider.is_enabled}
-          loading={toggle.isPending}
-          onChange={(v) => toggle.mutate(v)}
-        />
-      </div>
-
-      {/* 模型区 */}
-      <div className="px-5 py-3">
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-xs font-medium text-gray-500">模型</span>
-          <button
-            onClick={() => setCreatingModel(true)}
-            className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700"
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <select
+              value={typeFilter}
+              onChange={(e) => onTypeFilterChange(e.target.value as ModelTypeFilter)}
+              className="rounded-md border bg-white py-1.5 pl-8 pr-8 text-sm outline-none focus:border-orange-400"
+            >
+              <option value="all">全部类型</option>
+              <option value="chat">Chat</option>
+              <option value="embedding">Embedding</option>
+              <option value="reranker">Reranker</option>
+            </select>
+          </div>
+          <select
+            value={providerFilter}
+            onChange={(e) => onProviderFilterChange(e.target.value)}
+            className={cn(inputCls, 'w-40 bg-white')}
           >
-            <Plus size={13} /> 新增模型
-          </button>
+            <option value="all">全部供应商</option>
+            {providers.map((provider) => (
+              <option key={provider.id} value={provider.name}>{provider.name}</option>
+            ))}
+          </select>
+          <select
+            value={statusFilter}
+            onChange={(e) => onStatusFilterChange(e.target.value as ModelStatusFilter)}
+            className={cn(inputCls, 'w-32 bg-white')}
+          >
+            <option value="all">全部状态</option>
+            <option value="enabled">已启用</option>
+            <option value="disabled">已禁用</option>
+          </select>
         </div>
-        {provider.models.length === 0 ? (
-          <div className="py-3 text-center text-xs text-gray-400">暂无模型</div>
-        ) : (
-          <div className="divide-y divide-gray-100">
-            {provider.models.map((m) => (
-              <ModelRow
-                key={m.model_id}
-                model={m}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 text-xs text-gray-500">
+            <tr>
+              <th className="px-5 py-3 text-left font-medium">模型</th>
+              <th className="px-4 py-3 text-left font-medium">类型</th>
+              <th className="px-4 py-3 text-left font-medium">系统用途</th>
+              <th className="px-4 py-3 text-left font-medium">关键配置</th>
+              <th className="px-4 py-3 text-left font-medium">状态</th>
+              <th className="w-32 px-4 py-3 text-right font-medium">操作</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {isLoading && (
+              <tr>
+                <td colSpan={6} className="py-14 text-center text-sm text-gray-400">加载中…</td>
+              </tr>
+            )}
+            {!isLoading && models.length === 0 && (
+              <tr>
+                <td colSpan={6} className="py-14 text-center text-sm text-gray-400">没有符合筛选条件的模型</td>
+              </tr>
+            )}
+            {models.map((model) => (
+              <ModelInventoryRow
+                key={model.model_id}
+                model={model}
                 bindings={bindings}
-                onEdit={() => setEditingModel(m)}
+                onEdit={() => onEdit(model)}
               />
             ))}
-          </div>
-        )}
+          </tbody>
+        </table>
       </div>
-
-      {/* API-Key 区 */}
-      <KeysSection providerName={provider.name} />
-
-      {(creatingModel || editingModel) && (
-        <ModelDialog
-          providerName={provider.name}
-          model={editingModel}
-          onClose={() => {
-            setCreatingModel(false);
-            setEditingModel(null);
-          }}
-        />
-      )}
-    </div>
+    </section>
   );
 }
 
-// ============================================================================
-// 模型行
-// ============================================================================
-function ModelRow({
-  model, bindings, onEdit,
-}: { model: ProviderModel; bindings: SystemModelBinding[]; onEdit: () => void }) {
+function ModelInventoryRow({
+  model,
+  bindings,
+  onEdit,
+}: {
+  model: AdminModelItem;
+  bindings: SystemModelBinding[];
+  onEdit: () => void;
+}) {
   const qc = useQueryClient();
-  const invalidate = () => qc.invalidateQueries({ queryKey: PROVIDERS_KEY });
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: PROVIDERS_KEY });
+    qc.invalidateQueries({ queryKey: ['admin-model-bindings'] });
+  };
 
   const toggle = useMutation({
     mutationFn: (enabled: boolean) => modelsAdminApi.toggle(model.model_id, enabled),
@@ -312,25 +558,66 @@ function ModelRow({
     mutationFn: () => modelsAdminApi.remove(model.model_id),
     onSuccess: () => {
       invalidate();
-      toast.success('已删除');
+      toast.success('已删除模型');
     },
     onError: (e) => toast.error((e as ApiError).message || '删除失败'),
   });
+  const usedBindings = bindings.filter((binding) => binding.model_id === model.model_id);
 
   return (
-    <div className="flex items-center justify-between py-2">
-      <div className="flex min-w-0 items-center gap-2">
-        <span className="truncate text-sm">{model.display_name || model.name}</span>
-        <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500">
-          {model.model_type}
+    <tr className="hover:bg-gray-50/70">
+      <td className="px-5 py-3.5">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border', modelTypeTone(model.model_type))}>
+            {model.model_type === 'chat' ? <Brain size={15} /> : model.model_type === 'embedding' ? <Database size={15} /> : <Layers size={15} />}
+          </div>
+          <div className="min-w-0">
+            <div className="truncate font-medium">{model.display_name || model.name}</div>
+            <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-gray-400">
+              <span className="font-mono">{model.name}</span>
+              <span>·</span>
+              <span>{model.providerName}</span>
+              {!model.providerEnabled && (
+                <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">供应商已停用</span>
+              )}
+            </div>
+          </div>
+        </div>
+      </td>
+      <td className="px-4 py-3.5">
+        <span className={cn('inline-flex rounded-full border px-2 py-0.5 text-xs', modelTypeTone(model.model_type))}>
+          {modelTypeLabel(model.model_type)}
         </span>
-        {bindings.filter((b) => b.model_id === model.model_id).map((b) => (
-          <span key={b.role} className="rounded bg-orange-50 px-1.5 py-0.5 text-[10px] text-orange-600">
-            {roleLabel(b.role)}
+      </td>
+      <td className="px-4 py-3.5">
+        <div className="flex max-w-52 flex-wrap gap-1.5">
+          {usedBindings.length === 0 ? (
+            <span className="text-xs text-gray-400">未绑定</span>
+          ) : usedBindings.map((binding) => (
+            <span key={binding.role} className="rounded-full bg-orange-50 px-2 py-0.5 text-[10px] text-orange-700">
+              {roleLabel(binding.role)}
+            </span>
+          ))}
+        </div>
+      </td>
+      <td className="px-4 py-3.5 text-xs text-gray-600">
+        {configSummary(model)}
+      </td>
+      <td className="px-4 py-3.5">
+        <div className="flex items-center gap-2">
+          <Switch
+            checked={model.is_enabled}
+            loading={toggle.isPending}
+            onChange={(value) => toggle.mutate(value)}
+            size="sm"
+          />
+          <span className={cn('text-xs', model.is_enabled ? 'text-green-600' : 'text-gray-400')}>
+            {model.is_enabled ? '启用' : '停用'}
           </span>
-        ))}
-      </div>
-      <div className="flex shrink-0 items-center gap-1.5">
+        </div>
+      </td>
+      <td className="px-4 py-3.5">
+        <div className="flex justify-end gap-1.5">
         <button
           onClick={onEdit}
           className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
@@ -348,13 +635,124 @@ function ModelRow({
         >
           <Trash2 size={14} />
         </button>
-        <Switch
-          checked={model.is_enabled}
-          loading={toggle.isPending}
-          onChange={(v) => toggle.mutate(v)}
-          size="sm"
-        />
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function configSummary(model: ProviderModel) {
+  const config = model.config || {};
+  if (model.model_type === 'chat') {
+    const caps = (config.capabilities as string[] | undefined) || [];
+    return (
+      <div className="space-y-1">
+        <div>上下文 {fmtNumber(config.context_window)} · 输出 {fmtNumber(config.max_output_tokens)}</div>
+        <div className="text-gray-400">{caps.length > 0 ? caps.join(', ') : '无特殊能力'}</div>
       </div>
+    );
+  }
+  if (model.model_type === 'embedding') {
+    return (
+      <div className="space-y-1">
+        <div>维度 {fmtNumber(config.dimension)} · 批大小 {fmtNumber(config.batch_size)}</div>
+        <div className="text-gray-400">最大批 {fmtNumber(config.max_batch_size)}</div>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-1">
+      <div>超时 {fmtNumber(config.timeout_seconds)}s · 最大字符 {fmtNumber(config.max_doc_chars)}</div>
+      <div className="text-gray-400">截断 {String(config.truncation_strategy || 'tail')}</div>
+    </div>
+  );
+}
+
+function ProviderAccessPanel({
+  providers,
+  onCreateModel,
+}: {
+  providers: ProviderAdmin[];
+  onCreateModel: (providerName: string) => void;
+}) {
+  return (
+    <section className="rounded-xl border bg-white shadow-sm">
+      <div className="border-b px-5 py-4">
+        <h2 className="text-sm font-semibold text-gray-900">供应商访问配置</h2>
+        <p className="mt-0.5 text-xs text-gray-500">供应商启停、API-Key 权重和冷却状态仍按供应商管理。</p>
+      </div>
+      {providers.length === 0 ? (
+        <div className="py-12 text-center text-sm text-gray-400">
+          <Server className="mx-auto mb-2 text-gray-300" size={34} />
+          还没有供应商
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 p-5 xl:grid-cols-2">
+          {providers.map((provider) => (
+            <ProviderAccessCard key={provider.id} provider={provider} onCreateModel={onCreateModel} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ProviderAccessCard({
+  provider,
+  onCreateModel,
+}: {
+  provider: ProviderAdmin;
+  onCreateModel: (providerName: string) => void;
+}) {
+  const qc = useQueryClient();
+  const toggle = useMutation({
+    mutationFn: (enabled: boolean) => providersApi.toggle(provider.name, enabled),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: PROVIDERS_KEY });
+      toast.success(provider.is_enabled ? '已禁用供应商' : '已启用供应商');
+    },
+    onError: (e) => toast.error((e as ApiError).message || '操作失败'),
+  });
+
+  return (
+    <div className="rounded-lg border bg-gray-50/40">
+      <div className="flex items-start justify-between gap-3 border-b bg-white px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-orange-50 text-orange-600">
+            <Server size={17} />
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="font-medium">{provider.name}</span>
+              {provider.impl && provider.impl !== provider.name && (
+                <span className="text-xs text-gray-400">{provider.impl}</span>
+              )}
+            </div>
+            <div className="mt-0.5 truncate text-xs text-gray-400">
+              {provider.base_url || '未配置 base_url'}
+            </div>
+          </div>
+        </div>
+        <Switch checked={provider.is_enabled} loading={toggle.isPending} onChange={(value) => toggle.mutate(value)} />
+      </div>
+      <div className="grid grid-cols-3 gap-2 px-4 py-3 text-xs">
+        <div className="rounded-md bg-white px-3 py-2">
+          <div className="text-gray-400">模型</div>
+          <div className="mt-1 font-semibold">{provider.model_count}</div>
+        </div>
+        <div className="rounded-md bg-white px-3 py-2">
+          <div className="text-gray-400">API-Key</div>
+          <div className="mt-1 font-semibold">{provider.key_count}</div>
+        </div>
+        <button
+          onClick={() => onCreateModel(provider.name)}
+          className="rounded-md border border-orange-100 bg-orange-50 px-3 py-2 text-left text-orange-700 hover:bg-orange-100"
+        >
+          <Plus size={13} className="mb-1" />
+          新增模型
+        </button>
+      </div>
+      <KeysSection providerName={provider.name} />
     </div>
   );
 }
