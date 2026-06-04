@@ -38,7 +38,7 @@ export default function ChatPage() {
   const [pendingUser, setPendingUser] = useState<ChatMessage[]>([]);
   const [showPanel, setShowPanel] = useState(true);
   const [selectedCitation, setSelectedCitation] = useState<number | null>(null);
-  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>('standard');
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>('medium');
   const [thinkingEnabled, setThinkingEnabled] = useState(true);
   const [prefill, setPrefill] = useState('');
 

@@ -17,7 +17,7 @@ import { confirm } from '@/components/common/ConfirmDialog';
 const PROVIDERS_KEY = ['admin-providers'];
 const inputCls =
   'w-full rounded-md border px-3 py-1.5 text-sm outline-none focus:border-orange-400';
-const THINKING_LEVELS = ['low', 'medium', 'high', 'xhigh', 'standard'] as const;
+const THINKING_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
 type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
 function isThinkingLevel(value: string): value is ThinkingLevel {

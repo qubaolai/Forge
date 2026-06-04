@@ -3,7 +3,7 @@ import { Send, Square, Brain } from 'lucide-react';
 import type { ModelGroup } from '@/types';
 import { cn } from '@/lib/utils';
 
-export type ThinkingLevel = 'standard' | 'low' | 'medium' | 'high' | 'xhigh';
+export type ThinkingLevel = 'low' | 'medium' | 'high' | 'xhigh';
 
 interface Props {
   onSend: (text: string) => void;
@@ -25,7 +25,6 @@ interface Props {
 }
 
 const THINKING_LEVEL_LABELS: Record<ThinkingLevel, string> = {
-  standard: '标准',
   low: '低',
   medium: '中',
   high: '高',
@@ -38,7 +37,7 @@ export function ChatInput({
   disabled,
   streaming,
   placeholder,
-  thinkingLevel = 'standard',
+  thinkingLevel = 'medium',
   onThinkingLevelChange,
   prefill,
   selectedProvider,

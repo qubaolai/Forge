@@ -31,8 +31,7 @@ _GENERIC_REASONING_LEVEL_MAP: dict[str, str] = {
     "低": "low",
     "中": "medium",
     "高": "high",
-    "超高": "xhigh",
-    "标准": "medium",
+    "超高": "xhigh"
 }
 
 _GENERIC_REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})

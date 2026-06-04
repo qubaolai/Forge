@@ -422,7 +422,7 @@ export interface ChatCompletionRequest {
     provider: string;
     model: string;
     thinking?: boolean;
-    thinking_level?: 'standard' | 'low' | 'medium' | 'high' | 'xhigh';
+    thinking_level?: 'low' | 'medium' | 'high' | 'xhigh';
   };
 }
 

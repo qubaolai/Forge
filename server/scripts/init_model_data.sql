@@ -52,7 +52,7 @@ VALUES
   (4001, 3001, 131072, 8192, '["text"]', '["text"]', '["tools"]', NULL,
    '{"temperature":0.7}', NOW(), NOW()),
   (4002, 3002, 1000000, 32768, '["text"]', '["text"]', '["tools","thinking"]',
-   '["standard","low","medium","high","xhigh"]',
+   '["low","medium","high","xhigh"]',
    '{"temperature":0.7}', NOW(), NOW())
 ON DUPLICATE KEY UPDATE
   context_window=VALUES(context_window),

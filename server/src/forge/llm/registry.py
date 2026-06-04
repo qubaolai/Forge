@@ -80,7 +80,7 @@ def _autoload() -> None:
         - 其他异常 → WARNING
     """
     log = logging.getLogger(__name__)
-    for mod_name in ("openai", "anthropic", "google", "mock"):
+    for mod_name in ("openai", "anthropic", "google", "mock", "ollama"):
         try:
             __import__(f"forge.llm.providers.{mod_name}")
         except ImportError as e:

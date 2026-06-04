@@ -77,7 +77,7 @@ class ModelOptionsIn(BaseModel):
     provider: str
     model: str
     thinking: bool | None = None
-    thinking_level: Literal["standard", "low", "medium", "high", "xhigh"] | None = None
+    thinking_level: Literal["low", "medium", "high", "xhigh"] | None = None
 
 
 class ChatCompletionIn(BaseModel):

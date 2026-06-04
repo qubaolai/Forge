@@ -61,7 +61,7 @@ def _autoload() -> None:
 
     第三方 SDK 缺失 (例如 dashscope 没装) 时单独跳过, 不影响其他 embedder.
     """
-    for mod_name in ("mock", "dashscope_embedder"):
+    for mod_name in ("mock", "dashscope_embedder", "ollama_embedder"):
         try:
             __import__(f"forge.retrieval.embedders.{mod_name}")
         except ImportError as e:
