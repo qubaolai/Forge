@@ -11,7 +11,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 
 from forge.api.dependencies import AdminUser, DbSession
-from forge.api.schemas.admin import SystemModelBindingUpdateIn
+from forge.api.schemas.admin import ModelChainUpdateIn, SystemModelBindingUpdateIn
 from forge.core.exceptions import BadRequest
 from forge.core.response import success
 from forge.infrastructure.event_bus import get_event_bus
@@ -51,6 +51,48 @@ async def update_model_binding(
         "type": "system_model_binding_changed",
         "role": role,
         **result,
+        "timestamp": datetime.utcnow().isoformat(),
+    })
+    return success(result)
+
+
+@router.get("/admin/model-chains", tags=["admin:models"])
+async def list_model_chains(
+    admin: AdminUser,
+    db: DbSession,
+    scope: str = Query("tier", description="conversation / tier"),
+):
+    from forge.api.services.model_chain_service import ModelChainService
+
+    try:
+        return success(await ModelChainService(db).list_chains(scope))
+    except ValueError as exc:
+        raise BadRequest(str(exc), code=40073) from exc
+
+
+@router.put("/admin/model-chains/{scope}/{chain_key}", tags=["admin:models"])
+async def update_model_chain(
+    scope: str,
+    chain_key: str,
+    body: ModelChainUpdateIn,
+    admin: AdminUser,
+    db: DbSession,
+):
+    from forge.api.services.model_chain_service import ModelChainService
+
+    entries = [{"provider": e.provider, "model": e.model} for e in body.entries]
+    try:
+        result = await ModelChainService(db).set_chain(
+            scope, chain_key, entries, updated_by=str(admin.id)
+        )
+    except ValueError as exc:
+        raise BadRequest(str(exc), code=40074) from exc
+    await db.commit()
+    await get_event_bus().publish(_EVENT, {
+        "type": "model_chain_changed",
+        "scope": scope,
+        "chain_key": chain_key,
+        "version": result.get("version"),
         "timestamp": datetime.utcnow().isoformat(),
     })
     return success(result)

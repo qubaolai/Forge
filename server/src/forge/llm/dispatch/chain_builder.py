@@ -1,13 +1,11 @@
-"""链构造器: 把 settings + provider/model 决策映射成 LLMDispatcher 实例.
+"""链构造器: 把已解析的有序 (provider, model) 链映射成 LLMDispatcher 实例.
 
-两类构链:
-    build_dispatch_chain(...)            ── 主模型调用链 (chat / tool_use)
-    build_utility_dispatch_chain(...)    ── 工具模型调用链 (摘要/标题/意图等)
-
-回落语义:
-    - 主模型: 不做 provider/model fallback. 链内只含同 provider/model 的多 Key 候选;
-      只有 429 错误才会切到下一个 key
-    - 工具模型: provider/model 级回落 (utility_llm → task_model → default_model)
+构链语义(单层扁平链):
+    - 输入是 ChainResolver 产出的有序 [(provider, model), ...](跨模型 fallback 顺序)。
+    - 每个 (provider, model) 经 _build_entries_from_cache 展开为该 provider 的多 Key 候选,
+      按模型顺序拼接成一条扁平链。
+    - dispatcher 遍历:同模型多 key 仅 429 切换(供应商级 key 轮换),
+      非 429 / 模型整体失败才降级到下一个模型。
 """
 
 from __future__ import annotations
@@ -25,90 +23,42 @@ logger = logging.getLogger(__name__)
 async def build_dispatch_chain(
     settings,
     *,
-    provider: str | None = None,
-    model: str | None = None,
+    chain: list[tuple[str, str]],
     model_cache=None,
 ):
-    """根据 ModelConfigCache 构建主模型调用链.
+    """根据已解析的有序 (provider, model) 链构建 LLMDispatcher.
 
-    主模型不做 provider/model fallback; 链内只包含同一 provider/model 的 key 级
-    候选, 且只有 429 限流错误才会切换到下一个 key.
+    Args:
+        chain: ChainResolver 产出的有序模型链 [(provider, model), ...]。
+
+    每个模型展开为其 provider 的多 Key 候选并按模型顺序拼接;单个模型构建失败时跳过,
+    全部失败才报错。
     """
     from .dispatcher import LLMDispatcher
 
-    entries = await _build_entries_from_cache(
-        provider=provider,
-        model=model,
-        model_cache=model_cache,
-    )
-    primary_client, primary_spec = entries[0]
-    fallbacks = entries[1:]
-
-    logger.info(
-        "LLM 主模型选型完成: provider=%s impl=%s model=%s key=%s fallbacks=%d",
-        primary_spec.provider_name or primary_spec.impl,
-        primary_spec.impl,
-        primary_spec.model,
-        primary_spec.api_key[:6] + "***" if primary_spec.api_key else "-",
-        len(fallbacks),
-    )
-    return LLMDispatcher(
-        (primary_client, primary_spec),
-        fallbacks,
-        max_retries=settings.llm.max_retries,
-        retry_backoff_seconds=settings.llm.retry_backoff_seconds,
-        timeout_config=getattr(settings.llm, "timeout", None),
-    )
-
-
-async def build_utility_dispatch_chain(
-    settings,
-    *,
-    utility_provider: str | None = None,
-    utility_model: str | None = None,
-    provider: str | None = None,
-    model: str | None = None,
-    model_cache=None,
-):
-    """构建工具模型调用链.
-
-    回落顺序:
-        utility_llm 配置 → 任务传入 provider/model → 默认模型
-    """
-    from .dispatcher import LLMDispatcher
-
-    candidates = _utility_candidates(settings, utility_provider, utility_model, provider, model)
-    entries = []
+    entries: list[tuple[LLM, LLMCallSpec]] = []
     errors: list[str] = []
-    for candidate_provider, candidate_model, reason in candidates:
+    for provider, model in chain:
         try:
-            candidate_entries = await _build_entries_from_cache(
-                provider=candidate_provider,
-                model=candidate_model,
-                model_cache=model_cache,
-            )
-            entries.extend(candidate_entries)
+            entries.extend(await _build_entries_from_cache(
+                provider=provider, model=model, model_cache=model_cache,
+            ))
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"{reason}={candidate_provider}:{candidate_model} 失败: {exc}")
-            logger.warning(
-                "工具模型回落候选不可用: reason=%s provider=%s model=%s error=%s",
-                reason,
-                candidate_provider,
-                candidate_model,
-                exc,
-            )
+            errors.append(f"{provider}:{model} 失败: {exc}")
+            logger.warning("模型链候选不可用: provider=%s model=%s error=%s", provider, model, exc)
 
     if not entries:
-        logger.error("工具模型构建失败: %s", "；".join(errors) or "没有可用候选")
-        raise ValueError("工具模型构建失败, 没有可用 provider/model")
+        logger.error("LLM 调用链构建失败: %s", "；".join(errors) or "没有可用候选")
+        raise ValueError("LLM 调用链构建失败, 没有可用 provider/model")
 
     primary_client, primary_spec = entries[0]
+    model_count = len({(s.provider_name or s.impl, s.model) for _, s in entries})
     logger.info(
-        "工具模型选型完成: provider=%s impl=%s model=%s fallback_entries=%d",
+        "LLM 选型完成: 主=%s:%s 模型数=%d 总候选(含key)=%d",
         primary_spec.provider_name or primary_spec.impl,
-        primary_spec.impl,
         primary_spec.model,
-        max(0, len(entries) - 1),
+        model_count,
+        len(entries),
     )
     return LLMDispatcher(
         (primary_client, primary_spec),
@@ -217,37 +167,6 @@ async def _build_entries_from_cache(
     return entries
 
 
-def _utility_candidates(
-    settings,
-    utility_provider: str | None,
-    utility_model: str | None,
-    provider: str | None,
-    model: str | None,
-) -> list[tuple[str, str, str]]:
-    """按约定顺序生成工具模型候选, 并去重."""
-    raw = [
-        (
-            utility_provider or settings.utility_llm.provider or "",
-            utility_model or settings.utility_llm.model or "",
-            "utility_llm",
-        ),
-        (provider or "", model or "", "task_model"),
-        (settings.llm.provider or "", settings.llm.default_model or "", "default_model"),
-    ]
-    result: list[tuple[str, str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for candidate_provider, candidate_model, reason in raw:
-        if not candidate_provider or not candidate_model:
-            continue
-        key = (candidate_provider, candidate_model)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append((candidate_provider, candidate_model, reason))
-    return result
-
-
 __all__ = [
     "build_dispatch_chain",
-    "build_utility_dispatch_chain",
 ]

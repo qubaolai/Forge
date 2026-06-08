@@ -21,10 +21,10 @@ from .providers.base import ChatChunk
 class LLMRequest:
     """LLMGateway 调用入口.
 
-    路由优先级 (高 → 低):
-        preferred_provider/model (显式 pin)
-        > model_profile + task_type (Router 决策)
-        > 配置默认 (CompositeRouter 兜底)
+    选链优先级 (高 → 低), 见 dispatch.chain_resolver.resolve_chain:
+        preferred_provider/model (user_pin, web) → 对话链(同 provider 后备)
+        > model_profile (档位, CLI/utility) → 档位链(可跨 provider)
+        > settings.llm 默认 (系统保底)
     """
 
     messages: list[Any]
@@ -32,13 +32,13 @@ class LLMRequest:
     tool_choice: str = "auto"
 
     # ------------------------------------------------------------------
-    # 路由提示
+    # 选链提示
     # ------------------------------------------------------------------
     model_profile: str | None = None
-    """fast | smart | strong, 任务级模型档位"""
+    """fast | smart | strong, 任务级模型档位 → 档位链"""
 
     preferred_provider: str | None = None
-    """显式 pin provider, Router 短路"""
+    """显式 pin provider (web), 命中走对话链"""
 
     preferred_model: str | None = None
     """显式 pin model"""

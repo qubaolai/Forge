@@ -39,7 +39,6 @@ from forge.llm.pipeline.base import PostMiddleware, PreMiddleware
 from forge.llm.pipeline.dedup import IdempotencyStore
 from forge.llm.resilience.circuit_breaker import CircuitBreakerStrategy
 from forge.llm.resilience.retry import RetryPolicy
-from forge.llm.router.base import Router
 from forge.llm.token_counter import TokenCounter
 from forge.memory.base import MemoryStore
 from forge.memory.policies.conflict import ConflictResolver
@@ -79,7 +78,6 @@ ABSTRACT_BASES = (
     PreMiddleware,
     QueryRewriter,
     RetryPolicy,
-    Router,
     SessionStore,
     Span,
     SummaryStore,

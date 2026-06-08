@@ -2,7 +2,7 @@ import 'katex/dist/katex.min.css';
 import '@/styles/code-theme.css';
 
 import { Check, Copy } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { isValidElement, type ReactNode, useMemo, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
@@ -77,6 +77,21 @@ const LANG_LABELS: Record<string, string> = {
   diff: 'Diff',
 };
 
+/**
+ * 递归抽取 React 子树的纯文本。
+ * rehypeHighlight 启用后 <code> 的 children 是一组高亮 <span> 元素而非字符串,
+ * 直接 String(...) 会得到 "[object Object]"。这里深度遍历拼接出真实文本。
+ */
+function extractText(node: ReactNode): string {
+  if (node == null || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(extractText).join('');
+  if (isValidElement(node)) {
+    return extractText((node.props as { children?: ReactNode }).children);
+  }
+  return '';
+}
+
 function CodeBlock({ children }: { children: React.ReactNode }) {
   const [copied, setCopied] = useState(false);
 
@@ -88,7 +103,7 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
   const langMatch = /language-([\w+-]+)/.exec(className);
   const langKey = (langMatch?.[1] ?? '').toLowerCase();
   const langLabel = LANG_LABELS[langKey] || langKey || 'plaintext';
-  const codeText = String(codeNode?.props?.children ?? '').replace(/\n$/, '');
+  const codeText = extractText(codeNode?.props?.children).replace(/\n$/, '');
 
   const handleCopy = async () => {
     try {

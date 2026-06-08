@@ -358,11 +358,10 @@ class LLMConfig(BaseModel):
 # UtilityLLMConfig — 轻量任务公共模型
 # ======================================================================
 class UtilityLLMConfig(BaseModel):
-    """工具模型配置 — 供标题生成、摘要、意图识别等轻量任务共用.
+    """工具模型配置(已弃用)— 历史上供标题/摘要等轻量任务指定模型.
 
-    运行时由 forge.llm.dispatch.chain_builder.build_utility_dispatch_chain 解析:
-        任务专属 utility provider/model → 任务 provider/model → 主模型.
-    业务层通过 LLMRequest(task_type="utility", model_profile="fast") 触发该 3 级链.
+    现已并入档位体系:业务层通过 LLMRequest(model_profile="fast") 走 fast 档位链
+    (见 forge.llm.dispatch.chain_resolver)。本配置保留仅为向后兼容,运行时不再消费。
     """
     model_config = {"extra": "forbid"}
 

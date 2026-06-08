@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import {
   Plus, BookOpen, Bot, Settings, LogOut,
-  Users, Cpu, FileText,
+  Users, Cpu, FileText, Server,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
 import { sessionsApi, authApi } from '@/api';
@@ -64,6 +64,7 @@ export default function AppLayout() {
           <div className="flex-1 overflow-y-auto px-2 py-1 min-h-0 space-y-0.5">
             <ModuleNavItem to="/admin/users" icon={<Users size={14} />} label="用户" />
             <ModuleNavItem to="/admin/models" icon={<Cpu size={14} />} label="模型配置" />
+            <ModuleNavItem to="/admin/providers" icon={<Server size={14} />} label="供应商与模型" />
             <ModuleNavItem to="/admin/audit" icon={<FileText size={14} />} label="审计日志" />
           </div>
         ) : (

@@ -14,6 +14,7 @@ from forge.infrastructure.database.orm.message_digest_orm import MessageDigestOr
 from forge.infrastructure.database.orm.message_embedding_orm import (
     MessageEmbeddingOrm,
 )
+from forge.infrastructure.database.orm.model_chain_orm import ModelChainOrm
 from forge.infrastructure.database.orm.model_config_orm import (
     ChatModelConfigOrm,
     EmbeddingModelConfigOrm,
@@ -36,6 +37,7 @@ __all__ = [
     "KbDocumentOrm",
     "MessageDigestOrm",
     "MessageEmbeddingOrm",
+    "ModelChainOrm",
     "ModelOrm",
     "ChatModelConfigOrm",
     "EmbeddingModelConfigOrm",

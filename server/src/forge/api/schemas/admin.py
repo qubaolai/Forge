@@ -148,6 +148,16 @@ class SystemModelBindingUpdateIn(BaseModel):
     model_id: str | None = None
 
 
+# ---- 模型调用链(对话链 / 档位链)----
+class ModelChainEntryIn(BaseModel):
+    provider: str
+    model: str
+
+
+class ModelChainUpdateIn(BaseModel):
+    entries: list[ModelChainEntryIn] = Field(default_factory=list)
+
+
 # ---- 事件 ----
 class ConfigChangeEvent(BaseModel):
     type: str  # provider_toggled / model_toggled / system_model_binding_changed

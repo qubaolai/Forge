@@ -30,6 +30,7 @@ _PFX_KEYS = "forge:model:keys:{}"  # + provider_name
 _PFX_LIST = "forge:model:list:{}"  # + provider_name
 _PFX_BY_TYPE = "forge:model:by_type:{}"  # + model_type
 _PFX_ENABLED = "forge:model:enabled:{}"  # + provider_name
+_PFX_CHAINS = "forge:model:chains"  # hash: "scope:chain_key" → entries json
 _KEY_READY = "forge:model:ready:v1"
 
 
@@ -165,6 +166,18 @@ class ModelConfigCache:
         for model_type, entries in all_types.items():
             await self._redis.hset(_PFX_BY_TYPE.format(model_type), entries, ttl=_NO_TTL)
 
+        # 模型调用链(对话链 / 档位链)
+        from forge.infrastructure.database.repositories.model_chain_repo import (
+            ModelChainRepository,
+        )
+
+        chains_data: dict[str, str] = {}
+        for chain in await ModelChainRepository(db).list_all():
+            field = f"{chain.scope}:{chain.chain_key}"
+            chains_data[field] = json.dumps(chain.entries or [], ensure_ascii=False)
+        if chains_data:
+            await self._redis.hset(_PFX_CHAINS, chains_data, ttl=_NO_TTL)
+
         ready_payload = {
             "providers": len(providers),
             "models": model_count,
@@ -253,3 +266,19 @@ class ModelConfigCache:
             return None
         data_str = raw.get(model_name)
         return json.loads(data_str) if data_str else None
+
+    async def get_chain(self, scope: str, chain_key: str) -> list[dict]:
+        """读取模型调用链(对话链 scope=conversation / 档位链 scope=tier)。
+
+        返回有序 [{"provider":..,"model":..}],未配置时返回空列表。
+        """
+        raw = await self._redis.hgetall(_PFX_CHAINS)
+        if not raw:
+            return []
+        data_str = raw.get(f"{scope}:{chain_key}")
+        if not data_str:
+            return []
+        try:
+            return json.loads(data_str) or []
+        except (TypeError, ValueError):
+            return []

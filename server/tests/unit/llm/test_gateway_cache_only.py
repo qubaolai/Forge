@@ -5,7 +5,6 @@ import asyncio
 import pytest
 
 from forge.llm.dispatch.chain_builder import build_dispatch_chain as build_chain_from_settings
-from forge.llm.gateway import LLMGateway
 
 
 class _FakeCache:
@@ -77,12 +76,12 @@ class _Settings:
 def test_build_chain_requires_ready_cache(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
 
-    with pytest.raises(ValueError, match="模型配置缓存未就绪"):
+    # 单模型链且缓存未就绪 → 该条目展开失败被收敛为构链失败
+    with pytest.raises(ValueError, match="LLM 调用链构建失败"):
         asyncio.run(
             build_chain_from_settings(
                 _Settings(),
-                provider="openai",
-                model="gpt-4o",
+                chain=[("openai", "gpt-4o")],
                 model_cache=_FakeCache(ready=False),
             )
         )
@@ -95,8 +94,7 @@ def test_build_chain_uses_cache_key_and_pool(monkeypatch) -> None:
     chain = asyncio.run(
         build_chain_from_settings(
             _Settings(),
-            provider="openai",
-            model="gpt-4o",
+            chain=[("openai", "gpt-4o")],
             model_cache=_FakeCache(keys=[{"api_key": "sk-db", "weight": 2}]),
         )
     )
@@ -112,34 +110,12 @@ def test_build_chain_uses_cache_key_and_pool(monkeypatch) -> None:
 
 
 def test_build_chain_rejects_non_chat_model() -> None:
-    with pytest.raises(ValueError, match="不是 Chat 模型"):
+    # 非 chat 模型由 _build_entries_from_cache 拒绝, 被构链层收敛为构链失败
+    with pytest.raises(ValueError, match="LLM 调用链构建失败"):
         asyncio.run(
             build_chain_from_settings(
                 _Settings(),
-                provider="openai",
-                model="gpt-4o",
+                chain=[("openai", "gpt-4o")],
                 model_cache=_FakeCache(model_type="embedding"),
             )
         )
-
-
-def test_gateway_router_candidates_only_include_chat_models() -> None:
-    class Cache:
-        async def is_ready(self) -> bool:
-            return True
-
-        async def get_providers_enabled(self) -> list[dict]:
-            return [{"name": "mock"}]
-
-        async def get_models(self, provider: str, enabled_only: bool = True) -> list[dict]:
-            _ = provider, enabled_only
-            return [
-                {"name": "chat-a", "model_type": "chat", "config": {}},
-                {"name": "embed-a", "model_type": "embedding", "config": {}},
-                {"name": "rerank-a", "model_type": "reranker", "config": {}},
-            ]
-
-    gateway = LLMGateway(_Settings(), model_cache=Cache())
-    candidates = asyncio.run(gateway._build_available_candidates())
-
-    assert [(provider, model.name) for provider, model in candidates] == [("mock", "chat-a")]

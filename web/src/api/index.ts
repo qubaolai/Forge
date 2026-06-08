@@ -2,7 +2,7 @@ import { apiClient } from './client';
 import {
   Agent, AuthTokens, ChatMessage, ChatSession, KnowledgeBase,
   KnowledgeDocument, DocumentChunk, LoginPayload, LoginResponse,
-  GroupedModelsResponse, ModelType, ModelUpsert,
+  GroupedModelsResponse, ModelChain, ModelChainEntry, ModelChainScope, ModelType, ModelUpsert,
   PaginatedData, PaginationParams, ProviderAdmin, ProviderKey, ProviderModel,
   RagIndexJob, RagIndexStatus, RetrievalResult, RetrieveRequest,
   SystemModelBinding, ToolDefinition, User, AuditLog,
@@ -134,6 +134,14 @@ export const modelBindingsApi = {
       `/admin/model-bindings/${role}`,
       { model_id: modelId },
     ),
+};
+
+// ---- 管理端:模型调用链(对话链 / 档位链)----
+export const modelChainsApi = {
+  list: (scope: ModelChainScope) =>
+    apiClient.get<ModelChain[]>('/admin/model-chains', { params: { scope } }),
+  update: (scope: ModelChainScope, chainKey: string, entries: ModelChainEntry[]) =>
+    apiClient.put<ModelChain>(`/admin/model-chains/${scope}/${chainKey}`, { entries }),
 };
 
 export const ragIndexAdminApi = {

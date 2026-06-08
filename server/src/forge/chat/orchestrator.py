@@ -423,15 +423,16 @@ class TurnOrchestrator:
         settings = get_settings()
         provider = model_options.get("provider") if model_options else None
         model = model_options.get("model") if model_options else None
+        profile = get_agent_profile(agent_mode)
         binding = GatewayBinding(
             gateway=get_llm_gateway(settings),
             user_id=user_id,
             preferred_provider=provider,
             preferred_model=model,
+            model_profile=profile.model_profile,  # web 无 pin 时退到档位链
             task_type="chat",
         )
         llm = GatewayLLMAdapter(binding)
-        profile = get_agent_profile(agent_mode)
         return ReActRunner.from_profile(
             llm, profile, system_prompt=system_prompt,
         )

@@ -198,7 +198,7 @@ class LLMDispatcher:
                 client.provider_name,
             )
             return False
-        breaker_key = (spec.impl, spec.api_key, spec.model)
+        breaker_key = (spec.impl, spec.api_key)
         if self._breakers.is_open(breaker_key):
             logger.warning(
                 "熔断器开启, 跳过 %s 位置=%d provider=%s model=%s",
@@ -232,7 +232,7 @@ class LLMDispatcher:
         """记录成功: 成本 + 熔断 + 审计."""
         self._last_fallback_position = idx
         self._record_cost_for(client, spec, usage)
-        self._breakers.record_success((spec.impl, spec.api_key, spec.model))
+        self._breakers.record_success((spec.impl, spec.api_key))
         self._emit_audit(
             client,
             spec,
@@ -263,7 +263,7 @@ class LLMDispatcher:
         """记录失败: 成本错误 + 熔断 + 审计 + Key 冷却. 返回 True 表示 429 (key 级切换), False 表示需要跳到下个 provider."""
         was_rate_limited = self._mark_key_cooldown_if_rate_limited(spec, exc)
         self._record_cost_for(client, spec, None, error=True)
-        self._breakers.record_failure((spec.impl, spec.api_key, spec.model))
+        self._breakers.record_failure((spec.impl, spec.api_key))
         self._emit_audit(
             client,
             spec,
@@ -575,7 +575,7 @@ class LLMDispatcher:
             except _EmptyStream:
                 last_exc = RuntimeError(f"{client.provider_name} {phase} 输出为空")
                 self._record_cost_for(client, spec, None, error=True)
-                self._breakers.record_failure((spec.impl, spec.api_key, spec.model))
+                self._breakers.record_failure((spec.impl, spec.api_key))
                 self._emit_audit(client, spec, idx, started_at=started_at, error="empty_stream")
                 blocked_key_group = _entry_group(spec)
                 logger.warning("LLM %s 位置=%d 输出为空, 切换备用", phase, idx)
@@ -583,7 +583,7 @@ class LLMDispatcher:
                 # 首 Token 超时: 不重试, 直接 fallback 到下一个 entry
                 last_exc = e
                 self._record_cost_for(client, spec, None, error=True)
-                self._breakers.record_failure((spec.impl, spec.api_key, spec.model))
+                self._breakers.record_failure((spec.impl, spec.api_key))
                 self._emit_audit(client, spec, idx, started_at=started_at, error="first_token_timeout")
                 blocked_key_group = _entry_group(spec)
                 logger.warning(

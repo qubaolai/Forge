@@ -6,12 +6,13 @@ LLMDispatcher 是 LLMFallbackChain 的重命名后继: 职责更聚焦,
 
 from __future__ import annotations
 
-from .chain_builder import build_dispatch_chain, build_utility_dispatch_chain
+from .chain_builder import build_dispatch_chain
+from .chain_resolver import resolve_chain
 from .dispatcher import ChainEntry, LLMDispatcher
 
 __all__ = [
     "ChainEntry",
     "LLMDispatcher",
     "build_dispatch_chain",
-    "build_utility_dispatch_chain",
+    "resolve_chain",
 ]

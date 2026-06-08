@@ -15,6 +15,7 @@ import AgentEditorPage from '@/pages/agents/AgentEditorPage';
 import SettingsPage from '@/pages/settings/SettingsPage';
 import AdminUsersPage from '@/pages/admin/AdminUsersPage';
 import AdminModelsPage from '@/pages/admin/AdminModelsPage';
+import AdminProvidersPage from '@/pages/admin/AdminProvidersPage';
 import AdminAuditPage from '@/pages/admin/AdminAuditPage';
 import AppLayout from '@/components/common/AppLayout';
 import { ToastContainer } from '@/components/common/Toast';
@@ -167,6 +168,7 @@ export default function App() {
               <Route path="admin" element={<RequireRole roles={['owner', 'admin']}><Outlet /></RequireRole>}>
                 <Route path="users" element={<AdminUsersPage />} />
                 <Route path="models" element={<AdminModelsPage />} />
+                <Route path="providers" element={<AdminProvidersPage />} />
                 <Route path="audit" element={<AdminAuditPage />} />
               </Route>
             </Route>

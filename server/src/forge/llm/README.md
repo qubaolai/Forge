@@ -1,219 +1,162 @@
-# `agent_platform.llm` — LLM 接入与容错层
+# `forge.llm` — LLM 网关(接入 / 选链 / 容错)
 
-本包负责所有跟具体大模型 SDK 的对接,对上层(`agents`, `api`)只暴露一个统一的 LLM 接口。
+本包负责所有与具体大模型 SDK 的对接,对上层(`agents` / `chat` / `memory` / `api`)只暴露**一个统一网关 `LLMGateway`**。业务层不感知 provider / 路由 / 熔断 / fallback。
+
+> 配套:`llm/gateway.py`(入口)、`llm/dispatch/`(选链 + 执行)、`llm/pipeline/`(横切中间件)。
 
 ## 模块速览
 
 ```
 llm/
-├── providers/              ← 具体厂商实现
-│   ├── base.py             LLM 抽象基类 (chat / chat_stream / chat_with_tools[_stream])
-│   ├── openai.py           OpenAICompatibleLLM + OpenAILLM / DeepSeekLLM / DashScopeCompatLLM
-│   ├── anthropic.py        AnthropicLLM
-│   ├── google.py           GoogleLLM (Gemini)
-│   └── mock.py             单元测试用 MockLLM / MockStreamLLM
-├── gateway.py              LLMGateway — 业务层唯一入口 (Pre/Post pipeline + dispatcher)
-├── dispatch/dispatcher.py  LLMDispatcher (旧名 LLMFallbackChain) — router/chain/熔断/重试/fallback
-├── cost_tracker.py         按 provider:model 维度的 token 计数 + 预算控制
-├── resilience/             retry (指数退避, 区分可重试/不可重试) + circuit_breaker + bulkhead
-├── token_counter.py        prompt token 估算
-├── streaming.py            (备用) 流式辅助
-├── caching/                (扩展点) 响应缓存
-└── router/                 (扩展点) 多模型路由
+├── gateway.py              LLMGateway — 业务层唯一入口 (Pre → dispatch → Post)
+├── request.py             LLMRequest / LLMResponse / CostEstimate 值对象
+├── binding.py             GatewayBinding + GatewayLLMAdapter (代理风格调用方的桥)
+├── contracts.py           ToolCallingLLM ABC (ReActAgent 只依赖这个)
+├── pipeline/              Pre/Post 中间件 (validator/rate_limit/budget/dedup/cache + cache_write/dedup_complete/audit)
+├── dispatch/
+│   ├── chain_resolver.py  resolve_chain — 选链层 (user_pin > 档位链 > 系统保底)
+│   ├── chain_builder.py   build_dispatch_chain — 把有序 (provider,model) 链展开成 LLMDispatcher
+│   ├── dispatcher.py      LLMDispatcher — 单层扁平链遍历 + 熔断 + 重试 + fallback
+│   └── auditor.py         per-entry 审计埋点
+├── model_config_cache.py  ModelConfigCache — Redis 缓存 provider/key/model + 调用链 (get_chain)
+├── client_pool.py         LLMClientPool — 供应商级 key 池 (WRR + 429 冷却), 与模型无关
+├── registry.py            @register_llm 注册表 + build_llm_client + _autoload()
+├── resilience/            retry (区分可重试/不可重试) + circuit_breaker + bulkhead
+├── cost_tracker.py        按 provider:model 维度的 token 计数 + 预算控制
+├── token_counter.py       prompt token 估算
+├── caching/               精确缓存 / 语义缓存 / 原生 prompt 缓存后端
+└── providers/             具体厂商实现 (openai / anthropic / google / ollama / mock)
 ```
 
-## 总体设计
+> ⚠️ 历史变更:旧 `router/`(CostAware/LatencyAware/AB 路由)已删除——成本/延迟路由属过度工程化,模型档位已表达该意图;选模型统一收敛到 `chain_resolver`。旧 `LLMFallbackChain` 已更名 `LLMDispatcher`。
+
+## 总体架构
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│ 调用方 (例: ReActAgent)                                             │
-│ 只依赖 LLM 接口的 4 个方法:                                          │
-│   chat / chat_stream / chat_with_tools / chat_with_tools_stream    │
-└──────────────────────────────┬─────────────────────────────────────┘
-                               │ 看到的就是一个 LLM 对象
-                               ▼
-┌────────────────────────────────────────────────────────────────────┐
-│ LLMFallbackChain  (fallback.py)                                    │
-│  - 包装 [primary, *fallbacks] 一组 LLM                              │
-│  - 加 retry (call_with_retry, 指数退避)                              │
-│  - 加 cost_tracker 记账 (每次成功/失败都打点)                        │
-│  - 流式: 拿到首包前可切下一个 provider, 首包后锁定 (语义一致性)        │
-│  - 自身也是 LLM 接口 → 对上层透明                                    │
-└──────────────────────────────┬─────────────────────────────────────┘
-                               │ 链中每个元素都是一个具体 LLM
-                               ▼
-┌────────────────────────────────────────────────────────────────────┐
-│ LLMGateway  (gateway.py)                                           │
-│  - @register_llm("xxx") 类装饰器, 类被 import 时自注册到 _REGISTRY  │
-│  - LLMFactory.create(impl, config) → 按注册名实例化具体 LLM         │
-│  - build_chain_from_settings(settings) →                           │
-│       LLMConfig.resolve() 选 provider/model →                       │
-│       create primary + create fallbacks → LLMFallbackChain         │
-└──────────────────────────────┬─────────────────────────────────────┘
-                               │ 装好的 LLM 实例
-                               ▼
-┌────────────────────────────────────────────────────────────────────┐
-│ 具体 Provider (providers/)                                          │
-│  - 每个厂商一个类, 继承 LLM (或 OpenAICompatibleLLM)                 │
-│  - __init__(config: dict) 解析自己关心的字段                         │
-│  - 真正的 SDK 调用 + 响应解析                                        │
-└────────────────────────────────────────────────────────────────────┘
+LLMRequest
+  → Pre  pipeline   (validator → rate_limit → budget → dedup → cache)   ← 可短路(缓存/幂等命中)
+  → dispatch        (resolve_chain → build_dispatch_chain → LLMDispatcher 遍历)
+  → Provider        (openai / anthropic / google / ollama …)
+  → Post pipeline   (cache_write → dedup_complete → audit)
+  → LLMResponse
 ```
 
-### 为什么 Gateway 和 FallbackChain 拆两层
+业务层两种调用姿势,**最终都进同一套 Pre/Post pipeline**:
 
-- **Gateway** 解决「**哪些 provider 存在,怎么造**」——纯注册 + 工厂,只跟启动时的 yaml 配置打交道。
-- **FallbackChain** 解决「**调用时挂了怎么办**」——纯运行时容错策略,与具体是什么 provider 无关。
+- **一次性 utility**(摘要/标题/digest):直接 `get_llm_gateway().complete(LLMRequest(model_profile="fast", ...))`。
+- **Agent 风格**(ReActAgent / 子 agent):`GatewayBinding` → `GatewayLLMAdapter`(实现 `ToolCallingLLM`),Agent 只见 `chat / chat_stream / chat_with_tools[_stream]` 四个方法,不感知 gateway。
 
-合并成一层会让两个完全不同的演化方向耦合在一起:换 retry 策略 → 动注册表;接新 provider → 懂 retry 逻辑。拆开后,新增 provider 只需要写一个 `@register_llm("xxx") class XxxLLM(LLM)`,什么都不用动。
+## 模型选择(选链):`user_pin > 档位链 > 系统保底`
 
-### Provider 类层级
+选链逻辑统一在 `dispatch/chain_resolver.py:resolve_chain`,产出**有序 `[(provider, model), ...]`**:
+
+| 优先级 | 触发 | 用哪条链 | 跨厂商 |
+|---|---|---|---|
+| 1. user_pin | `preferred_provider + preferred_model` 双值(web 对话) | **对话链**[provider]:`[pin] + 同 provider 其余项` | ❌ 绝不跨厂商(保证人类可见输出质量一致) |
+| 2. 档位 | `model_profile`(fast/smart/strong;CLI / utility) | **档位链**[tier],保配置顺序 | ✅ 允许(重点是处理任务) |
+| 3. 保底 | 都没有 / 上面解析为空 | `settings.llm` 默认模型 | — |
+
+产出后统一过滤:**能力硬约束**(`requires_tools/vision/thinking` + `context_window`)+ **运行时启用态**。`user_pin` 命中后仍过能力校验——pin 了不支持 tools 的模型却发 tool_use 会 **fail-fast** 报清晰错。
+
+> `task_type="utility"` 不再有独立选模型路径:调用方传 `model_profile="fast"` 即走 fast 档位链。
+
+### 两块链区域 + DB 热配
+
+链是 **DB 热配**(可前端拖拽、增删模型即时生效、无需重启),不写死在 yaml:
+
+- **对话链**(`scope="conversation"`,key = provider 名):每个供应商配自己启用模型的有序链;web user_pin 的同供应商后备顺序。
+- **档位链**(`scope="tier"`,key = fast/smart/strong):可跨供应商;CLI / utility 用。
+
+落库:表 `model_chains`(`scope` + `chain_key` + `entries` JSON + `version`),ORM `infrastructure/database/orm/model_chain_orm.py`。
+读取:`ModelConfigCache.reload_all` 一并加载进 Redis,`get_chain(scope, key)` 供 resolver 读;管理端改链(`PUT /admin/model-chains/{scope}/{key}`,保存时校验每条 (provider, model) 存在 + 启用 + 是 chat)→ 触发 cache reload,即时生效。
+
+## Fallback 与弹性执行(单层扁平链)
+
+关键拆分:**「换 key」是供应商级弹性(池的职责),「换模型」才是 fallback**。两者不再混在一条「key×模型」展开的扁平链里。
+
+- **换 key = 供应商级**:`client_pool.py` 的 key 池按 `impl` 管理(WRR 平滑加权轮询 + 429 冷却),与模型无关。
+- **熔断器** key = `(impl, api_key)`(供应商级,model 无关)。
+- **dispatcher** 遍历有序 `(provider, model)` 链;同一模型的多 key 仅在 429 时切换,模型整体失败才降级到下一个模型。
+
+错误分类(决定「换 key 留在原模型」还是「降级到下一个模型」):
+
+| 事件 | 动作 |
+|---|---|
+| 429 限流 | 池冷却该 key(供应商级)+ 换同 provider 下一把 key,不换模型 |
+| 瞬时网络错误 | 同 key 重试(`call_with_retry`,指数退避) |
+| per-key 熔断 OPEN | 跳过该 key |
+| key 全部冷却 / 硬错误(模型不存在/4xx/内容违规)/ 空输出 / 首 token 超时 / bulkhead 拒绝 | 降级到链中下一个 (provider, model) |
+
+**流式语义**:首包前可切下一个 provider;一旦 yield 首包就锁定,后续报错直接抛——避免给前端拼接出不一致的输出。`LLMResponse.fallback_position` = 降到链中第几个模型(0 = 主模型)。
+
+## Pre / Post pipeline
+
+新增横切关注点只需写一个 middleware 注册进 `PipelineRunner`,不动 gateway / dispatcher(OCP)。
+
+| 阶段 | 中间件 | 作用 |
+|---|---|---|
+| Pre | validator | 入参校验,非法 reject |
+| Pre | rate_limit | 入站限流 |
+| Pre | budget | 预算检查(全局/默认用户/指定用户三级),超额抛 `LLMBudgetExceeded` |
+| Pre | dedup | 幂等(`idempotency_key`),命中**短路** |
+| Pre | cache | 精确缓存,命中**短路**(需 `temperature=0` + pin 模型 + 无 tools) |
+| Post | cache_write | 写精确缓存(空 content 不写) |
+| Post | dedup_complete | 标记幂等完成 |
+| Post | audit | 请求级摘要日志 + 危险调用审计 |
+
+## Provider 类层级
 
 ```
-LLM (ABC, base.py)
-├── OpenAICompatibleLLM         共享 OpenAI Chat Completions API 的实现
-│   ├── OpenAILLM               api.openai.com
-│   ├── DeepSeekLLM             api.deepseek.com (覆盖 _build_kwargs / _messages_payload
-│   │                           / chat_with_tools_stream 以支持 thinking 模式)
-│   └── DashScopeCompatLLM      dashscope.aliyuncs.com/compatible-mode/v1
-├── AnthropicLLM                api.anthropic.com (走 messages.create)
-├── GoogleLLM                   Gemini (走 generative-ai-python)
-├── MockLLM                     测试用 echo
-└── MockStreamLLM               测试用 真流式 echo
+LLM (ABC, providers/base.py)
+├── OpenAICompatibleLLM        共享 OpenAI Chat Completions API
+│   ├── OpenAILLM              api.openai.com
+│   ├── DeepSeekLLM            api.deepseek.com(覆盖 _build_kwargs / _messages_payload /
+│   │                          chat_with_tools_stream 以支持 thinking 模式)
+│   ├── DashScopeCompatLLM     dashscope.aliyuncs.com/compatible-mode/v1(阿里通义)
+│   └── XiaoMiMIMOLLM          api.xiaomimimo.com/v1(小米 MIMO,带 thinking)
+├── AnthropicLLM               api.anthropic.com(messages.create)
+├── GoogleLLM                  Gemini
+├── (ollama.py)                Ollama 本地模型
+├── MockLLM                    测试用 echo
+└── MockStreamLLM              测试用 真流式 echo
 ```
 
-子类继承策略遵循 **「不破坏父类行为,只覆盖差异方法」**。例如 DeepSeekLLM 跟 OpenAI 的差异只在 thinking 模式,就只 override 三个方法,其他 chat / chat_stream / chat_with_tools 走父类。
+子类策略:**不破坏父类行为,只覆盖差异方法**。如 DeepSeek 与 OpenAI 只差 thinking 模式,就只 override 三个方法。
 
-## 配置入口
+### 推理类参数(thinking / reasoning_effort)
 
-```yaml
-# config/sys_config.yaml
-llm:
-  provider: dashscope               # 默认 provider
-  default_model: qwen-plus          # 默认 model
-  max_retries: 3
-  retry_backoff_seconds: 1.0
+两个开关,各 provider 自行翻译,不支持的字段静默忽略;只从 `extra_options` 读取(前端 per-request 传入,优先级 > yaml):
 
-  providers:
-    deepseek:
-      models:
-        - name: deepseek-v4-pro
-          display_name: DeepSeek V4 PRO
-          context_window: 1000000
-          thinking: true              # 推理类开关 1: 启用思考模式
-          reasoning_effort: medium    # 推理类开关 2: 思考深度
-      default_params:
-        temperature: 0.7
-        timeout: 30
-```
-
-### 推理类参数 (thinking / reasoning_effort)
-
-只两个开关。各 provider 自行翻译,不支持的字段静默忽略:
-
-| 字段 | DeepSeek | OpenAI o-series | Anthropic | Google |
+| 字段 | DeepSeek | OpenAI o-series | Anthropic | 其他 |
 |---|---|---|---|---|
-| `thinking: true` | `extra_body={thinking:{type:enabled}}` | (忽略) | `thinking={type:enabled,budget:5000}` 顶层 | (忽略) |
-| `reasoning_effort` | 顶层 kwarg | 顶层 kwarg | (忽略) | (忽略) |
+| `thinking: true` | `extra_body={thinking:{type:enabled}}` | (忽略) | 顶层 `thinking={type:enabled,budget:N}` | 视实现 |
+| `reasoning_effort` | 顶层 kwarg(`high`/`max`) | 顶层 kwarg(`low`/`medium`/`high`) | (忽略) | 视实现 |
 
-前端通过 `model_options` 按对话覆盖:
-
-```ts
-// frontend → POST /chat/completions
-{
-  "message": "...",
-  "model_options": {
-    "thinking": true,
-    "reasoning_effort": "high"
-  }
-}
-```
-
-`extra_options` 优先级 > yaml 静态配置。
-
-## 配置流转(从 yaml 到 SDK 调用)
-
-```
-sys_config.yaml
-   │  pydantic 解析
-   ▼
-config.settings.LLMConfig
-   │  LLMConfig.resolve(provider, model) → (impl_name, model_name, call_config)
-   │     call_config 合并 default_params + model fields, 但 api_key/model 必胜
-   ▼
-LLMFactory.create(impl, call_config)
-   │  按 @register_llm 表查类, 实例化
-   ▼
-DeepSeekLLM.__init__(call_config)
-   │  从 dict 抽自己关心的字段: api_key/model/base_url/temperature/
-   │   max_tokens/top_p/reasoning_effort/thinking
-   ▼
-LLMFallbackChain([primary, *fallbacks])
-   │  对上层伪装成一个 LLM
-   ▼
-ReActAgent.stream → chain.chat_with_tools_stream(messages, tools, extra_options)
-   ▼
-DeepSeekLLM.chat_with_tools_stream
-   │  _build_kwargs 合并 yaml + 调用时 extra_options
-   │  _messages_payload 给 assistant 消息回灌 reasoning_content
-   ▼
-self._client.chat.completions.create(...)
-```
+强度文本中英文都认(`低/中/高/超高` 与 `low/medium/high/xhigh/max`,见 `providers/openai.py:_normalize_reasoning_level`)。
 
 ## 新增一个 Provider
 
 1. 在 `providers/yourname.py` 写实现:
    ```python
-   from ..gateway import register_llm
-   from .base import LLM, ChatResult, ChatMessage
+   from ..registry import register_llm
+   from .base import LLM, ChatChunk
 
    @register_llm("yourname")
    class YourLLM(LLM):
-       def __init__(self, config: dict):
-           super().__init__(config)
-           # 解析 api_key / model / 其他字段
-
        @property
-       def model_name(self) -> str: ...
-       @property
-       def provider_name(self) -> str: ...
-
-       def chat(self, messages, *, temperature=None, max_tokens=None, extra_options=None):
-           ...  # 你的 SDK 调用
+       def provider_name(self) -> str: return "yourname"
+       def chat_stream(self, messages, *, model, ...): ...   # 子类必实现(非流式默认走它聚合)
    ```
-2. 在 `gateway._autoload` 的 `mod_name` 元组里加 `"yourname"`。
-3. yaml 里加 provider 配置块,api_key 用 `${ENV_VAR:}` 占位。
-4. 跑一遍 `LLMFactory.list_providers()` 确认能看到新名字。
-
-## FallbackChain 语义细节
-
-| 场景 | 行为 |
-|---|---|
-| `chat / chat_with_tools` (非流式) | 每个 provider 内部 retry,全部 retry 失败再切下一个 provider |
-| `chat_stream / chat_with_tools_stream` (流式) | **首包前可切**,首包后报错直接抛 — 因为前端已经看到一半内容,中途切 provider 会拼接出不一致的输出 |
-| `supports_tool_calling == False` 的 provider | 工具相关方法自动跳过(`chat_with_tools` 系列),非工具方法照走 |
-| cost_tracker | 成功失败都打点,粒度 = `provider:model`;失败计入 `errors` 字段 |
-
-流式 fallback 的「首包前」边界由 `next(stream)` 触发——拿到第一个 chunk 之前的任何异常(连接错误、API 4xx、首包前的 StopIteration)都会切下一个 provider。
-
-## 日志与追踪
-
-每次对话从 HTTP 进入到 LLM 返回,主路径上有以下日志(都带 `trace_id`):
-
-| 标签 | 位置 | 级别 |
-|---|---|---|
-| `turn.start` / `turn.done` | `api/routes/v1/chat.py` | INFO |
-| `llm.select` | `llm/gateway.py:build_chain_from_settings` | INFO |
-| `ctx.built` | `api/routes/v1/chat.py` (`context.builder.CompositeContextBuilder.build` 后) | INFO |
-| `react.step` | `agents/react/agent.py` 每个 step 末尾 | INFO |
-| `tool.exec` | `tools/executor.py:execute` 末尾 | INFO |
-| `llm.request` | `providers/openai.py` (`_log_llm_request` helper) | DEBUG |
-
-对单次请求的全量排查,把 `app.log_level` 调到 `DEBUG`,然后用 `trace_id` 过滤即可拉出完整链路。
+2. 在 `registry._autoload()` 的 `mod_name` 元组里加 `"yourname"`(外部 SDK 缺失会 DEBUG 跳过,不影响其他 provider)。
+3. 在管理端建 provider + model + key(落 DB,经 `ModelConfigCache` 生效);无需改 yaml。
+4. `registry.list_providers()` 确认能看到新名字。
 
 ## 测试
 
-- `tests/unit/test_llm_fallback.py` — Fallback chain 语义(retry / fallback / 流式锁定 / cost_tracker)
-- `tests/unit/test_react_agent.py` — Agent + 工具调用的端到端流式行为(用 `_ScriptedLLM` 替代真 SDK)
+- `tests/unit/llm/test_chain_resolver.py` — 选链:user_pin 同 provider 后备(不跨厂商)/ 档位链跨 provider 保序 / 能力过滤 / fail-fast / 系统保底。
+- `tests/unit/llm/test_chain_save_validation.py` — 链保存校验:存在 / 启用 / chat 类型 / 对话链同 provider。
+- `tests/unit/test_llm_fallback.py` — dispatcher:retry / fallback / 流式首包锁定 / 供应商级熔断 / cost_tracker。
+- `tests/unit/llm/test_gateway_cache_only.py` — build_dispatch_chain 展开 + 池 + spec 映射。
+- `tests/e2e/test_llm_chain_e2e.py` — 真实模型端到端(`@pytest.mark.e2e` + `FORGE_E2E=1` 门控,默认跳过):档位链真实调用 + 解析校验。
 
-写新 provider 时建议同步加一个集成测试(可选 `pytest.mark.live` 跳过,只在本地/CI 跑)。
+> 真实 e2e 运行:`FORGE_E2E=1 .venv/bin/python -m pytest tests/e2e -q`(需可用 DB / Redis / 真实 Key 或本地 ollama)。

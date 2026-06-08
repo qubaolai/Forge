@@ -19,7 +19,8 @@ import time
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
-from .dispatch.chain_builder import build_dispatch_chain, build_utility_dispatch_chain
+from .dispatch.chain_builder import build_dispatch_chain
+from .dispatch.chain_resolver import resolve_chain
 from .pipeline import (
     AuditMiddleware,
     BudgetMiddleware,
@@ -36,11 +37,6 @@ from .pipeline import (
 )
 from .providers.base import ChatChunk
 from .request import CostEstimate, LLMRequest, LLMResponse
-from .router import (
-    Router,
-    RoutingRequest,
-    get_default_router,
-)
 
 if TYPE_CHECKING:
     from .dispatch.dispatcher import LLMDispatcher
@@ -63,12 +59,10 @@ class LLMGateway:
         model_cache=None,
         *,
         pipeline: PipelineRunner | None = None,
-        router: Router | None = None,
     ) -> None:
         self._settings = settings
         self._model_cache = model_cache
         self._pipeline = pipeline or self._default_pipeline()
-        self._router = router or get_default_router()
 
     # ------------------------------------------------------------------
     # 工厂
@@ -346,128 +340,25 @@ class LLMGateway:
         )
 
     # ------------------------------------------------------------------
-    # 内部: 路由决策 + 构造 dispatcher
+    # 内部: 解析模型链 + 构造 dispatcher
     # ------------------------------------------------------------------
-    async def _resolve_provider_model(
-        self, req: LLMRequest
-    ) -> tuple[str | None, str | None, str]:
-        """解析最终 (provider, model). 返回 (provider, model, reason).
-
-        优先级:
-            1. 用户 pin (preferred_*) 双值齐全 → 直接采用, 完全跳过 Router
-            2. Router 决策 (CompositeRouter, 含 RuleBased/CostAware/LatencyAware)
-            3. Router 无候选 → settings.llm 默认 (兜底)
-        """
-        if req.preferred_provider and req.preferred_model:
-            return req.preferred_provider, req.preferred_model, "user_pin"
-
-        available = await self._build_available_candidates()
-        if not available:
-            # 没有候选可路由, 回 settings 默认 / 用户 pin 半值
-            return (
-                req.preferred_provider or (self._settings.llm.provider or None),
-                req.preferred_model or (self._settings.llm.default_model or None),
-                "no_available",
-            )
-
-        routing_req = RoutingRequest(
-            task_type=req.task_type,
-            estimated_input_tokens=req.estimated_input_tokens,
-            requires_tools=req.requires_tools or bool(req.tools),
-            requires_vision=req.requires_vision,
-            requires_thinking=req.requires_thinking,
-            user_id=req.user_id,
-            preferred_provider=req.preferred_provider,
-            preferred_model=req.preferred_model,
-        )
-        try:
-            decision = self._router.route(routing_req, available)
-        except Exception:  # noqa: BLE001
-            logger.exception("Router 决策异常, 降级 settings.llm 默认")
-            decision = None
-
-        if decision is None:
-            return (
-                self._settings.llm.provider or None,
-                self._settings.llm.default_model or None,
-                "router_none",
-            )
-        return decision.provider, decision.model, decision.reason
-
-    async def _build_available_candidates(self) -> list:
-        """从 ModelConfigCache 读出全部 enabled (provider, model) 转 Candidate.
-
-        失败 / cache 未就绪时返回空列表 (上层会回退到 settings 默认).
-        """
-        try:
-            model_cache = self._model_cache
-            if model_cache is None:
-                from .model_config_cache import ModelConfigCache
-                model_cache = ModelConfigCache.get_global()
-            if not await model_cache.is_ready():
-                return []
-            providers = await model_cache.get_providers_enabled()
-        except Exception:  # noqa: BLE001
-            logger.debug("model_cache 不可用, 跳过 Router 候选构造", exc_info=True)
-            return []
-
-        from forge.config.domains.llm import ModelCapabilities, ModelConfig
-
-        candidates: list = []
-        for p in providers:
-            provider_name = p.get("name") or ""
-            if not provider_name:
-                continue
-            try:
-                models = await model_cache.get_models(provider_name, enabled_only=True)
-            except Exception:  # noqa: BLE001
-                continue
-            for m in models:
-                if m.get("model_type") != "chat":
-                    continue
-                config = m.get("config") or {}
-                capabilities = set(config.get("capabilities") or [])
-                cap_data = {
-                    "context_window": config.get("context_window", 128000),
-                    "supports_tools": "tools" in capabilities,
-                    "supports_images": "vision" in capabilities
-                    or "image" in set(config.get("input_modalities") or []),
-                    "supports_thinking": "thinking" in capabilities,
-                }
-                try:
-                    capabilities = ModelCapabilities(**cap_data)
-                except Exception:  # noqa: BLE001
-                    capabilities = ModelCapabilities()
-                mc = ModelConfig(
-                    name=m.get("name") or "",
-                    display_name=m.get("display_name"),
-                    capabilities=capabilities,
-                )
-                if mc.name:
-                    candidates.append((provider_name, mc))
-        return candidates
+    def _resolve_model_cache(self):
+        if self._model_cache is not None:
+            return self._model_cache
+        from .model_config_cache import ModelConfigCache
+        return ModelConfigCache.get_global()
 
     async def _build_dispatcher_for(self, req: LLMRequest) -> LLMDispatcher:
-        """根据 LLMRequest 选择 provider/model, 构造 LLMDispatcher."""
-        if req.task_type == "utility":
-            # Utility 走 3 级回落链, 不经 Router
-            return await build_utility_dispatch_chain(
-                self._settings,
-                provider=req.preferred_provider,
-                model=req.preferred_model,
-                model_cache=self._model_cache,
-            )
+        """解析有序模型链(user_pin > 档位链 > 系统保底)并构造 LLMDispatcher.
 
-        provider, model, reason = await self._resolve_provider_model(req)
-        if reason not in ("user_pin", "no_available"):
-            logger.info(
-                "LLM 路由决策: provider=%s model=%s reason=%s task_type=%s",
-                provider, model, reason, req.task_type,
-            )
+        选择逻辑统一在 chain_resolver.resolve_chain;utility 不再有独立分支
+        (调用方传 model_profile="fast" 即走 fast 档位链)。
+        """
+        model_cache = self._resolve_model_cache()
+        chain = await resolve_chain(req, self._settings, model_cache)
         return await build_dispatch_chain(
             self._settings,
-            provider=provider,
-            model=model,
+            chain=chain,
             model_cache=self._model_cache,
         )
 

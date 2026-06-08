@@ -135,6 +135,9 @@ disallow_incomplete_defs = false
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src", "."]
+markers = [
+    "e2e: 真实模型端到端测试, 需 FORGE_E2E=1 + 真实依赖(DB/Redis/Key), 默认跳过",
+]
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore:Unknown config option. asyncio_mode:pytest.PytestConfigWarning",

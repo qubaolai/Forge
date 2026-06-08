@@ -308,6 +308,22 @@ export interface SystemModelBinding {
   model: ProviderModel | null;
 }
 
+// 模型调用链(对话链 conversation / 档位链 tier)
+export type ModelChainScope = 'conversation' | 'tier';
+
+export interface ModelChainEntry {
+  provider: string;
+  model: string;
+}
+
+export interface ModelChain {
+  id: string;
+  scope: ModelChainScope;
+  chain_key: string; // provider 名(conversation)或 fast/smart/strong(tier)
+  entries: ModelChainEntry[];
+  version: number;
+}
+
 export interface RagIndexJob {
   id: string;
   model_id: string;

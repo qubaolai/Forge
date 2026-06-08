@@ -121,6 +121,7 @@ def _migrate_model_configs(sync_conn) -> None:
         "embedding_model_configs",
         "reranker_model_configs",
         "system_model_bindings",
+        "model_chains",
     }
     if not required.issubset(tables):
         return
@@ -202,6 +203,57 @@ def _migrate_model_configs(sync_conn) -> None:
     for role in ("rag_embedding", "semantic_history_embedding", "rag_reranker"):
         if role not in existing_roles:
             sync_conn.execute(SystemModelBindingOrm.__table__.insert().values(role=role, version=0))
+
+    _seed_tier_chains(sync_conn)
+
+
+def _seed_tier_chains(sync_conn) -> None:
+    """幂等播种档位链(fast/smart/strong)。
+
+    初始值取 sys_config 的 model_profiles 默认 "provider:model";若该模型在 DB 中
+    存在且启用则种成 1 元素链,否则种空链(运行时 resolver 退化到系统保底)。
+    对话链(conversation)不在此播种,由管理端按需配置。
+    """
+    from sqlalchemy import select
+
+    from forge.infrastructure.database.orm.model_chain_orm import ModelChainOrm
+    from forge.infrastructure.database.orm.model_orm import ModelOrm
+    from forge.infrastructure.database.orm.model_provider_orm import ProviderOrm
+
+    existing = set(sync_conn.execute(
+        select(ModelChainOrm.chain_key).where(ModelChainOrm.scope == "tier")
+    ).scalars())
+
+    # 已启用的 (provider_name, model_name) chat 模型集合
+    prov_name_by_id = dict(sync_conn.execute(
+        select(ProviderOrm.id, ProviderOrm.name).where(ProviderOrm.is_enabled == 1)
+    ).all())
+    enabled_pairs: set[tuple[str, str]] = set()
+    for row in sync_conn.execute(select(ModelOrm.__table__)).mappings().all():
+        if not row.get("is_enabled") or row.get("model_type") not in ("chat", "text"):
+            continue
+        pname = prov_name_by_id.get(row["provider_id"])
+        if pname:
+            enabled_pairs.add((pname, row["name"]))
+
+    try:
+        profiles = get_settings().agent_profiles.model_profiles.model_dump()
+    except Exception:  # noqa: BLE001 — 配置不可用时退回类默认
+        from forge.config.domains.agent_profiles import ModelProfiles
+        profiles = ModelProfiles().model_dump()
+
+    for tier in ("fast", "smart", "strong"):
+        if tier in existing:
+            continue
+        ref = str(profiles.get(tier) or "")
+        entries: list[dict] = []
+        if ":" in ref:
+            provider, model = ref.split(":", 1)
+            if (provider, model) in enabled_pairs:
+                entries = [{"provider": provider, "model": model}]
+        sync_conn.execute(ModelChainOrm.__table__.insert().values(
+            scope="tier", chain_key=tier, entries=entries or None, version=0,
+        ))
 
 
 async def bootstrap_schema() -> None:
