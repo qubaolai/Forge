@@ -69,6 +69,10 @@ context:
     min_score: ${CONTEXT_SEMANTIC_MIN_SCORE:0.6}
     # 最近多少轮无条件保留 (保证对话连贯)
     anchor_turns: ${CONTEXT_SEMANTIC_ANCHOR_TURNS:3}
+    # 冷路径每次为多少条近期消息补算 embedding
+    scan_limit: 50
+    # 冷路径补算后按此上限淘汰更早的向量
+    retain_turns: 50
 
 llm:
   provider: ${LLM_PROVIDER:}

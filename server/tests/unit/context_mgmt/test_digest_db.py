@@ -145,6 +145,15 @@ async def test_additive_column_migration_idempotent():
 # ---------------------------------------------------------------------------
 # MessageEmbeddingStore: upsert + batch_get (按 model 匹配) + 幂等去重 (修订 D)
 # ---------------------------------------------------------------------------
+def _cos(a: list[float], b: list[float]) -> float:
+    import math
+
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
 async def test_message_embedding_store_roundtrip(factory):
     from forge.context_mgmt.recall.embedding_store import MessageEmbeddingStore
 
@@ -154,9 +163,10 @@ async def test_message_embedding_store_roundtrip(factory):
         vector=[0.1, 0.2, 0.3], source_hash="h1",
     )
 
-    # 模型匹配 -> 命中
+    # 模型匹配 -> 命中。int8 量化有损, 还原值不等于原值, 但方向 (cosine) 近乎不变。
     got = await store.batch_get(["11", "999"], model="m-fast")
-    assert got == {"11": [0.1, 0.2, 0.3]}
+    assert set(got) == {"11"}
+    assert _cos(got["11"], [0.1, 0.2, 0.3]) == pytest.approx(1.0, abs=1e-3)
     # 模型不匹配 -> 未命中 (不混用)
     assert await store.batch_get(["11"], model="other") == {}
     # meta 供冷路径去重
@@ -168,4 +178,25 @@ async def test_message_embedding_store_roundtrip(factory):
         message_id="11", session_id="22", model="m-strong", dim=2,
         vector=[0.5, 0.6], source_hash="h2",
     )
-    assert await store.batch_get(["11"], model="m-strong") == {"11": [0.5, 0.6]}
+    got2 = await store.batch_get(["11"], model="m-strong")
+    assert _cos(got2["11"], [0.5, 0.6]) == pytest.approx(1.0, abs=1e-3)
+
+
+async def test_message_embedding_store_prune(factory):
+    """prune_session 按 message_id desc 只保留最近 K 条; keep<=0 不淘汰."""
+    from forge.context_mgmt.recall.embedding_store import MessageEmbeddingStore
+
+    store = MessageEmbeddingStore(factory)
+    for mid in ("1", "2", "3", "4"):
+        await store.upsert(
+            message_id=mid, session_id="7", model="m", dim=2,
+            vector=[0.1, 0.2], source_hash="h",
+        )
+
+    await store.prune_session("7", 2)
+    # 仅保留 message_id 最大的 2 条 (3, 4)
+    assert set(await store.batch_get(["1", "2", "3", "4"], model="m")) == {"3", "4"}
+
+    # keep<=0 -> 不淘汰
+    await store.prune_session("7", 0)
+    assert set(await store.batch_get(["3", "4"], model="m")) == {"3", "4"}

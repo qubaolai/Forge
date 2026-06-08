@@ -67,9 +67,10 @@ async def run_embedding_task(session_id: str) -> None:
     store = MessageEmbeddingStore(factory)
 
     # 1. 候选 + 幂等去重: (source_hash, model) 都匹配则跳过
+    # turn 粒度: 只为每轮「用户提问」那条存向量 (代表整轮), 条数减半且 query↔query 更聚焦。
     candidates: list[tuple] = []  # (row, content, source_hash)
     for row in rows:
-        if row.role not in ("user", "assistant"):
+        if row.role != "user":
             continue
         content = row.content or ""
         if not content.strip():
@@ -116,6 +117,9 @@ async def run_embedding_task(session_id: str) -> None:
     logger.info(
         "embedding 写入 session=%s 新增=%d model=%s", session_id, written, model
     )
+
+    # 4. 淘汰: turn 粒度下一轮一条, 按 retain_turns 保留最近 K 轮, 把存储收敛为有界。
+    await store.prune_session(session_id, cfg.retain_turns)
 
 
 async def _build_embedder():

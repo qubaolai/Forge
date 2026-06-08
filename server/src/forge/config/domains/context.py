@@ -59,6 +59,9 @@ class ContextSemanticRecallSettings(BaseSettings):
     anchor_turns: int = 3
     # 冷路径每次为多少条近期消息补算 embedding。
     scan_limit: int = 50
+    # 每个 session 驻留最近多少轮向量 (turn 粒度下一轮≈一条提问记录); <=0 不淘汰。
+    # 冷路径补算后按此上限淘汰更早的向量, 把存储从无限增长收敛为有界。
+    retain_turns: int = 200
 
 
 class ContextSettings(BaseSettings):

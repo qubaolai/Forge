@@ -35,12 +35,14 @@ class _Ctx:
         self.metas = metas or {}
         self.patches: list = []
         self.upsert_mock = AsyncMock()
+        self.prune_mock = AsyncMock()
         self.embedder = _FakeEmbedder()
 
     def __enter__(self):
         settings = MagicMock()
         settings.context.semantic_recall.enabled = self.enabled
         settings.context.semantic_recall.scan_limit = 50
+        settings.context.semantic_recall.retain_turns = 200
         self.patches.append(
             patch("forge.config.settings.get_settings", return_value=settings)
         )
@@ -88,6 +90,9 @@ class _Ctx:
             async def upsert(self, **kwargs):
                 return await outer.upsert_mock(**kwargs)
 
+            async def prune_session(self, session_id, keep):
+                return await outer.prune_mock(session_id, keep)
+
         self.patches.append(
             patch(
                 "forge.context_mgmt.recall.embedding_store.MessageEmbeddingStore",
@@ -115,23 +120,25 @@ async def test_disabled_no_op():
 
 @pytest.mark.asyncio
 async def test_embeds_and_upserts_candidates():
-    """user/assistant 非空消息 -> 算 embedding 并 upsert."""
+    """turn 粒度: 只为 user 提问那条算 embedding 并 upsert (assistant/system/空白跳过)."""
     rows = [
         _row("m1", "user", "你好"),
-        _row("m2", "assistant", "你好呀"),
-        _row("m3", "system", "忽略"),   # 非 user/assistant, 跳过
-        _row("m4", "user", "   "),      # 空白, 跳过
+        _row("m2", "assistant", "你好呀"),  # 非 user, 跳过 (只存提问代表整轮)
+        _row("m3", "system", "忽略"),       # 非 user, 跳过
+        _row("m4", "user", "   "),          # 空白, 跳过
     ]
     with _Ctx(rows=rows) as ctx:
         await run_embedding_task("s1")
-    # 仅 m1 / m2 被 upsert
-    assert ctx.upsert_mock.call_count == 2
+    # 仅 m1 (user 提问) 被 upsert
+    assert ctx.upsert_mock.call_count == 1
     ids = {c.kwargs["message_id"] for c in ctx.upsert_mock.call_args_list}
-    assert ids == {"m1", "m2"}
+    assert ids == {"m1"}
     # 向量/模型/维度写入正确
     first = ctx.upsert_mock.call_args_list[0].kwargs
     assert first["model"] == "fake-emb" and first["dim"] == 2
     assert first["vector"] == [0.1, 0.2]
+    # 写入后按 retain_turns 触发淘汰
+    ctx.prune_mock.assert_awaited_once()
 
 
 @pytest.mark.asyncio

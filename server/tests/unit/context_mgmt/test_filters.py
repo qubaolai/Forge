@@ -170,12 +170,14 @@ async def test_hybrid_keeps_relevant_early_turns():
 
 
 @pytest.mark.asyncio
-async def test_hybrid_keeps_whole_turn_when_one_message_is_relevant():
-    """同轮任意消息命中语义阈值时, 问题和回答必须一起保留."""
+async def test_hybrid_keeps_whole_turn_when_question_is_relevant():
+    """turn 粒度: 仅 user 提问代表参与打分, 命中阈值时该轮提问与回答一起保留."""
 
-    class _AssistantOnlyScorer:
+    class _UserRepScorer:
         async def score(self, query, messages):
-            return [1.0 if m.message.role == "assistant" else 0.0 for m in messages]
+            # 应只收到 user 提问代表 (assistant 不参与打分)
+            assert all(m.message.role == "user" for m in messages)
+            return [1.0 for _ in messages]
 
     early_turn = [
         _msg(0, "Q0", role="user", message_id="u0"),
@@ -183,7 +185,7 @@ async def test_hybrid_keeps_whole_turn_when_one_message_is_relevant():
     ]
     anchors = [_msg(i, f"Q{i}") for i in range(1, 4)]
     hf = HybridFilter(
-        scorer=_AssistantOnlyScorer(),
+        scorer=_UserRepScorer(),
         min_score=0.5,
         anchor_turns=3,
     )

@@ -140,17 +140,34 @@ class HybridFilter(HistoryFilter):
     ) -> list[HistoryMessage]:
         if not messages or self._scorer is None:
             return messages
+
+        # 每轮取「用户提问」那条作代表, 整轮只打一次分 (与冷路径只存提问向量对齐)。
+        representatives: dict[int, HistoryMessage] = {}
+        for m in messages:
+            if m.message.role == "user" and m.turn_index not in representatives:
+                representatives[m.turn_index] = m
+        reps = list(representatives.values())
+        if not reps:
+            return messages  # 无提问代表 (异常), 保守保留全部
+
         try:
-            scores = await self._scorer.score(query, messages)
+            scores = await self._scorer.score(query, reps)
         except Exception as exc:  # noqa: BLE001
             logger.warning("HybridFilter 语义打分失败, 保留全部早期消息: %s", exc)
             return messages
 
+        turn_scores: dict[int, float] = {
+            rep.turn_index: score
+            for rep, score in zip(reps, scores, strict=False)
+        }
+
         kept_turns: set[int] = set()
-        for message, score in zip(messages, scores, strict=False):
-            message.relevance_score = score
-            if score >= self._min_score:
-                kept_turns.add(message.turn_index)
+        for m in messages:
+            # 无代表的 turn (没有 user 提问) 默认保留 (score=1.0)
+            turn_score = turn_scores.get(m.turn_index, 1.0)
+            m.relevance_score = turn_score
+            if turn_score >= self._min_score:
+                kept_turns.add(m.turn_index)
         return [m for m in messages if m.turn_index in kept_turns]
 
 
