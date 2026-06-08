@@ -93,11 +93,24 @@ def test_registry_isolates_different_keys():
     reg = CircuitBreakerRegistry(BreakerConfig(failure_threshold=1))
     a = reg.get("openai", "sk-x", "gpt-4o")
     b = reg.get("openai", "sk-y", "gpt-4o")  # 不同 api_key
-    c = reg.get("openai", "sk-x", "gpt-3.5")  # 不同 model
     a.record_failure()
     assert a.state == BreakerState.OPEN
     assert b.state == BreakerState.CLOSED
-    assert c.state == BreakerState.CLOSED
+
+
+def test_registry_shares_breaker_across_models_for_same_key():
+    reg = CircuitBreakerRegistry()
+    a = reg.get("openai", "sk-x", "gpt-4o")
+    b = reg.get("openai", "sk-x", "gpt-3.5")
+    assert a is b
+
+
+def test_strategy_accepts_dispatcher_key_shape():
+    reg = CircuitBreakerRegistry(BreakerConfig(failure_threshold=1))
+    key = ("openai", "sk-x")
+    assert reg.is_open(key) is False
+    reg.record_failure(key)
+    assert reg.is_open(key) is True
 
 
 def test_global_registry_singleton():

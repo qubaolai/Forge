@@ -11,9 +11,8 @@
        └───────── HALF_OPEN ←────────────┘
                  (probe 成功→CLOSED / 失败→OPEN)
 
-Key 粒度: (impl, api_key, model)
-    - 同 (impl, model) 不同 api_key 视为不同熔断单元: 一个坏 key 不让所有 key 都熔
-    - 同 impl 同 key 不同 model 也是不同单元: model 个体故障互不影响
+Key 粒度: (impl, api_key)
+    - 同 impl 不同 api_key 视为不同熔断单元: 一个坏 key 不让所有 key 都熔
 
 Strategy 抽象 (Phase 6 切 Redis):
     - CircuitBreakerStrategy: 调用方依赖的抽象, 决定"这个 key 当前是否要短路"
@@ -59,8 +58,8 @@ class BreakerConfig:
     """HALF_OPEN 状态允许的并发探测请求数. 默认 1 即可."""
 
 
-BreakerKey = tuple[str, str, str]
-"""(impl, api_key, model)"""
+BreakerKey = tuple[str, str]
+"""(impl, api_key)"""
 
 
 class CircuitBreakerStrategy(ABC):
@@ -102,7 +101,7 @@ class _Record:
 
 @dataclass
 class CircuitBreaker:
-    """单 (impl, api_key, model) 的熔断器实例.
+    """单 (impl, api_key) 的熔断器实例.
 
     线程安全: 所有公开方法在 _lock 保护下读写状态.
     """
@@ -201,7 +200,7 @@ class CircuitBreaker:
 class InProcessCircuitBreaker(CircuitBreakerStrategy):
     """进程内熔断器策略, 默认实现.
 
-    按 (impl, api_key, model) 索引 CircuitBreaker.
+    按 (impl, api_key) 索引 CircuitBreaker.
     实例懒创建, 配置全局统一.
     """
 
@@ -209,7 +208,7 @@ class InProcessCircuitBreaker(CircuitBreakerStrategy):
         self._default_config = default_config or BreakerConfig()
         self._breakers: dict[BreakerKey, CircuitBreaker] = {}
         self._reverse: dict[int, tuple[str, str]] = {}
-        """id(breaker) -> (impl, model), 给 _notify_state_change 反查 label."""
+        """id(breaker) -> (impl, metric_model_label), 给 _notify_state_change 反查 label."""
         self._lock = threading.Lock()
 
     def _get(self, key: BreakerKey) -> CircuitBreaker:
@@ -222,8 +221,8 @@ class InProcessCircuitBreaker(CircuitBreakerStrategy):
                 return breaker
             breaker = CircuitBreaker(config=self._default_config)
             self._breakers[key] = breaker
-            impl, _, model = key
-            self._reverse[id(breaker)] = (impl, model)
+            impl, _ = key
+            self._reverse[id(breaker)] = (impl, "*")
             return breaker
 
     def is_open(self, key: BreakerKey) -> bool:
@@ -248,9 +247,9 @@ class InProcessCircuitBreaker(CircuitBreakerStrategy):
     def snapshot(self) -> dict[str, str]:
         with self._lock:
             out: dict[str, str] = {}
-            for (impl, api_key, model), breaker in self._breakers.items():
+            for (impl, api_key), breaker in self._breakers.items():
                 fp = f"{api_key[:6]}***" if api_key else "-"
-                out[f"{impl}:{fp}:{model}"] = breaker.state.value
+                out[f"{impl}:{fp}"] = breaker.state.value
             return out
 
     def label_of(self, breaker: CircuitBreaker) -> tuple[str, str] | None:
@@ -267,7 +266,8 @@ class CircuitBreakerRegistry(InProcessCircuitBreaker):
     """
 
     def get(self, impl: str, api_key: str, model: str) -> CircuitBreaker:
-        return self._get((impl, api_key, model))
+        _ = model
+        return self._get((impl, api_key))
 
     def reset_all(self) -> None:
         super().reset(None)
