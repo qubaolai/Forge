@@ -69,9 +69,6 @@ class LLMRequest:
     cache_enabled: bool = True
     """精确缓存开关 (即使 enabled, 也需 temperature=0 才会真正缓存)"""
 
-    priority: int = 0
-    """0=普通, 1=高优先级, 未来请求队列用"""
-
     timeout_ms: int | None = None
     """覆盖全局 total_timeout (毫秒)"""
 

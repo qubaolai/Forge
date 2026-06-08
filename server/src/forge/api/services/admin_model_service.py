@@ -39,9 +39,7 @@ async def _model_to_dict(db, model) -> dict:
         "display_name": model.display_name,
         "model_type": model.model_type,
         "config": config,
-        "is_enabled": model.is_enabled,
-        "priority": model.priority,
-        "cost_tier": model.cost_tier,
+        "is_enabled": model.is_enabled
     }
 
 
@@ -91,7 +89,6 @@ class AdminModelService:
                 "impl": p.impl,
                 "base_url": p.base_url,
                 "is_enabled": bool(p.is_enabled),
-                "priority": p.priority,
                 "routing_config": p.routing_config,
                 "key_count": len(keys),
                 "model_count": len(models),

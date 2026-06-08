@@ -19,23 +19,7 @@ class ModelOrm(Base, BigIntPKMixin):
     model_type: Mapped[str] = mapped_column(
         String(32), nullable=False, default="chat", comment="chat / embedding / reranker"
     )
-    # 以下类型专属列仅为兼容旧数据库保留，新业务代码不得读取或写入。
-    context_window: Mapped[int] = mapped_column(Integer, nullable=False, default=128000, comment="已废弃")
-    max_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=4096, comment="已废弃")
-    supports_tools: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="已废弃")
-    supports_images: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="已废弃")
-    supports_thinking: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="已废弃")
-    thinking_options: Mapped[list | None] = mapped_column(
-        JSON, nullable=True, comment="已废弃"
-    )
-    extra_params: Mapped[dict | None] = mapped_column(
-        JSON, nullable=True, comment="已废弃"
-    )
-    cost_tier: Mapped[str] = mapped_column(String(16), nullable=False, default="mid", comment="cheap / mid / expensive")
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="启用标识")
-    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="已废弃")
-    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="同类型内优先级")
-    is_stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="API 不再返回时标记")
 
     __table_args__ = table_args(
         Index("ix_models_provider", "provider_id"),

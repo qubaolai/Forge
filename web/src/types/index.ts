@@ -264,8 +264,6 @@ export interface ProviderModel {
   model_type: ModelType;
   config: Record<string, unknown>;
   is_enabled: boolean;
-  priority: number;
-  cost_tier: string;         // cheap / mid / expensive
 }
 
 // 供应商 API-Key（脱敏，绝不含明文）
@@ -287,7 +285,6 @@ export interface ProviderAdmin {
   impl: string;
   base_url: string | null;
   is_enabled: boolean;
-  priority: number;
   key_count: number;
   model_count: number;
   models: ProviderModel[];
@@ -299,8 +296,6 @@ export interface ModelUpsert {
   display_name?: string;
   model_type?: ModelType;
   config?: Record<string, unknown>;
-  cost_tier?: string;
-  priority?: number;
   enabled?: boolean;
 }
 

@@ -34,8 +34,7 @@ class ModelRepository:
     async def list_by_provider(self, provider_id: int, enabled_only: bool = False) -> list[ModelOrm]:
         stmt = select(ModelOrm).where(ModelOrm.provider_id == provider_id)
         if enabled_only:
-            stmt = stmt.where(ModelOrm.is_enabled == True)  # noqa: E712
-        stmt = stmt.order_by(ModelOrm.priority.desc(), ModelOrm.name)
+            stmt = stmt.where(ModelOrm.is_enabled == True)
         res = await self.db.execute(stmt)
         return list(res.scalars().all())
 
@@ -43,8 +42,7 @@ class ModelRepository:
         """获取某类型下所有已启用的模型（跨供应商）。"""
         stmt = (
             select(ModelOrm)
-            .where(and_(ModelOrm.model_type == model_type, ModelOrm.is_enabled == True))  # noqa: E712
-            .order_by(ModelOrm.priority.desc(), ModelOrm.name)
+            .where(and_(ModelOrm.model_type == model_type, ModelOrm.is_enabled == True))
         )
         res = await self.db.execute(stmt)
         return list(res.scalars().all())
@@ -96,11 +94,10 @@ class ModelRepository:
             .join(ProviderOrm, ProviderOrm.id == ModelOrm.provider_id)
             .where(
                 and_(
-                    ModelOrm.is_enabled == True,  # noqa: E712
+                    ModelOrm.is_enabled == True,
                     ProviderOrm.is_enabled == 1,
                 )
             )
-            .order_by(ProviderOrm.priority.desc(), ModelOrm.priority.desc())
         )
         res = await self.db.execute(stmt)
         return [(row[0], row[1]) for row in res.all()]
@@ -131,7 +128,6 @@ class ModelRepository:
                 "model_type": model_type,
                 "cost_tier": model_data.get("cost_tier", "mid"),
                 "is_enabled": True,
-                "priority": 0,
                 "last_synced_at": now,
                 "is_stale": False,
             }
@@ -156,7 +152,6 @@ class ModelRepository:
             for field in self._SYNC_UPDATABLE_FIELDS:
                 if field in model_data:
                     setattr(existing, field, model_data[field])
-            existing.is_stale = False
             await self.db.flush()
             return existing, False
 
@@ -167,7 +162,6 @@ class ModelRepository:
             model_type=model_type,
             cost_tier=model_data.get("cost_tier", "mid"),
             is_enabled=True,
-            priority=0,
             last_synced_at=now,
             is_stale=False,
         )
@@ -207,7 +201,7 @@ class ModelRepository:
 
     # 管理端允许更新的字段（不含 provider_id / model_id 等业务主键）
     _ADMIN_UPDATABLE_FIELDS = frozenset({
-        "display_name", "cost_tier", "priority", "is_enabled",
+        "display_name", "is_enabled",
     })
 
     _NULLABLE_ADMIN_FIELDS = frozenset()
@@ -219,9 +213,7 @@ class ModelRepository:
             name=data["name"],
             display_name=data.get("display_name", ""),
             model_type=data.get("model_type", "chat"),
-            cost_tier=data.get("cost_tier", "mid"),
             is_enabled=data.get("is_enabled", True),
-            priority=data.get("priority", 0),
         )
         self.db.add(model)
         await self.db.flush()

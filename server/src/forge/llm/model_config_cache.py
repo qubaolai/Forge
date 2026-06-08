@@ -111,7 +111,6 @@ class ModelConfigCache:
                     "impl": provider.impl or provider.name,
                     "base_url": provider.base_url,
                     "is_enabled": provider.is_enabled,
-                    "priority": provider.priority,
                     "routing_config": provider.routing_config,
                 },
                 ensure_ascii=False,
@@ -149,10 +148,7 @@ class ModelConfigCache:
                         "display_name": model.display_name,
                         "model_type": model.model_type,
                         "config": config,
-                        "cost_tier": model.cost_tier,
                         "is_enabled": model.is_enabled,
-                        "priority": model.priority,
-                        "is_stale": model.is_stale,
                     },
                     ensure_ascii=False,
                 )
@@ -193,7 +189,6 @@ class ModelConfigCache:
             data = json.loads(data_str)
             if data.get("is_enabled"):
                 result.append(data)
-        result.sort(key=lambda item: item.get("priority", 0), reverse=True)
         return result
 
     async def get_provider(self, name: str) -> dict | None:
@@ -219,7 +214,6 @@ class ModelConfigCache:
             if enabled_only and name not in enabled_set:
                 continue
             result.append(json.loads(data_str))
-        result.sort(key=lambda item: item.get("priority", 0), reverse=True)
         return result
 
     async def is_model_enabled(self, provider_name: str, model_name: str) -> bool:
@@ -251,7 +245,6 @@ class ModelConfigCache:
             if data.get("is_enabled"):
                 data["provider"] = provider_name
                 result.append(data)
-        result.sort(key=lambda item: item.get("priority", 0), reverse=True)
         return result
 
     async def get_model_detail(self, provider_name: str, model_name: str) -> dict | None:

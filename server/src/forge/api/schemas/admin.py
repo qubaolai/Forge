@@ -73,8 +73,6 @@ class ModelOut(BaseModel):
     model_type: Literal["chat", "embedding", "reranker"] = "chat"
     config: dict[str, Any] = Field(default_factory=dict)
     is_enabled: bool = True
-    priority: int = 0
-    cost_tier: str = "mid"
 
 
 class ModelToggleIn(BaseModel):
@@ -89,7 +87,6 @@ class ModelCreateIn(BaseModel):
     model_type: Literal["chat", "embedding", "reranker"] = "chat"
     config: dict[str, Any] = Field(default_factory=dict)
     cost_tier: str = "mid"  # cheap / mid / expensive
-    priority: int = 0
 
     @model_validator(mode="after")
     def _validate_config(self) -> ModelCreateIn:
@@ -103,7 +100,6 @@ class ModelUpdateIn(BaseModel):
     display_name: str | None = None
     config: dict[str, Any] | None = None
     cost_tier: str | None = None
-    priority: int | None = None
     enabled: bool | None = None
 
 
@@ -115,7 +111,6 @@ class ProviderOut(BaseModel):
     impl: str = ""
     base_url: str | None = None
     is_enabled: bool = True
-    priority: int = 0
     routing_config: dict[str, Any] | None = None
     key_count: int = 0
     model_count: int = 0

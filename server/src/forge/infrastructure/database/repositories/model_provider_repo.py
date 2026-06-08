@@ -26,14 +26,13 @@ class ProviderRepository:
         res = await self.db.execute(
             select(ProviderOrm)
             .where(ProviderOrm.is_enabled == 1)
-            .order_by(ProviderOrm.priority.desc())
         )
         return list(res.scalars().all())
 
     async def list_all(self) -> list[ProviderOrm]:
         res = await self.db.execute(
             select(ProviderOrm)
-            .order_by(ProviderOrm.priority.desc(), ProviderOrm.id.asc())
+            .order_by(ProviderOrm.id.asc())
         )
         return list(res.scalars().all())
 
@@ -124,7 +123,6 @@ class ProviderRepository:
             .join(ProviderOrm, ProviderOrm.id == ProviderKeyOrm.provider_id)
             .where(ProviderKeyOrm.is_enabled == 1)
             .where(ProviderOrm.is_enabled == 1)
-            .order_by(ProviderOrm.priority.desc())
         )
         res = await self.db.execute(stmt)
         return [(row[0], row[1]) for row in res.all()]
@@ -137,8 +135,7 @@ class ProviderRepository:
             stmt = (
                 select(ModelOrm)
                 .where(ModelOrm.provider_id == provider.id)
-                .where(ModelOrm.is_enabled == True)  # noqa: E712
-                .order_by(ModelOrm.priority.desc(), ModelOrm.name)
+                .where(ModelOrm.is_enabled == True)
             )
             res = await self.db.execute(stmt)
             models = list(res.scalars().all())

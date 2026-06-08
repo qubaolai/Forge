@@ -10,7 +10,7 @@ from forge.infrastructure.database.orm.mixins import BigIntPKMixin, table_args
 class SystemModelBindingOrm(Base, BigIntPKMixin):
     __tablename__ = "system_model_bindings"
 
-    role: Mapped[str] = mapped_column(String(64), nullable=False)
+    role: Mapped[str] = mapped_column(String(64), nullable=False, comment="角色: rag_embedding-系统rag向量化, semantic_history_embedding-历史消息寓意召回使用, rag_reranker-rag重排序")
     model_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, comment="→ models.id")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True, comment="→ users.id")

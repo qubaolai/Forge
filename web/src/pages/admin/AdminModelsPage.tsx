@@ -905,7 +905,6 @@ function ModelDialog({
   const [truncationStrategy, setTruncationStrategy] = useState(String(initialConfig.truncation_strategy ?? 'tail'));
   const [maxDocChars, setMaxDocChars] = useState(Number(initialConfig.max_doc_chars ?? 4000));
   const [monitorThreshold, setMonitorThreshold] = useState(Number(initialConfig.monitor_threshold ?? 0.1));
-  const [costTier, setCostTier] = useState(model?.cost_tier || 'mid');
   const initialCaps = (initialConfig.capabilities as string[] | undefined) || [];
   const [supportsTools, setSupportsTools] = useState(initialCaps.includes('tools'));
   const [supportsImages, setSupportsImages] = useState(initialCaps.includes('vision'));
@@ -943,7 +942,6 @@ function ModelDialog({
     setTruncationStrategy(String(config.truncation_strategy ?? 'tail'));
     setMaxDocChars(Number(config.max_doc_chars ?? 4000));
     setMonitorThreshold(Number(config.monitor_threshold ?? 0.1));
-    setCostTier(latestModel.cost_tier || 'mid');
     const caps = (config.capabilities as string[] | undefined) || [];
     setSupportsTools(caps.includes('tools'));
     setSupportsImages(caps.includes('vision'));
@@ -1034,7 +1032,6 @@ function ModelDialog({
             };
       const payload: ModelUpsert = {
         display_name: displayName.trim(),
-        cost_tier: costTier,
         config,
       };
       return editing
@@ -1095,20 +1092,13 @@ function ModelDialog({
               <option value="reranker">reranker</option>
             </select>
           </Field>
-          <Field label="成本档">
-            <select value={costTier} onChange={(e) => setCostTier(e.target.value)} className={cn(inputCls, 'bg-white')}>
-              <option value="cheap">cheap</option>
-              <option value="mid">mid</option>
-              <option value="expensive">expensive</option>
-            </select>
-          </Field>
+          <Field label="上下文窗口">
+                <input type="number" value={contextWindow} onChange={(e) => setContextWindow(Number(e.target.value) || 0)} className={inputCls} />
+              </Field>
         </div>
         {modelType === 'chat' && (
           <>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="上下文窗口">
-                <input type="number" value={contextWindow} onChange={(e) => setContextWindow(Number(e.target.value) || 0)} className={inputCls} />
-              </Field>
               <Field label="最大输出 Token">
                 <input type="number" value={maxOutputTokens} onChange={(e) => setMaxOutputTokens(Number(e.target.value) || 0)} className={inputCls} />
               </Field>

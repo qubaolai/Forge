@@ -16,7 +16,6 @@ class ProviderOrm(Base, BigIntPKMixin):
     impl: Mapped[str] = mapped_column(String(64), nullable=True, comment="SDK 实现类名")
     base_url: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="API 地址, NULL=官方默认")
     is_enabled: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     routing_config: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="fallback 图谱 / 重试策略")
 
     __table_args__ = table_args(

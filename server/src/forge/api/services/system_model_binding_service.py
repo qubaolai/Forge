@@ -46,9 +46,7 @@ class SystemModelBindingService:
                     "display_name": model.display_name,
                     "model_type": model.model_type,
                     "config": config_repo.to_dict(await config_repo.get(model.id, model.model_type)),
-                    "is_enabled": model.is_enabled,
-                    "cost_tier": model.cost_tier,
-                    "priority": model.priority,
+                    "is_enabled": model.is_enabled
                 },
             })
         return result
