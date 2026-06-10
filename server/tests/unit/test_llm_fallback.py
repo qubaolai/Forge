@@ -37,7 +37,7 @@ class _MockLLM(LLM):
     def provider_name(self) -> str:
         return self._name
 
-    def chat(
+    async def chat(
         self,
         messages,
         *,
@@ -105,56 +105,56 @@ def _entry(llm: _MockLLM) -> tuple[LLM, LLMCallSpec]:
 # ---------------------------------------------------------------------------
 # chat 路径
 # ---------------------------------------------------------------------------
-def test_chain_uses_primary_when_healthy():
+async def test_chain_uses_primary_when_healthy():
     primary = _MockLLM("p")
     backup = _MockLLM("b")
     chain = LLMFallbackChain(_entry(primary), [_entry(backup)], max_retries=0)
-    result = chain.chat([ChatMessage(role="user", content="hi")])
+    result = await chain.chat([ChatMessage(role="user", content="hi")])
     assert "from p" in result.content
     assert backup._calls == 0
 
 
-def test_chain_falls_back_when_primary_fails():
+async def test_chain_falls_back_when_primary_fails():
     get_cost_tracker().reset()
     primary = _MockLLM("p", fail_first=10)
     backup = _MockLLM("b")
     chain = LLMFallbackChain(
         _entry(primary), [_entry(backup)], max_retries=1, retry_backoff_seconds=0.001
     )
-    result = chain.chat([ChatMessage(role="user", content="hi")])
+    result = await chain.chat([ChatMessage(role="user", content="hi")])
     assert "from b" in result.content
     assert backup._calls == 1
 
 
-def test_chain_raises_when_all_fail():
+async def test_chain_raises_when_all_fail():
     primary = _MockLLM("p", fail_first=10)
     backup = _MockLLM("b", fail_first=10)
     chain = LLMFallbackChain(
         _entry(primary), [_entry(backup)], max_retries=1, retry_backoff_seconds=0.001
     )
     with pytest.raises(Exception, match="timeout"):
-        chain.chat([ChatMessage(role="user", content="hi")])
+        await chain.chat([ChatMessage(role="user", content="hi")])
 
 
-def test_chain_non_retryable_error_skips_retry_but_falls_back():
+async def test_chain_non_retryable_error_skips_retry_but_falls_back():
     primary = _MockLLM("p", fail_first=1, raise_msg="invalid api key")
     backup = _MockLLM("b")
     chain = LLMFallbackChain(
         _entry(primary), [_entry(backup)], max_retries=3, retry_backoff_seconds=0.001
     )
-    result = chain.chat([ChatMessage(role="user", content="hi")])
+    result = await chain.chat([ChatMessage(role="user", content="hi")])
     assert "from b" in result.content
     assert primary._calls == 1
 
 
-def test_chain_cost_tracker_records_errors():
+async def test_chain_cost_tracker_records_errors():
     get_cost_tracker().reset()
     primary = _MockLLM("err_provider", fail_first=10)
     backup = _MockLLM("ok_provider")
     chain = LLMFallbackChain(
         _entry(primary), [_entry(backup)], max_retries=1, retry_backoff_seconds=0.001
     )
-    chain.chat([ChatMessage(role="user", content="hi")])
+    await chain.chat([ChatMessage(role="user", content="hi")])
     snap = get_cost_tracker().snapshot()
     assert "anon:err_provider:err_provider-model" in snap
     assert snap["anon:err_provider:err_provider-model"]["errors"] >= 1
@@ -162,7 +162,7 @@ def test_chain_cost_tracker_records_errors():
     assert snap["anon:ok_provider:ok_provider-model"]["errors"] == 0
 
 
-def test_chain_does_not_apply_user_quota_to_user_configured_provider():
+async def test_chain_does_not_apply_user_quota_to_user_configured_provider():
     get_cost_tracker().reset()
     get_usage_quota_manager().configure(
         UserQuotaSettings(
@@ -178,13 +178,13 @@ def test_chain_does_not_apply_user_quota_to_user_configured_provider():
     chain = LLMFallbackChain((primary, spec), [], max_retries=0)
 
     with user_id_scope("u1"):
-        chain.chat([ChatMessage(role="user", content="hi")])
-        chain.chat([ChatMessage(role="user", content="hi")])
+        await chain.chat([ChatMessage(role="user", content="hi")])
+        await chain.chat([ChatMessage(role="user", content="hi")])
 
     assert primary._calls == 2
 
 
-def test_chain_applies_user_quota_to_server_preset_provider():
+async def test_chain_applies_user_quota_to_server_preset_provider():
     get_cost_tracker().reset()
     get_usage_quota_manager().configure(
         UserQuotaSettings(
@@ -200,29 +200,29 @@ def test_chain_applies_user_quota_to_server_preset_provider():
     chain = LLMFallbackChain((primary, spec), [], max_retries=0)
 
     with user_id_scope("u1"):
-        chain.chat([ChatMessage(role="user", content="hi")])
+        await chain.chat([ChatMessage(role="user", content="hi")])
         with pytest.raises(UserQuotaExceeded):
-            chain.chat([ChatMessage(role="user", content="hi")])
+            await chain.chat([ChatMessage(role="user", content="hi")])
 
 
 # ---------------------------------------------------------------------------
 # chat_stream 路径
 # ---------------------------------------------------------------------------
-def test_chain_stream_yields_from_primary_when_healthy():
+async def test_chain_stream_yields_from_primary_when_healthy():
     primary = _MockLLM("p")
     backup = _MockLLM("b")
     chain = LLMFallbackChain(_entry(primary), [_entry(backup)], max_retries=0)
-    chunks = list(chain.chat_stream([ChatMessage(role="user", content="hi")]))
+    chunks = [c async for c in chain.chat_stream([ChatMessage(role="user", content="hi")])]
     text = "".join(c.delta for c in chunks)
     assert "p" in text
     assert backup._calls == 0
 
 
-def test_chain_stream_falls_back_before_first_chunk():
+async def test_chain_stream_falls_back_before_first_chunk():
     primary = _MockLLM("p", fail_first=10)
     backup = _MockLLM("b")
     chain = LLMFallbackChain(_entry(primary), [_entry(backup)], max_retries=0)
-    chunks = list(chain.chat_stream([ChatMessage(role="user", content="hi")]))
+    chunks = [c async for c in chain.chat_stream([ChatMessage(role="user", content="hi")])]
     text = "".join(c.delta for c in chunks)
     assert "b" in text
 
@@ -237,7 +237,7 @@ class _ToolMockLLM(_MockLLM):
     def supports_tool_calling(self) -> bool:
         return True
 
-    def chat_with_tools(
+    async def chat_with_tools(
         self,
         messages,
         tools,
@@ -260,11 +260,11 @@ class _ToolMockLLM(_MockLLM):
         }
 
 
-def test_chain_chat_with_tools_records_cost():
+async def test_chain_chat_with_tools_records_cost():
     get_cost_tracker().reset()
     primary = _ToolMockLLM("p")
     chain = LLMFallbackChain(_entry(primary), [], max_retries=0)
-    resp = chain.chat_with_tools([], tools=[])
+    resp = await chain.chat_with_tools([], tools=[])
     assert "from p" in resp["content"]
     snap = get_cost_tracker().snapshot()
     assert "anon:p:p-model" in snap
@@ -273,14 +273,14 @@ def test_chain_chat_with_tools_records_cost():
     assert snap["anon:p:p-model"]["errors"] == 0
 
 
-def test_chain_chat_with_tools_falls_back():
+async def test_chain_chat_with_tools_falls_back():
     get_cost_tracker().reset()
     primary = _ToolMockLLM("p", fail_first=10)
     backup = _ToolMockLLM("b")
     chain = LLMFallbackChain(
         _entry(primary), [_entry(backup)], max_retries=1, retry_backoff_seconds=0.001
     )
-    resp = chain.chat_with_tools([], tools=[])
+    resp = await chain.chat_with_tools([], tools=[])
     assert "from b" in resp["content"]
     snap = get_cost_tracker().snapshot()
     assert snap["anon:p:p-model"]["errors"] >= 1
@@ -290,7 +290,7 @@ def test_chain_chat_with_tools_falls_back():
 # ---------------------------------------------------------------------------
 # CircuitBreaker 集成
 # ---------------------------------------------------------------------------
-def test_chain_skips_open_breaker_without_calling_provider():
+async def test_chain_skips_open_breaker_without_calling_provider():
     """primary 的 breaker 已经 OPEN 时, chain 应该直接跳过, 不再调用 provider."""
     from forge.llm.resilience.circuit_breaker import (
         BreakerConfig,
@@ -312,7 +312,7 @@ def test_chain_skips_open_breaker_without_calling_provider():
         breaker.record_failure()
 
     chain = LLMFallbackChain((primary, primary_spec), [(backup, backup_spec)], max_retries=0)
-    result = chain.chat([ChatMessage(role="user", content="hi")])
+    result = await chain.chat([ChatMessage(role="user", content="hi")])
     assert "from brkb" in result.content
     # primary 一次都没被调用 (breaker 跳过)
     assert primary._calls == 0
@@ -321,7 +321,7 @@ def test_chain_skips_open_breaker_without_calling_provider():
     get_breaker_registry().reset_all()
 
 
-def test_chain_records_failure_to_breaker_on_provider_error():
+async def test_chain_records_failure_to_breaker_on_provider_error():
     """provider 调用失败时, breaker 应记录失败; 累积到阈值后会 OPEN."""
     from forge.llm.resilience.circuit_breaker import (
         BreakerConfig,
@@ -343,7 +343,7 @@ def test_chain_records_failure_to_breaker_on_provider_error():
     )
     threshold = BreakerConfig().failure_threshold
     for _ in range(threshold):
-        chain.chat([ChatMessage(role="user", content="hi")])
+        await chain.chat([ChatMessage(role="user", content="hi")])
 
     breaker = get_breaker_registry().get(
         primary_spec.impl, primary_spec.api_key, primary_spec.model
@@ -352,17 +352,17 @@ def test_chain_records_failure_to_breaker_on_provider_error():
     get_breaker_registry().reset_all()
 
 
-def test_chain_chat_with_tools_skips_provider_without_support():
+async def test_chain_chat_with_tools_skips_provider_without_support():
     """主 LLM 不支持 tool calling 时, 应自动跳到下一个."""
     no_tool = _MockLLM("no_tool")
     with_tool = _ToolMockLLM("ok")
     chain = LLMFallbackChain(_entry(no_tool), [_entry(with_tool)], max_retries=0)
-    resp = chain.chat_with_tools([], tools=[])
+    resp = await chain.chat_with_tools([], tools=[])
     assert "from ok" in resp["content"]
     assert no_tool._calls == 0
 
 
-def test_rate_limit_marks_cooldown_and_switches_same_model_key(monkeypatch):
+async def test_rate_limit_marks_cooldown_and_switches_same_model_key(monkeypatch):
     """429 只触发同 provider/model 的 key 级切换。"""
 
     class _Pool:
@@ -396,14 +396,14 @@ def test_rate_limit_marks_cooldown_and_switches_same_model_key(monkeypatch):
         retry_backoff_seconds=0.001,
     )
 
-    result = chain.chat([ChatMessage(role="user", content="hi")])
+    result = await chain.chat([ChatMessage(role="user", content="hi")])
 
     assert "from b" in result.content
     assert pool.calls
     assert pool.calls[0] == ("openai", "sk-primary", 10.0)
 
 
-def test_non_rate_limit_does_not_switch_same_model_key():
+async def test_non_rate_limit_does_not_switch_same_model_key():
     """非 429 错误不切换同 provider/model 的其他 key。"""
     primary = _MockLLM("p", fail_first=100, raise_msg="timeout")
     backup = _MockLLM("b")
@@ -427,6 +427,6 @@ def test_non_rate_limit_does_not_switch_same_model_key():
     )
 
     with pytest.raises(Exception, match="timeout"):
-        chain.chat([ChatMessage(role="user", content="hi")])
+        await chain.chat([ChatMessage(role="user", content="hi")])
 
     assert backup._calls == 0

@@ -64,7 +64,7 @@ class GatewayBinding:
         messages: list[ChatMessage] | list[Message],
         *,
         tools: list[dict] | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict[str, Any] = "auto",
         temperature: float | None = None,
         max_tokens: int | None = None,
         extra_options: dict[str, Any] | None = None,
@@ -178,7 +178,7 @@ class GatewayLLMAdapter(ToolCallingLLM):
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict[str, Any] = "auto",
         extra_options: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
@@ -211,7 +211,7 @@ class GatewayLLMAdapter(ToolCallingLLM):
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict[str, Any] = "auto",
         extra_options: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         req = self._binding.make_request(

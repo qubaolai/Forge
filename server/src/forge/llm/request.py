@@ -29,7 +29,7 @@ class LLMRequest:
 
     messages: list[Any]
     tools: list[dict] | None = None
-    tool_choice: str = "auto"
+    tool_choice: str | dict[str, Any] = "auto"
 
     # ------------------------------------------------------------------
     # 选链提示

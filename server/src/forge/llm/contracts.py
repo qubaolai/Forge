@@ -20,7 +20,7 @@ class ToolCallingLLM(ABC):
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict[str, Any] = "auto",
         extra_options: dict[str, Any] | None = None,
     ) -> dict: ...
 
@@ -32,7 +32,7 @@ class ToolCallingLLM(ABC):
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict[str, Any] = "auto",
         extra_options: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]: ...
 

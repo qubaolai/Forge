@@ -116,6 +116,25 @@ class LLM(ABC):
         return False
 
     # ------------------------------------------------------------------
+    # 结构化输出: schema → 本 provider 原生参数 (子类按需 override)
+    # ------------------------------------------------------------------
+    def build_structured_options(
+        self,
+        schema: dict[str, Any],
+        *,
+        name: str = "response",
+        strict: bool = True,
+    ) -> dict[str, Any]:
+        """把 JSON Schema 翻译成本 provider 原生的"结构化输出"请求参数.
+
+        返回值会被合并进 chat.completions 调用 kwargs.
+        默认 no-op (返回空): 本 provider 无原生结构化约束, 靠
+        LLMGateway.complete_structured 的回灌重试兜底. 支持原生约束的子类
+        (如 openai 系) override 此方法.
+        """
+        return {}
+
+    # ------------------------------------------------------------------
     # chat: 非流式 (默认走 chat_stream 聚合)
     # ------------------------------------------------------------------
     async def chat(
@@ -175,7 +194,7 @@ class LLM(ABC):
         model: str,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict[str, Any] = "auto",
         extra_options: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict:
@@ -193,7 +212,7 @@ class LLM(ABC):
         model: str,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict[str, Any] = "auto",
         extra_options: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:

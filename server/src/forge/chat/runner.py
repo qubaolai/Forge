@@ -46,6 +46,23 @@ DEFAULT_MAX_STEPS = 50
 
 GuardFactory = Callable[[int], LoopGuard]
 
+# model_options 里的路由选择字段: 已用于 binding 的 preferred_provider/model,
+# 不能作为 per-call extra_options 透传给 provider SDK (provider/model 不是 SDK
+# 调用参数, 裸透传会触发 "unexpected keyword argument 'provider'")。
+_ROUTE_ONLY_OPTION_KEYS = frozenset({"provider", "model"})
+
+
+def _sdk_model_options(model_options: dict | None) -> dict | None:
+    """从 model_options 剔除路由选择字段, 只保留可透传给 SDK 的 per-call 采样参数
+    (thinking / thinking_level 等)。ctx.model_options 本身保持完整 (binding /
+    resume / context_window 仍需 provider+model)。"""
+    if not model_options:
+        return model_options
+    cleaned = {
+        k: v for k, v in model_options.items() if k not in _ROUTE_ONLY_OPTION_KEYS
+    }
+    return cleaned or None
+
 
 def _default_guard_factories(runtime: WorkspaceRuntimeSettings) -> list[GuardFactory]:
     """所有默认 guards. 每个 turn 创建一组新实例 (避免跨 turn 状态污染)."""
@@ -141,7 +158,7 @@ class ReActRunner(AgentRunner):
             assembled_user_msg,
             history=history,
             abort_event=abort_event,
-            model_options=ctx.model_options,
+            model_options=_sdk_model_options(ctx.model_options),
             lifecycle=lifecycle,
             run_ctx=run_ctx,
         ):

@@ -4,9 +4,9 @@ import {
   Brain, Database, Edit2, KeyRound, Layers, Plus, Search, Server, Trash2,
 } from 'lucide-react';
 
-import { modelsAdminApi, providerKeysApi, providersApi } from '@/api';
+import { modelChainsApi, modelsAdminApi, providerKeysApi, providersApi } from '@/api';
 import {
-  ApiError, ModelUpsert, ProviderAdmin, ProviderKey, ProviderModel,
+  ApiError, ModelChain, ModelUpsert, ProviderAdmin, ProviderKey, ProviderModel,
 } from '@/types';
 import { toast } from '@/components/common/Toast';
 import { cn } from '@/lib/utils';
@@ -17,13 +17,43 @@ import {
   modelTypeLabel, modelTypeTone,
 } from '@/components/admin/modelShared';
 
+/**
+ * 调用链影响查询:返回引用了指定模型 / 供应商的链标签列表。
+ * 用于在模型/供应商启停、删除、修改前提示「本次操作会影响 fallback 链」。
+ */
+function useChainImpact() {
+  const { data: tier } = useQuery({
+    queryKey: ['admin-model-chains', 'tier'],
+    queryFn: () => modelChainsApi.list('tier'),
+  });
+  const { data: conv } = useQuery({
+    queryKey: ['admin-model-chains', 'conversation'],
+    queryFn: () => modelChainsApi.list('conversation'),
+  });
+  const all: ModelChain[] = [...(tier ?? []), ...(conv ?? [])];
+  const label = (c: ModelChain) =>
+    c.scope === 'tier' ? `档位链 ${c.chain_key}` : `对话链 ${c.chain_key}`;
+  return {
+    forModel: (provider: string, model: string) =>
+      all.filter((c) => c.entries.some((e) => e.provider === provider && e.model === model)).map(label),
+    forProvider: (provider: string) =>
+      all.filter((c) => c.entries.some((e) => e.provider === provider)).map(label),
+  };
+}
+
+function impactClause(affected: string[]) {
+  return affected.length > 0
+    ? `当前被以下调用链引用:${affected.join('、')}。`
+    : '当前未被任何调用链引用。';
+}
+
 export default function AdminProvidersPage() {
   const [typeFilter, setTypeFilter] = useState<ModelTypeFilter>('all');
   const [providerFilter, setProviderFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<ModelStatusFilter>('all');
   const [createProviderSelection, setCreateProviderSelection] = useState('');
   const [creatingProviderName, setCreatingProviderName] = useState('');
-  const [editingModel, setEditingModel] = useState<ProviderModel | null>(null);
+  const [editingModel, setEditingModel] = useState<AdminModelItem | null>(null);
 
   const { data: providers, isLoading } = useQuery({
     queryKey: PROVIDERS_KEY,
@@ -118,7 +148,7 @@ export default function AdminProvidersPage() {
 
         {(creatingProviderName || editingModel) && (
           <ModelDialog
-            providerName={editingModel ? '' : creatingProviderName}
+            providerName={editingModel ? editingModel.providerName : creatingProviderName}
             model={editingModel}
             onClose={() => {
               setCreatingProviderName('');
@@ -172,7 +202,7 @@ function ModelInventory({
   onTypeFilterChange: (value: ModelTypeFilter) => void;
   onProviderFilterChange: (value: string) => void;
   onStatusFilterChange: (value: ModelStatusFilter) => void;
-  onEdit: (model: ProviderModel) => void;
+  onEdit: (model: AdminModelItem) => void;
 }) {
   return (
     <section className="mb-6 rounded-xl border bg-white shadow-sm">
@@ -250,6 +280,7 @@ function ModelInventory({
 
 function ModelInventoryRow({ model, onEdit }: { model: AdminModelItem; onEdit: () => void }) {
   const qc = useQueryClient();
+  const impact = useChainImpact();
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: PROVIDERS_KEY });
     qc.invalidateQueries({ queryKey: ['admin-model-bindings'] });
@@ -297,7 +328,25 @@ function ModelInventoryRow({ model, onEdit }: { model: AdminModelItem; onEdit: (
       <td className="px-4 py-3.5 text-xs text-gray-600">{configSummary(model)}</td>
       <td className="px-4 py-3.5">
         <div className="flex items-center gap-2">
-          <Switch checked={model.is_enabled} loading={toggle.isPending} onChange={(value) => toggle.mutate(value)} size="sm" />
+          <Switch
+            checked={model.is_enabled}
+            loading={toggle.isPending}
+            size="sm"
+            onChange={async (value) => {
+              const affected = impact.forModel(model.providerName, model.name);
+              const action = value ? '启用' : '停用';
+              const tail = value
+                ? '启用后引用它的调用链将重新纳入该模型。'
+                : '停用后引用它的调用链会在运行时跳过该模型(fallback 链变短)。';
+              const ok = await confirm({
+                title: `${action}模型`,
+                message: `${action}模型「${model.display_name || model.name}」会影响模型调用链。${impactClause(affected)}${tail}是否继续?`,
+                confirmLabel: action,
+                danger: !value,
+              });
+              if (ok) toggle.mutate(value);
+            }}
+          />
           <span className={cn('text-xs', model.is_enabled ? 'text-green-600' : 'text-gray-400')}>
             {model.is_enabled ? '启用' : '停用'}
           </span>
@@ -310,8 +359,14 @@ function ModelInventoryRow({ model, onEdit }: { model: AdminModelItem; onEdit: (
           </button>
           <button
             onClick={async () => {
-              if (await confirm({ message: `确定删除模型 ${model.name}?`, confirmLabel: '删除', danger: true }))
-                remove.mutate();
+              const affected = impact.forModel(model.providerName, model.name);
+              const ok = await confirm({
+                title: '删除模型',
+                message: `删除模型「${model.name}」不可恢复,且会影响模型调用链。${impactClause(affected)}删除后引用它的调用链会在运行时跳过该模型(fallback 链变短)。确定删除?`,
+                confirmLabel: '删除',
+                danger: true,
+              });
+              if (ok) remove.mutate();
             }}
             className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600"
             title="删除"
@@ -388,6 +443,7 @@ function ProviderAccessCard({
   onCreateModel: (providerName: string) => void;
 }) {
   const qc = useQueryClient();
+  const impact = useChainImpact();
   const toggle = useMutation({
     mutationFn: (enabled: boolean) => providersApi.toggle(provider.name, enabled),
     onSuccess: () => {
@@ -416,7 +472,24 @@ function ProviderAccessCard({
             </div>
           </div>
         </div>
-        <Switch checked={provider.is_enabled} loading={toggle.isPending} onChange={(value) => toggle.mutate(value)} />
+        <Switch
+          checked={provider.is_enabled}
+          loading={toggle.isPending}
+          onChange={async (value) => {
+            const affected = impact.forProvider(provider.name);
+            const action = value ? '启用' : '禁用';
+            const tail = value
+              ? '启用后其模型将重新可用于调用链。'
+              : '禁用后其全部模型在所有调用链中都会被跳过(fallback 链变短)。';
+            const ok = await confirm({
+              title: `${action}供应商`,
+              message: `${action}供应商「${provider.name}」会影响模型调用链。${impactClause(affected)}${tail}是否继续?`,
+              confirmLabel: action,
+              danger: !value,
+            });
+            if (ok) toggle.mutate(value);
+          }}
+        />
       </div>
       <div className="grid grid-cols-3 gap-2 px-4 py-3 text-xs">
         <div className="rounded-md bg-white px-3 py-2">
@@ -548,6 +621,7 @@ function ModelDialog({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
+  const impact = useChainImpact();
   const editing = !!model;
   const modelDbId = model?.id ?? '';
   const [name, setName] = useState(model?.name || '');
@@ -808,7 +882,23 @@ function ModelDialog({
           <textarea value={providerOptionsText} onChange={(e) => setProviderOptionsText(e.target.value)} rows={6} placeholder="{}" className={cn(inputCls, 'font-mono')} />
         </Field>
       </div>
-      <DialogActions onClose={onClose} onSave={() => save.mutate()} saving={save.isPending} disabled={!canSubmit || (editing && loadingDetail)} />
+      <DialogActions
+        onClose={onClose}
+        saving={save.isPending}
+        disabled={!canSubmit || (editing && loadingDetail)}
+        onSave={async () => {
+          if (editing && model) {
+            const affected = impact.forModel(providerName, model.name);
+            const ok = await confirm({
+              title: '保存模型修改',
+              message: `修改模型「${model.name}」的配置可能改变它在调用链中的可用性(能力/上下文变化可能导致被过滤)。${impactClause(affected)}是否保存?`,
+              confirmLabel: '保存',
+            });
+            if (!ok) return;
+          }
+          save.mutate();
+        }}
+      />
     </Modal>
   );
 }

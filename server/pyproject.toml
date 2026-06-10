@@ -38,6 +38,7 @@ bcrypt = "^5.0"
 
 # LLM
 openai = "^1.51"
+jsonschema = "^4.23"
 tiktoken = "^0.8"
 
 # 单机化

@@ -243,11 +243,11 @@ class LLMDispatcher:
         )
         if idx > 0:
             logger.info(
-                "LLM %s fallback 成功: 位置=%d provider=%s model=%s",
+                "LLM %s fallback 成功: 降级到 [%s:%s] (位置=%d)",
                 phase,
-                idx,
                 client.provider_name,
                 spec.model,
+                idx,
             )
 
     def _record_failure(
@@ -272,11 +272,11 @@ class LLMDispatcher:
             error=type(exc).__name__,
         )
         logger.warning(
-            "LLM %s 调用失败 (位置=%d provider=%s model=%s): %s",
+            "LLM %s 调用失败 [%s:%s] (位置=%d): %s",
             phase,
-            idx,
             client.provider_name,
             spec.model,
+            idx,
             exc,
         )
         if was_rate_limited:
@@ -401,7 +401,7 @@ class LLMDispatcher:
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict[str, Any] = "auto",
         extra_options: dict[str, Any] | None = None,
     ) -> dict:
         async def call(client: LLM, spec: LLMCallSpec) -> dict:
@@ -543,8 +543,8 @@ class LLMDispatcher:
                     first, iter_state = await _stream_first(stream)
                     if idx > 0:
                         logger.info(
-                            "LLM %s fallback 成功: 位置=%d provider=%s",
-                            phase, idx, client.provider_name,
+                            "LLM %s fallback 成功: 降级到 [%s:%s] (位置=%d)",
+                            phase, client.provider_name, spec.model, idx,
                         )
                     yield first
                     final_usage: dict | None = None
@@ -578,7 +578,10 @@ class LLMDispatcher:
                 self._breakers.record_failure((spec.impl, spec.api_key))
                 self._emit_audit(client, spec, idx, started_at=started_at, error="empty_stream")
                 blocked_key_group = _entry_group(spec)
-                logger.warning("LLM %s 位置=%d 输出为空, 切换备用", phase, idx)
+                logger.warning(
+                    "LLM %s 输出为空, 切换备用 [%s:%s] (位置=%d)",
+                    phase, client.provider_name, spec.model, idx,
+                )
             except FirstTokenTimeoutError as e:
                 # 首 Token 超时: 不重试, 直接 fallback 到下一个 entry
                 last_exc = e
@@ -587,8 +590,8 @@ class LLMDispatcher:
                 self._emit_audit(client, spec, idx, started_at=started_at, error="first_token_timeout")
                 blocked_key_group = _entry_group(spec)
                 logger.warning(
-                    "LLM %s 位置=%d 首 Token 超时 (%.1fs), 切换备用 provider=%s",
-                    phase, idx, self._timeout.first_token_timeout_s, client.provider_name,
+                    "LLM %s 首 Token 超时 (%.1fs), 切换备用 [%s:%s] (位置=%d)",
+                    phase, self._timeout.first_token_timeout_s, client.provider_name, spec.model, idx,
                 )
             except Exception as e:  # noqa: BLE001
                 last_exc = e
@@ -645,7 +648,7 @@ class LLMDispatcher:
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict[str, Any] = "auto",
         extra_options: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict]:
         def open_stream(client: LLM, spec: LLMCallSpec):

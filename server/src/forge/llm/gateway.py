@@ -14,10 +14,16 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
+
+import jsonschema
+
+from forge.core.types.message import Message
 
 from .dispatch.chain_builder import build_dispatch_chain
 from .dispatch.chain_resolver import resolve_chain
@@ -42,6 +48,30 @@ if TYPE_CHECKING:
     from .dispatch.dispatcher import LLMDispatcher
 
 logger = logging.getLogger(__name__)
+
+
+class StructuredOutputError(Exception):
+    """结构化输出在重试耗尽后仍不符合 schema."""
+
+    def __init__(self, message: str, *, last_content: str) -> None:
+        super().__init__(message)
+        self.last_content = last_content
+
+
+def _validate_structured(content: str, schema: dict[str, Any]) -> str | None:
+    """校验 content 是否为符合 schema 的合法 JSON.
+
+    合规返回 None, 否则返回错误描述 (用于回灌纠正提示).
+    """
+    try:
+        parsed = json.loads(content)
+    except (json.JSONDecodeError, ValueError) as e:
+        return f"不是合法 JSON ({e})"
+    try:
+        jsonschema.validate(instance=parsed, schema=schema)
+    except jsonschema.ValidationError as e:
+        return f"不符合 schema: {e.message}"
+    return None
 
 
 # ----------------------------------------------------------------------
@@ -158,6 +188,74 @@ class LLMGateway:
             fallback_position=dispatcher.last_fallback_position,
         )
         return await self._pipeline.run_post(req, resp)
+
+    # ------------------------------------------------------------------
+    # 结构化输出 (JSON Schema 约束 + 校验 + 回灌重试)
+    # ------------------------------------------------------------------
+    async def complete_structured(
+        self,
+        req: LLMRequest,
+        *,
+        schema: dict[str, Any],
+        name: str = "response",
+        strict: bool = True,
+        max_retries: int = 2,
+    ) -> LLMResponse:
+        """结构化输出 facade.
+
+        - 把 provider 无关的结构化意图塞进 extra_options['structured_output'],
+          由各 provider 的 build_structured_options 翻译成原生参数 (openai 系 →
+          response_format); 不支持原生约束的 provider (google/anthropic) 靠下面的
+          回灌重试兜底.
+        - 用 jsonschema 校验返回内容; 非法/不合规则把错误输出回灌并要求模型纠正后重试.
+        - 成功返回那次 LLMResponse 原样 (content 为合法 JSON 字符串, 调用方自行
+          json.loads). max_retries 次纠正后仍不合规, 抛 StructuredOutputError.
+        """
+        base_extra = dict(req.extra_options or {})
+        base_extra["structured_output"] = {
+            "schema": schema,
+            "name": name,
+            "strict": strict,
+        }
+
+        messages = list(req.messages)  # 拷贝, 不修改入参
+        last_content = ""
+        last_err = ""
+        for attempt in range(max_retries + 1):
+            # 重试轮换幂等键, 否则 dedup 中间件会短路返回上一轮错误结果
+            idem = req.idempotency_key
+            if idem and attempt > 0:
+                idem = f"{idem}:structured:{attempt}"
+            attempt_req = replace(
+                req,
+                messages=messages,
+                extra_options=base_extra,
+                idempotency_key=idem,
+            )
+            resp = await self.complete(attempt_req)
+            last_content = resp.content or ""
+            err = _validate_structured(last_content, schema)
+            if err is None:
+                return resp
+            last_err = err
+            if attempt >= max_retries:
+                break
+            # 回灌: 上一轮错误输出 (assistant) + 纠正提示 (user), 再次请求
+            messages = messages + [
+                Message(role="assistant", content=last_content),
+                Message(
+                    role="user",
+                    content=(
+                        f"你上一次的输出不符合要求: {err}. 请严格只输出符合给定 "
+                        "JSON Schema 的合法 JSON, 不要包含任何解释、Markdown 代码块"
+                        "标记或多余文字."
+                    ),
+                ),
+            ]
+        raise StructuredOutputError(
+            f"结构化输出重试 {max_retries} 次后仍不合规: {last_err}",
+            last_content=last_content,
+        )
 
     # ------------------------------------------------------------------
     # 非流式 tool calling

@@ -36,6 +36,33 @@ _GENERIC_REASONING_LEVEL_MAP: dict[str, str] = {
 
 _GENERIC_REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
 
+# Forge 内部抽象键: 这些已被各 provider 的 _build_kwargs 显式消费 (规范化后塞入 kw
+# 或转成 extra_body), 不能原样透传给 OpenAI SDK, 否则会触发 unexpected keyword.
+# 除此之外的 extra_options 字段 (response_format / seed / stop / frequency_penalty /
+# presence_penalty / logprobs / extra_body ...) 一律直接透传, 不再维护白名单.
+_INTERNAL_OPTION_KEYS = frozenset(
+    {
+        "reasoning_effort",
+        "thinking_level",
+        "thinking",
+        "thinking_budget",
+        # 结构化输出意图: 由 _build_kwargs 调 build_structured_options 翻译成
+        # response_format, 不能原样透传给 SDK.
+        "structured_output",
+    }
+)
+
+
+def _passthrough_extra_options(kw: dict[str, Any], opts: dict[str, Any]) -> None:
+    """把 extra_options 里的非内部键直接透传进 chat.completions.create 的 kwargs.
+
+    优先级: extra_options 为 per-request 覆盖, 允许覆盖前面已设的同名字段.
+    """
+    for key, value in opts.items():
+        if key in _INTERNAL_OPTION_KEYS or value is None:
+            continue
+        kw[key] = value
+
 
 def _normalize_reasoning_level(value: Any) -> str | None:
     """统一规范化思考强度文本, 兼容中英文."""
@@ -165,7 +192,34 @@ class OpenAICompatibleLLM(LLM):
             effort = _normalize_reasoning_level(opts.get("thinking_level"))
         if effort:
             kw["reasoning_effort"] = effort
+        # 结构化输出: 把 provider 无关的 structured_output 意图翻译成原生 response_format
+        structured = opts.get("structured_output")
+        if structured:
+            kw.update(
+                self.build_structured_options(
+                    structured["schema"],
+                    name=structured.get("name", "response"),
+                    strict=structured.get("strict", True),
+                )
+            )
+        # 剩余 extra_options 直接透传 (response_format 等), 仅 openai 系生效
+        _passthrough_extra_options(kw, opts)
         return kw
+
+    def build_structured_options(
+        self,
+        schema: dict[str, Any],
+        *,
+        name: str = "response",
+        strict: bool = True,
+    ) -> dict[str, Any]:
+        """OpenAI 系: 把 JSON Schema 翻译成 json_schema 强约束 response_format."""
+        return {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": name, "schema": schema, "strict": strict},
+            }
+        }
 
     # ------------------------------------------------------------------
     # chat_stream: 内容增量
@@ -234,7 +288,7 @@ class OpenAICompatibleLLM(LLM):
         max_tokens: int | None = None,
         top_p: float | None = None,
         reasoning_effort: str | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict[str, Any] = "auto",
         extra_options: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict:
@@ -281,7 +335,7 @@ class OpenAICompatibleLLM(LLM):
         max_tokens: int | None = None,
         top_p: float | None = None,
         reasoning_effort: str | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict[str, Any] = "auto",
         extra_options: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
@@ -464,7 +518,7 @@ class DeepSeekLLM(OpenAICompatibleLLM):
         top_p: float | None = None,
         reasoning_effort: str | None = None,
         thinking: bool | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict[str, Any] = "auto",
         extra_options: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
@@ -610,7 +664,7 @@ class XiaoMiMIMOLLM(OpenAICompatibleLLM):
         temperature: float | None = None,
         max_tokens: int | None = None,
         top_p: float | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict[str, Any] = "auto",
         extra_options: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:

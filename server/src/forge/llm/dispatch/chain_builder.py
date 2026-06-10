@@ -52,12 +52,17 @@ async def build_dispatch_chain(
         raise ValueError("LLM 调用链构建失败, 没有可用 provider/model")
 
     primary_client, primary_spec = entries[0]
-    model_count = len({(s.provider_name or s.impl, s.model) for _, s in entries})
+    # 去重保序的模型链 (provider:model),用于打印「当前链的情况」
+    ordered_models: list[str] = []
+    for _, s in entries:
+        tag = f"{s.provider_name or s.impl}:{s.model}"
+        if tag not in ordered_models:
+            ordered_models.append(tag)
     logger.info(
-        "LLM 选型完成: 主=%s:%s 模型数=%d 总候选(含key)=%d",
-        primary_spec.provider_name or primary_spec.impl,
-        primary_spec.model,
-        model_count,
+        "LLM 调用链构建完成: 主=[%s] 链=[%s] 模型数=%d 总候选(含key)=%d",
+        ordered_models[0],
+        " → ".join(ordered_models),
+        len(ordered_models),
         len(entries),
     )
     return LLMDispatcher(
