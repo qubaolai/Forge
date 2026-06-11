@@ -19,7 +19,6 @@ from forge.infrastructure.storage.content_store import (
     ContentSlice,
     ContentStore,
     DbMessageContentStore,
-    RunStoreContentStore,
 )
 from forge.infrastructure.storage.data_protocols import (
     AuditStore,
@@ -54,5 +53,4 @@ __all__ = [
     "ContentStore",
     "ContentSlice",
     "DbMessageContentStore",
-    "RunStoreContentStore",
 ]

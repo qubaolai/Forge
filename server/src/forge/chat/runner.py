@@ -8,7 +8,7 @@ ReActRunner 的职责:
     3. 累计 RunResult 给 Finalizer 用
 
 未来加入 plan_exec / workflow mode 时, 通过 ReActRunner.from_profile 装配
-不同的 lifecycle 数组 (Plan Mode / 持久化 / Workflow gate), 无需新 Runner 类.
+不同的 lifecycle 数组即可扩展行为, 无需新 Runner 类.
 """
 
 from __future__ import annotations
@@ -34,10 +34,10 @@ from forge.config.domains.agent_profiles import AgentProfile
 from forge.core.types.message import Message
 from forge.tools.base import Tool
 from forge.tools.registry import ToolRegistry
-from forge.workspace.runtime import (
-    WorkspaceRuntimeSettings,
-    resolve_runtime_settings,
-)
+# WallClockGuard 默认时限 (秒): 软提醒 / 警告 / 硬停
+_WALL_CLOCK_SOFT_LIMIT_SEC = 120.0
+_WALL_CLOCK_WARN_LIMIT_SEC = 180.0
+_WALL_CLOCK_HARD_LIMIT_SEC = 240.0
 
 logger = logging.getLogger(__name__)
 
@@ -64,16 +64,16 @@ def _sdk_model_options(model_options: dict | None) -> dict | None:
     return cleaned or None
 
 
-def _default_guard_factories(runtime: WorkspaceRuntimeSettings) -> list[GuardFactory]:
+def _default_guard_factories() -> list[GuardFactory]:
     """所有默认 guards. 每个 turn 创建一组新实例 (避免跨 turn 状态污染)."""
     return [
         lambda max_steps: StepSafetyNet(),
         lambda max_steps: StuckDetector(),
         lambda max_steps: TokenBudgetGuard(),
         lambda max_steps: WallClockGuard(
-            soft_limit_sec=runtime.wall_clock_soft_limit_sec,
-            warn_limit_sec=runtime.wall_clock_warn_limit_sec,
-            hard_limit_sec=runtime.wall_clock_hard_limit_sec,
+            soft_limit_sec=_WALL_CLOCK_SOFT_LIMIT_SEC,
+            warn_limit_sec=_WALL_CLOCK_WARN_LIMIT_SEC,
+            hard_limit_sec=_WALL_CLOCK_HARD_LIMIT_SEC,
         ),
     ]
 
@@ -123,7 +123,7 @@ class ReActRunner(AgentRunner):
     ) -> AsyncIterator[AgentEvent]:
         """跑 ReAct stream, 透传事件, 同时累计 RunResult."""
         # 装配 lifecycle: GuardLifecycleAdapter 一定有; extra_lifecycles 由
-        # 上层 (后续 Profile 体系) 追加 Plan Mode / 持久化 / Workflow 等.
+        # 上层按需追加 (当前 chat 路径无额外 lifecycle).
         guards: list[LoopGuard] = [
             factory(self._max_steps) for factory in self._build_guard_factories()
         ]
@@ -132,7 +132,7 @@ class ReActRunner(AgentRunner):
         lifecycle = MultiLifecycle(lifecycles)
 
         run_ctx = RunContext(
-            run_id=None,  # chat 路径不通过 RunStore, 此处保持 None
+            run_id=None,  # chat 路径无 run 概念, 此处保持 None
             mode=ctx.agent_mode,
             user_id=ctx.user_id,
             session_id=ctx.session_id,
@@ -190,8 +190,7 @@ class ReActRunner(AgentRunner):
     def _build_guard_factories(self) -> list[GuardFactory]:
         if self._guard_factories is not None:
             return self._guard_factories
-        runtime = resolve_runtime_settings()
-        return _default_guard_factories(runtime)
+        return _default_guard_factories()
 
     # ------------------------------------------------------------------
     # Profile 驱动的工厂方法 (mode 路由的唯一入口)
@@ -210,7 +209,7 @@ class ReActRunner(AgentRunner):
 
         - tools_allowed → 从 ToolRegistry 过滤实际 Tool 实例
         - max_steps → 兜底上限
-        - extra_lifecycles → 调用方按需追加 Plan Mode / 持久化 / Workflow 等
+        - extra_lifecycles → 调用方按需追加自定义 lifecycle
           (阶段 5/6/7 会在 Runner 外部装配, 这里不内置)
         """
         tools = tuple(

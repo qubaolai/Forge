@@ -28,7 +28,7 @@ from forge.observability.tracing.tracer import span
 
 logger = logging.getLogger(__name__)
 
-# 当前 chat 路径固定使用 chat profile；任务模式走 /v1/runs。
+# 当前服务端只保留 Web Chat 路径, 固定使用 chat profile。
 _DEFAULT_MODE = "chat"
 _DEFAULT_CONTEXT_WINDOW = DEFAULT_CONTEXT_WINDOW
 

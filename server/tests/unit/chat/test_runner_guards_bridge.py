@@ -18,7 +18,6 @@ from forge.chat.guards.base import Guidance
 from forge.chat.guards.lifecycle_adapter import GuardLifecycleAdapter
 from forge.chat.guards.wall_clock import WallClockGuard
 from forge.chat.runner import ReActRunner
-from forge.workspace.runtime import WorkspaceRuntimeSettings
 
 
 class _Pass:
@@ -96,20 +95,17 @@ async def test_crash_isolated() -> None:
     assert decision.force_text_only is False
 
 
-def test_default_guards_read_workspace_wall_clock(monkeypatch) -> None:
-    """Runner._build_guard_factories 应从 workspace settings 读 wall_clock 配置."""
-    monkeypatch.setattr(
-        "forge.chat.runner.resolve_runtime_settings",
-        lambda: WorkspaceRuntimeSettings(
-            chat_timeout_seconds=300,
-            wall_clock_soft_limit_sec=11,
-            wall_clock_warn_limit_sec=22,
-            wall_clock_hard_limit_sec=33,
-        ),
+def test_default_guards_use_builtin_wall_clock_limits() -> None:
+    """Runner._build_guard_factories 用内置 wall_clock 默认时限构造守护."""
+    from forge.chat.runner import (
+        _WALL_CLOCK_HARD_LIMIT_SEC,
+        _WALL_CLOCK_SOFT_LIMIT_SEC,
+        _WALL_CLOCK_WARN_LIMIT_SEC,
     )
+
     runner = ReActRunner(llm_chain=object(), system_prompt="")
     guards = [factory(50) for factory in runner._build_guard_factories()]
     wall = [g for g in guards if isinstance(g, WallClockGuard)][0]
-    assert wall._soft == 11
-    assert wall._warn == 22
-    assert wall._hard == 33
+    assert wall._soft == _WALL_CLOCK_SOFT_LIMIT_SEC
+    assert wall._warn == _WALL_CLOCK_WARN_LIMIT_SEC
+    assert wall._hard == _WALL_CLOCK_HARD_LIMIT_SEC

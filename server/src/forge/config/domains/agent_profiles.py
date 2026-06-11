@@ -6,16 +6,11 @@
 字段语义:
     description:           人类可读说明 (列模式时展示用)
     system_prompt_template: prompts/{name}.j2 路径 (不含 .j2)
-    tools_allowed:          全集 (用户批准后 Exec 阶段可见)
-    readonly_tools:         plan_mode_initial=True 时 Plan 阶段可见的子集
-    sub_agents_allowed:     spawn_subagent 时允许派发的 role 白名单
-    plan_mode_initial:      初始进入 Plan Mode (lifecycle 切 readonly_tools)
+    tools_allowed:          该模式可见的工具白名单
     max_steps:              ReAct 兜底上限
     guards:                 启用的 LoopGuard 名 (默认全开)
-    persistence:            chat_db (chat 走 DB) / run_store (CLI 走 JSONL) / none
-    requires_template:      workflow 模式必填 body.workflow_template
+    persistence:            chat_db (chat 走 DB) / none
     model_profile:          fast / smart / strong, 解析到 model_profiles 字典
-    large_artifact_threshold_bytes: 工具结果超过此值落 artifact 回灌占位
 """
 
 from __future__ import annotations
@@ -43,15 +38,10 @@ class AgentProfile(BaseModel):
     description: str = ""
     system_prompt_template: str
     tools_allowed: list[str] = Field(default_factory=list)
-    readonly_tools: list[str] = Field(default_factory=list)
-    sub_agents_allowed: list[str] = Field(default_factory=list)
-    plan_mode_initial: bool = False
     max_steps: int = Field(default=50, ge=1)
     guards: list[str] = Field(default_factory=list)
-    persistence: Literal["chat_db", "run_store", "none"] = "chat_db"
-    requires_template: bool = False
+    persistence: Literal["chat_db", "none"] = "chat_db"
     model_profile: Literal["fast", "smart", "strong"] = "smart"
-    large_artifact_threshold_bytes: int = Field(default=8192, ge=0)
 
 
 class AgentProfilesConfig(BaseModel):

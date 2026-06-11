@@ -17,7 +17,7 @@
         - 想强制 RAG 必须可用, 设环境变量 STRICT_RAG=true.
 
     任何 RAG 组件初始化失败时, app.state.<name> 不会被设置;
-    业务侧通过 app.state.rag_runtime / kb_service 判断可用性.
+    业务侧通过 app.state.rag_runtime 判断可用性.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import inspect
 import logging
 import os
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
 from forge.config.settings import get_settings
@@ -72,8 +72,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.exception("PromptRegistry 初始化失败, render() 将走兜底文本")
 
     # 0.2 AgentProfile 加载 + 启动校验 (硬性: 任一项不通过 -> 阻止启动)
-    #     依赖 ToolRegistry / AGENT_ROLES / PromptRegistry 都已就绪.
-    import forge.agents.roles  # noqa: F401  确保 AGENT_ROLES 加载
+    #     依赖 ToolRegistry / PromptRegistry 都已就绪.
     import forge.tools  # noqa: F401  触发 builtin 工具注册
     from forge.agents.profiles import load_profiles_at_startup
 
@@ -289,25 +288,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 4. RAG 组件 (软: 失败跳过, 除非 STRICT_RAG=true)
     await _setup_rag_components(app, settings, model_cache)
 
-    # 5. N17: 清理 stale forge worktree (软: 失败仅 WARN)
-    try:
-        _cleanup_stale_worktrees()
-    except Exception:  # noqa: BLE001
-        logger.exception("stale worktree 清理失败, 已忽略")
-
-    # 6. HITL DecisionRegistry 后台清理 (软: 失败仅日志, 决策路径仍可用)
-    import asyncio as _asyncio_lifespan
-
-    from forge.agents.hitl import get_decision_registry
-
-    decision_registry = get_decision_registry()
-    decision_cleanup_task = _asyncio_lifespan.create_task(
-        decision_registry.cleanup_loop(),
-        name="hitl-decision-cleanup",
-    )
-    app.state.decision_cleanup_task = decision_cleanup_task
-
-    # 7. ChatTurnSupervisor 后台清理与进程关闭收尾
+    # 5. ChatTurnSupervisor 后台清理与进程关闭收尾
     from forge.chat.supervisor import get_chat_supervisor
 
     chat_supervisor = get_chat_supervisor()
@@ -321,21 +302,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         # ---------- 关闭 ----------
         logger.info("服务关闭中...")
-
-        # HITL 清理 task 收尾
-        try:
-            decision_cleanup_task.cancel()
-            with suppress(_asyncio_lifespan.CancelledError, Exception):
-                await decision_cleanup_task
-        except Exception:  # noqa: BLE001
-            logger.exception("HITL cleanup task 取消失败")
-
-        # RunSupervisor 收尾: 取消所有未完成的 CLI run task
-        try:
-            from forge.agents.run_supervisor import get_run_supervisor
-            await get_run_supervisor().shutdown()
-        except Exception:  # noqa: BLE001
-            logger.exception("RunSupervisor 关闭失败")
 
         # ChatTurnSupervisor 收尾: 通知仍在生成的对话中断并落库
         try:
@@ -436,44 +402,6 @@ async def _setup_llm_gateway_runtime(settings, redis_client) -> None:
         logger.info("Redis 不可用: LLM 精确缓存 / 幂等存储保持进程内 (单机模式)")
 
 
-def _cleanup_stale_worktrees(*, ttl_seconds: int = 24 * 3600) -> None:
-    """启动时清理上一轮 forge worktree 残留。
-
-    GitWorktreeStrategy 在 ``/tmp/forge-{run_id[:8]}-{task_id}-xxxx`` 创建临时
-    worktree。若服务被强杀，``finally`` 没机会跑，会留下：
-    - ``/tmp/forge-*`` 孤儿目录
-    - ``workspace/.git/worktrees/forge-*`` 元数据残留（下次 add 同名会冲突）
-
-    这里只做"超过 TTL 的孤儿目录"清理（默认 24h），避免误删正在进行的 run。
-    ``workspace/.git/worktrees/`` 的孤儿元数据由 ``git worktree prune`` 处理，
-    需要知道 workspace 路径，因此这一步留给 prepare() 在 add 失败时按需触发。
-    """
-    import shutil
-    import tempfile
-    import time
-    from pathlib import Path
-
-    tmp_dir = Path(tempfile.gettempdir())
-    if not tmp_dir.exists():
-        return
-
-    now = time.time()
-    removed = 0
-    for entry in tmp_dir.glob("forge-*"):
-        try:
-            if not entry.is_dir():
-                continue
-            age = now - entry.stat().st_mtime
-            if age < ttl_seconds:
-                continue
-            shutil.rmtree(entry, ignore_errors=True)
-            removed += 1
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("跳过 worktree 残留清理 path=%s err=%s", entry, exc)
-    if removed:
-        logger.info("已清理 stale worktree 数量=%d ttl_h=%.1f", removed, ttl_seconds / 3600)
-
-
 async def _setup_rag_components(app, settings, model_cache=None) -> None:
     """装配 RAG 栈 (tokenizer / embedder / vector_store / bm25 / retriever).
 
@@ -535,43 +463,6 @@ async def _setup_rag_components(app, settings, model_cache=None) -> None:
         logger.info("RAG runtime 就绪，Embedding/Reranker 将从 DB 系统绑定解析")
     except Exception as e:  # noqa: BLE001
         _fail("rag_runtime", e)
-
-    # 4d. 文件存储 + KbIngestService + KbService
-    # 上传 API 需要这三个组件; 任一缺失则 KB 路由不可用 (路由内会报错).
-    try:
-        if rag_runtime is None or bm25_store is None:
-            raise RuntimeError("KB ingest 需要 rag_runtime / bm25_store 就绪")
-
-        from pathlib import Path
-
-        from forge.api.services.kb_ingest_service import KbIngestService
-        from forge.api.services.kb_service import KbService
-        from forge.infrastructure.storage.local_fs import LocalFileStorage
-        from forge.retrieval.chunkers import ChunkConfig
-        from forge.retrieval.parsers.dispatcher import default_dispatcher
-
-        upload_dir = Path(getattr(settings.ingest, "documents_path", None) or "data/documents")
-        file_storage = LocalFileStorage(upload_dir / "uploads")
-        chunk_cfg = ChunkConfig(
-            child_target_chars=settings.ingest.chunking.chunk_size,
-            child_overlap_chars=settings.ingest.chunking.chunk_overlap,
-        )
-        ingest_service = KbIngestService(
-            bm25_store=bm25_store,
-            rag_runtime=rag_runtime,
-            parser_dispatcher=default_dispatcher(),
-            chunk_config=chunk_cfg,
-        )
-        kb_service = KbService(
-            file_storage=file_storage,
-            kb_ingest_service=ingest_service,
-        )
-        app.state.file_storage = file_storage
-        app.state.kb_ingest_service = ingest_service
-        app.state.kb_service = kb_service
-        logger.info("KB 服务就绪: storage=%s", upload_dir / "uploads")
-    except Exception as e:  # noqa: BLE001
-        _fail("kb_service", e)
 
     if failures:
         # 完整 traceback 已经在 _fail() 里 logger.exception 打印过

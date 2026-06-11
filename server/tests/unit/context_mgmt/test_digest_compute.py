@@ -7,7 +7,6 @@ from forge.context_mgmt.digest.prose_skeleton import build_prose_segments
 from forge.context_mgmt.digest.segmenter import split_prose_sections, split_segments
 from forge.infrastructure.storage.content_store import (
     parse_ref,
-    payload_to_text,
     slice_text,
 )
 
@@ -98,13 +97,12 @@ def test_code_skeleton_builds_segment_with_anchor():
 
 
 # ---------------------------------------------------------------------------
-# content_store: parse_ref / slice_text / payload_to_text
+# content_store: parse_ref / slice_text
 # ---------------------------------------------------------------------------
 def test_parse_ref_variants():
     assert parse_ref("[ref:msg:abc]") == ("msg", "abc")
     assert parse_ref("ref:msg:abc") == ("msg", "abc")
     assert parse_ref("msg:abc") == ("msg", "abc")
-    assert parse_ref("art:x1") == ("art", "x1")
     assert parse_ref("garbage") == ("", "")
     assert parse_ref("doc:zzz") == ("", "")  # 不支持的 kind
 
@@ -133,13 +131,6 @@ def test_slice_text_clamps_out_of_range():
     assert sl.text == "b\nc"
     assert sl.returned_range == (2, 3)
     assert sl.truncated is True
-
-
-def test_payload_to_text_handles_shapes():
-    assert payload_to_text("hello") == "hello"
-    assert payload_to_text({"content": "X"}) == "X"
-    # 无 content 键 -> JSON 序列化
-    assert "\"k\"" in payload_to_text({"k": 1}) or "k" in payload_to_text({"k": 1})
 
 
 # ---------------------------------------------------------------------------

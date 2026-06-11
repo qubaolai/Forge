@@ -1,27 +1,23 @@
 """ContentStore: 统一的「会话内容真相源」只读 + 带 range 切片抽象.
 
-定位 (与 MessageStore / RunStore 的分工):
+定位 (与 MessageStore 的分工):
     - ContentStore 不是第二套消息存储, 而是「ref 解析 + 带 line_range 切片」的薄封装,
-      复用 ChatMessageRepository / RunStore 的既有读路径。
-    - 真相源全文不迁移: chat 在 chat_messages.content, CLI 在 RunStore artifact.payload。
-    - 让上下文里的引用占位 ([ref:msg:<id>] / [ref:art:<id>]) 能被工具按需切片回读 (paging)。
+      复用 ChatMessageRepository 的既有读路径。
+    - 真相源全文不迁移: chat 在 chat_messages.content。
+    - 让上下文里的引用占位 ([ref:msg:<id>]) 能被工具按需切片回读 (paging)。
 
 ref 格式:
     - chat: "msg:<message_id>"  -> DbMessageContentStore
-    - CLI:  "art:<artifact_id>" -> RunStoreContentStore
 """
 
 from __future__ import annotations
 
-import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-    from forge.infrastructure.run_store import RunStore
 
 
 @dataclass(frozen=True)
@@ -41,7 +37,7 @@ class ContentSlice:
 
 
 def parse_ref(ref: str) -> tuple[str, str]:
-    """解析统一引用. 返回 (kind, id); kind ∈ {"msg","art"}。
+    """解析统一引用. 返回 (kind, id); kind ∈ {"msg"}。
 
     兼容裸 "[ref:msg:xxx]" 包裹形式与 "msg:xxx" 纯形式。
     无法解析时返回 ("", "")。
@@ -54,7 +50,7 @@ def parse_ref(ref: str) -> tuple[str, str]:
     kind, _, ident = s.partition(":")
     kind = kind.strip()
     ident = ident.strip()
-    if kind in ("msg", "art") and ident:
+    if kind == "msg" and ident:
         return kind, ident
     return "", ""
 
@@ -90,21 +86,6 @@ def slice_text(
         text=chunk, total_lines=total,
         returned_range=(start, end), truncated=truncated,
     )
-
-
-def payload_to_text(payload: Any) -> str:
-    """把 artifact.payload 归一化为文本.
-
-    约定优先取 payload["content"]; 否则字符串原样; 其余 JSON 序列化。
-    """
-    if isinstance(payload, str):
-        return payload
-    if isinstance(payload, dict):
-        content = payload.get("content")
-        if isinstance(content, str):
-            return content
-        return json.dumps(payload, ensure_ascii=False, indent=2)
-    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
 
 class ContentStore(ABC):
@@ -183,46 +164,10 @@ class DbMessageContentStore(ContentStore):
         return (await self._load_content(ident, owner_user_id=owner_user_id)) is not None
 
 
-class RunStoreContentStore(ContentStore):
-    """CLI 后端: 真相源 = RunStore artifact.payload."""
-
-    def __init__(self, run_store: RunStore, *, run_id: str | None = None) -> None:
-        self._store = run_store
-        self._run_id = run_id
-
-    async def _load_text(self, artifact_id: str) -> str | None:
-        if self._run_id:
-            item = await self._store.load_artifact(self._run_id, artifact_id)
-        else:
-            item = await self._store.find_artifact(artifact_id)
-        if item is None:
-            return None
-        return payload_to_text(item.payload)
-
-    async def get(
-        self, ref: str, line_range: tuple[int, int] | None = None
-    ) -> ContentSlice | None:
-        kind, ident = parse_ref(ref)
-        if kind != "art":
-            return None
-        text = await self._load_text(ident)
-        if text is None:
-            return None
-        return slice_text(text, line_range)
-
-    async def exists(self, ref: str) -> bool:
-        kind, ident = parse_ref(ref)
-        if kind != "art":
-            return False
-        return (await self._load_text(ident)) is not None
-
-
 __all__ = [
     "ContentSlice",
     "ContentStore",
     "DbMessageContentStore",
-    "RunStoreContentStore",
     "parse_ref",
     "slice_text",
-    "payload_to_text",
 ]

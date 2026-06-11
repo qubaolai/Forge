@@ -81,10 +81,7 @@ class ModelOptionsIn(BaseModel):
 
 
 class ChatCompletionIn(BaseModel):
-    """聊天对话请求 — 纯对话模式，不包含任务执行。
-
-    任务执行请走 POST /api/v1/runs。
-    """
+    """聊天对话请求 — 纯 Web 对话模式。"""
 
     session_id: str | None = None
     message: str = Field(min_length=1)

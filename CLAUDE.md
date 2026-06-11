@@ -8,20 +8,20 @@
 Forge 的核心目标是：
 
 - 输入自然语言目标；
-- 经由规划、执行、工具调用、（CLI 端）合并验证等步骤；
-- 产出可落地的结构化成果（对话回复、代码补丁、报告、事件流、运行产物）。
+- 经由规划、执行、工具调用等步骤；
+- 产出可落地的结构化成果（对话回复、报告、事件流）。
 
 当前架构的**核心判断**：
 
 > 以**单一 `ReActAgent` 内核**承载所有智能体执行，以**可组合的 `AgentLifecycle`** 作为唯一扩展机制；
-> 所有模式（mode）差异——chat / plan_exec / workflow——都被**外置为 lifecycle 组合**，绝不在 `ReActAgent` 内部写 `if mode == ...` 分支。
+> 所有模式（mode）差异都被**外置为 lifecycle 组合**，绝不在 `ReActAgent` 内部写 `if mode == ...` 分支。
 
-基于这一内核，后端并存**两条执行路径**：
+基于这一内核，服务端的职责边界：
 
-- **Chat 路径（Web 端）**：`/api/v1/chat/*`，`TurnOrchestrator` + `ChatTurnRun`（背景 asyncio.Task），落 `chat_messages` 数据库。
-- **CLI 路径（plan_exec / workflow）**：`/api/v1/runs*` + `/api/v1/decisions*` + `/api/v1/artifacts*`，`RunOrchestrator` + `RunStore`（JSONL），支持 Plan/Workflow 的人机交互（HITL）。
+- **Chat 路径（Web 端，唯一智能体执行路径）**：`/api/v1/chat/*`，`TurnOrchestrator` + `ChatTurnRun`（背景 asyncio.Task），落 `chat_messages` 数据库。
+- **对外 LLM 网关端点（供 CLI / 第三方客户端直连）**：`/api/v1/llm/chat/completions`，X-API-Key 鉴权，OpenAI 兼容格式，配额/预算/限流/缓存/审计由 LLMGateway 中间件按 user 自动生效。
 
-> ⚠️ 重要变更：旧 **Adaptive 路径**（`adaptive/` 的 DAG / Validator / Wave 调度、git worktree 隔离、`AdaptiveRun` 状态机）**已整体删除**。其有用能力下沉为「普通工具 + 通用 RunStore + lifecycle」。本文与历史 Adaptive 描述不一致时，以本文为准。
+> ⚠️ 重要变更（2026-06）：旧 **CLI 执行路径**（`/v1/runs` + `/v1/decisions` + `/v1/artifacts`、`RunOrchestrator`/`RunSupervisor`/`RunStore`、`PlanModeLifecycle`/`WorkflowLifecycle`/`RunStorePersistenceLifecycle`、HITL `DecisionRegistry`）**已整体删除**。未来 CLI 形态为**胖客户端**：agent loop 在用户本机运行、工具直接操作本地文件、人机交互走本地终端；服务端仅提供认证 + 模型治理 + 网关化 LLM 调用。更早的 Adaptive 路径（DAG/Validator/Wave 调度）同样早已删除。本文与历史描述不一致时，以本文为准。
 
 ---
 
@@ -38,8 +38,8 @@ Forge/
 关键观察：
 
 - `server/` 是当前唯一完整可运行的业务核心。
-- `web/` 已具备完整路由与对话能力，聊天链路成熟；管理/运行可视化部分仍在补齐。
-- 顶层 `cli/` 目录已不存在；「CLI 端」指通过 `/v1/runs` API 驱动的任务执行客户端形态（plan_exec / workflow），后端能力已落地。
+- `web/` 已具备完整路由与对话能力，聊天链路成熟；管理可视化部分仍在补齐。
+- 「CLI 客户端」尚未存在；落地时应以共享 `forge.agents` 内核包 + 本地 lifecycle 装配 + `/v1/llm/chat/completions` 直连的形态实现。
 
 ---
 
@@ -48,14 +48,14 @@ Forge/
 ### 3.1 分层结构
 
 - `api/`：FastAPI 路由、依赖注入、中间件、请求/响应 schema、`lifespan` 装配。
-- `agents/`：**Agent 内核与扩展机制**——`ReActAgent`、`AgentLifecycle` 协议与组合器、Plan/Workflow/Persistence lifecycle、HITL、agent_profiles、角色、CLI 编排（`RunOrchestrator` / `RunSupervisor`）。
+- `agents/`：**Agent 内核与扩展机制**——`ReActAgent`、`AgentLifecycle` 协议与组合器、agent_profiles、角色（子 agent）。
 - `chat/`：**Chat 回合编排**——准备上下文、上下文压缩、执行 Runner、收尾入库、SSE 事件溯源（`ChatTurnRun` / `Broadcaster` / `ChatEventStore`）、LoopGuard 守护。
 - `llm/`：`LLMGateway`、路由/调度链、Provider 注册与客户端池、中间件流水线。
 - `tools/`：工具基类、注册中心、工具执行与 guardrail。
 - `context/` + `context_mgmt/`：双层上下文构建系统（兼容层 + 新内核）。
 - `memory/`：会话摘要与长期记忆（事件驱动写路径）。
 - `retrieval/`：RAG 解析/切分/向量化/检索。
-- `infrastructure/`：数据库、缓存、队列、事件总线、JSONL、`RunStore`、文件存储。
+- `infrastructure/`：数据库、缓存、队列、事件总线、JSONL、文件存储。
 - `config/`：配置加载与域模型（`sys_config.*.yaml` 映射，含 `agent_profiles`）。
 - `observability/`：日志、追踪、指标。
 
@@ -66,19 +66,19 @@ Forge/
 - 创建 FastAPI 应用，注册 CORS、`ClientTypeMiddleware`、Tracing、ErrorHandler。
 - 挂载 `api_router` 到 `/api`，业务前缀为 `/api/v1/*`。
 
-启动装配：`server/src/forge/api/lifespan.py:42` `lifespan()`，装配顺序（即组件依赖图）：
+启动装配：`server/src/forge/api/lifespan.py` `lifespan()`，装配顺序（即组件依赖图）：
 
 ```
 Logging/Tracing → PromptRegistry → ToolRegistry + AGENT_ROLES
-  → load_profiles_at_startup（依赖前三者就绪，7 项强校验，不过则拒绝启动）
-  → Database → TaskQueue → EventBus + memory hooks → Redis + ModelConfigCache
-  → LLMGateway → RAG 组件 → DecisionRegistry.cleanup_loop → ChatTurnSupervisor.cleanup
+  → load_profiles_at_startup（依赖前三者就绪，5 项强校验，不过则拒绝启动）
+  → Database → TaskQueue → EventBus + memory/digest/recall hooks
+  → Redis + ModelConfigCache → LLMGateway → RAG 组件 → ChatTurnSupervisor.cleanup
 ```
 
 配置入口：`server/src/forge/config/settings.py`
 
 - 配置优先级：`init_settings(path)` > `APP_CONFIG` > `APP_ENV` > 默认配置路径。
-- `agent_profiles` 段定义所有 agent_mode 的工具白名单、模型档位、Plan/Workflow 开关与持久化目标。
+- `agent_profiles` 段定义所有 agent_mode 的工具白名单、模型档位与持久化目标（当前仅 `chat`）。
 
 ### 3.3 API 功能域总览（v1）
 
@@ -92,9 +92,7 @@ Logging/Tracing → PromptRegistry → ToolRegistry + AGENT_ROLES
 - **API Key 管理**：`/api-keys`
 - **聊天会话**：`/sessions`、`/sessions/{id}/messages`
 - **流式对话（Chat 路径）**：`/chat/completions`、`/chat/resume`、`/chat/stop`、`/chat/regenerate`、`/chat/quota`
-- **任务运行（CLI 路径）**：`/runs`（创建/列表/查询）、`/runs/{id}/events`（SSE cursor 轮询）、`/runs/{id}/abort`
-- **人机决策（HITL）**：`/decisions/{token}`（Plan 批准 / workflow_gate 通用入口）
-- **运行产物**：`/artifacts`、`/artifacts/{id}`
+- **对外 LLM 网关**：`/llm/chat/completions`（X-API-Key 鉴权，OpenAI 兼容，供 CLI/第三方直连）
 - **知识库（KB）**：`/kb`、`/kb/{id}/documents`
 - **模型与供应商治理**：`/models`、`/providers`、`/admin/*`
 - **工具清单**：`/tools`
@@ -102,15 +100,13 @@ Logging/Tracing → PromptRegistry → ToolRegistry + AGENT_ROLES
 说明：
 
 - `documents.py`、`retrieval.py`、`feedback.py` 路由文件存在但未在 `router.py` 挂载（占位/未启用）。
-- HITL 决策统一走 `POST /v1/decisions/{token}`，旧 `/runs/{id}/decide` 已废弃。
 
 ### 3.4 功能分层调用链
 
 典型链路：
 
 - **Chat**：`/chat/completions` → `TurnOrchestrator.start_turn` → 建 `ChatTurnRun` + 背景 task（`_execute_new_turn`）→ `ContextAssembler` 组装/压缩 → `ReActRunner.from_profile` 跑 `ReActAgent.stream` → `TurnFinalizer` 落 DB。SSE 由路由订阅 `run.subscribe()`。
-- **CLI runs**：`/runs` → `RunStore.create_run`（落档案）→ `RunOrchestrator` → `get_run_supervisor().register`（启背景 task）→ `RunOrchestrator._execute` 跑 `ReActAgent.stream`（装配 Guards + PlanMode/Workflow + Persistence lifecycle）。事件经 lifecycle 落 `events.jsonl`，客户端 `/runs/{id}/events` cursor 轮询。
-- **HITL**：Plan/Workflow lifecycle 在 `before_tool_call` 创建 `PendingDecision` 并阻塞 → 客户端 `POST /v1/decisions/{token}` → `DecisionRegistry.resolve` 唤醒主 agent。
+- **对外 LLM 直连**：`/llm/chat/completions` → `ApiKeyUser` 鉴权 → 构造 `LLMRequest`（model 三形态：空=默认链 / `fast|smart|strong`=档位链 / `provider:model`=显式 pin）→ `LLMGateway.complete*/stream*` → OpenAI 风格 JSON / SSE chunk。
 - **KB 上传**：`/kb/{id}/documents` → `KbService.upload_document` → `KbIngestService.ingest`（Saga：parsing→chunking→embedding→persist→indexed）。
 - **模型治理**：`/models` → `AdminModelService` → Provider/Model Repo → `ModelConfigCache` + EventBus。
 
@@ -120,7 +116,7 @@ Logging/Tracing → PromptRegistry → ToolRegistry + AGENT_ROLES
 
 - **关系库（MySQL/SQLite）**：核心业务元数据（用户/鉴权/会话消息/KB/模型治理/摘要）。
 - **Redis（可选默认接入）**：模型配置缓存、限流、幂等与精确缓存。
-- **本地文件系统**：上传文档与 CLI 运行态文件。
+- **本地文件系统**：上传文档与 chat 运行态事件。
 - **向量库 + BM25 库**：知识检索索引。
 
 关系库核心表（ORM）：
@@ -130,21 +126,21 @@ Logging/Tracing → PromptRegistry → ToolRegistry + AGENT_ROLES
 - 知识库域：`knowledge_bases`、`kb_documents`、`kb_document_chunks`
 - 模型治理域：`providers`、`provider_keys`、`models`
 
-运行态存储分两类（均不入关系库）：
+运行态存储（不入关系库）：
 
 - **Chat turn 事件**：`chat_runs/<message_id>/`（`events.jsonl` + `state.json`），见 `chat/event_store.py`；最终内容落 `chat_messages` DB。
-- **CLI run 运行态**：`RunStore`，per-workspace 的 `runs/<run_id>/`（`state.json` + `events.jsonl` + `artifacts/*.json`），见 `infrastructure/run_store.py`。
 
 ### 3.6 LLM 子系统（Gateway 化）
 
 `llm/` 是网关化架构，不是简单 SDK 封装：
 
-- 统一入口：`LLMGateway`（`llm/gateway.py:54`），业务层唯一对外入口。
+- 统一入口：`LLMGateway`（`llm/gateway.py`），业务层唯一对外入口。
 - 请求流程：Pre 中间件（validator→rate_limit→budget→dedup→cache）→ Dispatcher（router→chain→熔断→重试→fallback）→ Provider → Post 中间件（cache_write→dedup_complete→audit）。
 - 供应商适配：通过 registry 动态注册（openai/anthropic/google/dashscope/mock 等）。
 - 对 agent 的适配：`GatewayLLMAdapter`（`llm/binding.py`）把网关包装成 `chat_with_tools_stream` facade，`ReActAgent` 只依赖 `ToolCallingLLM` ABC，不感知 provider/路由/熔断。
+- **对外开放**：`api/routes/v1/llm.py` 把网关以 OpenAI 兼容 HTTP 端点形式暴露给外部客户端（API Key 鉴权 + user 级配额/预算/审计）。
 
-chat / CLI / memory 等子系统共享这一套可观测、可治理的 LLM 调用能力。
+chat / memory / 外部客户端共享这一套可观测、可治理的 LLM 调用能力。
 
 ### 3.7 RAG 与知识库子系统
 
@@ -161,21 +157,20 @@ RAG 由 `lifespan` 启动阶段动态装配，具备「软降级」能力：
 ### 3.8 后台任务、事件与并发机制
 
 - **ChatTurnSupervisor**（`chat/supervisor.py`）：Chat turn 进程内注册表 + evict（终态留 10 分钟应付重连）+ 磁盘清理（7 天）+ 关停取消。
-- **RunSupervisor**（`agents/run_supervisor.py`）：CLI run 进程内追踪 + abort/cancel + 关停取消。
 - **TaskQueue**：默认 `LocalTaskQueue`，可切 Celery，失败降级 `NullTaskQueue`（memory 摘要任务用）。
-- **EventBus**：默认进程内总线，用于 `turn.completed`（触发摘要）、模型配置变更等。
-- **DecisionRegistry**（`agents/hitl.py`）：HITL 待决策注册表 + TTL `cleanup_loop`。
-- **SSE**：Chat（broadcaster 实时 + events.jsonl 回放）/ CLI run（cursor 轮询）/ admin 三类事件流。
+- **EventBus**：默认进程内总线，用于 `turn.completed`（触发摘要/digest/语义召回）、模型配置变更等。
+- **SSE**：Chat（broadcaster 实时 + events.jsonl 回放）/ admin 两类事件流。
 
 该设计适合单机/单进程先跑通全链路，再向多进程演进（in-memory 注册表后接 Redis pub/sub 即可平替）。
 
 ### 3.9 当前实现差异与缺口
 
-- mode 路由已落地：通过 `agent_profiles` + `ReActRunner.from_profile` / `RunOrchestrator._build_lifecycles` 装配不同 lifecycle 组合。
+- mode 路由已落地：通过 `agent_profiles` + `ReActRunner.from_profile` 装配 lifecycle 组合（当前仅 chat）。
 - `/kb` 是真实知识库前缀；前端仍有 `knowledge-bases` 形态调用约定，需继续对齐。
 - 前端 `agentsApi` 与页面入口存在，但后端未挂 `/agents` 业务路由。
 - `documents.py` / `retrieval.py` / `feedback.py` 路由占位未挂载。
-- 旧 `adaptive/` 与 `orchestration/workflow` 模块已删除。
+- 旧 CLI 执行路径 / `adaptive/` / `orchestration/workflow` 模块已删除。
+- CLI 胖客户端尚未开工；落地时复用 `forge.agents` 内核 + `/v1/llm/chat/completions`。
 
 ### 3.10 上下文管理系统（Context）
 
@@ -192,7 +187,7 @@ RAG 由 `lifespan` 启动阶段动态装配，具备「软降级」能力：
 
 ### 3.11 上下文压缩子系统（Compaction）
 
-chat 主链由 `chat/assembler.py` `ContextAssembler` 主动压缩（`orchestrator.py:204` 调用）：
+chat 主链由 `chat/assembler.py` `ContextAssembler` 主动压缩（`orchestrator.py` 调用）：
 
 - 触发条件（`should_compact`）：`history_messages_dropped > 0` 或 `estimated_input_tokens / context_window > threshold`（默认 0.85）。
 - 触发后：调 `SummaryService.summarize_session()` → 重建 context → 发 SSE `compaction_started` / `compaction_done`。
@@ -205,7 +200,7 @@ chat 主链由 `chat/assembler.py` `ContextAssembler` 主动压缩（`orchestrat
 「读路径（同步）+ 写路径（事件驱动）」：
 
 - **读路径**：Context 构建阶段通过 `MemoryStore` 读取 `get_summary` / `recall_facts`。`CompositeMemoryStore` 已接 `SummaryStore`；`FactStore` 仍为占位（`recall_facts` 返回空）；关闭时走 `NullMemoryStore`。
-- **写路径**：`TurnFinalizer` 对话成功后 publish `turn.completed`（`finalizer.py:292`）→ `memory.hooks.install_memory_hooks` 订阅（`memory/hooks.py`）→ 满足 `every_n_turns` 阈值派发 `memory.summarize` 任务 → `SummaryService` 读近 N 条 → `Summarizer` 走 LLMGateway → `SummaryStore.upsert` 写 `session_summaries`。
+- **写路径**：`TurnFinalizer` 对话成功后 publish `turn.completed` → `memory.hooks.install_memory_hooks` 订阅（`memory/hooks.py`）→ 满足 `every_n_turns` 阈值派发 `memory.summarize` 任务 → `SummaryService` 读近 N 条 → `Summarizer` 走 LLMGateway → `SummaryStore.upsert` 写 `session_summaries`。
 
 写路径把 chat 请求与摘要写入解耦，避免拉长时延。策略层（`ConflictResolver` / `ForgettingPolicy` / `MemoryScope`）已定义，当前默认 NoOp。
 
@@ -214,10 +209,11 @@ chat 主链由 `chat/assembler.py` `ContextAssembler` 主动压缩（`orchestrat
 「分层多存储」：
 
 - **结构化元数据**：MySQL（dev 可切 SQLite），Route→Service→Repository→ORM。
-- **运行态日志型（JSONL）**：核心原语 `infrastructure/jsonl.py`（append/iter/tail/iter_after + 原子写）。应用于 `cost.jsonl`、`audit.jsonl`、chat `events.jsonl`、CLI `runs/*/events.jsonl` 与 `state.json` / `artifacts/*.json`。
+- **运行态日志型（JSONL）**：核心原语 `infrastructure/jsonl.py`（append/iter/tail/iter_after + 原子写）。应用于 `cost.jsonl`、`audit.jsonl`、chat `events.jsonl`。
 - **文件对象存储**：`FileStorage` 抽象，`LocalFileStorage` 为主实现（`{kb_id}/{doc_id}/{filename}`），S3 实现可选；DB 只存 `storage_path` 键。
 - **检索索引**：`ChildVectorStore`（默认 Chroma）+ `BM25Store`（默认 sqlite_fts5），`RetrieverFactory` 组装 `ParentChildRetriever`。
 - **成本与审计**：`CostTracker` 进程内累计 + 周期 flush 到 `cost.jsonl`；`AuditLog` 记录危险工具调用。
+- **内容引用切片**：`ContentStore`（`infrastructure/storage/content_store.py`），chat 后端 `DbMessageContentStore` 支撑 digest 引用占位的按需回读（`read_message` 工具）。
 
 ### 3.14 可观测性设计（Observability）
 
@@ -227,7 +223,7 @@ chat 主链由 `chat/assembler.py` `ContextAssembler` 主动压缩（`orchestrat
 - **追踪**：`with span("name") as s: s.set(...)`，exporter 可切 `none/otel/langfuse`；agent 内核 stream/step/llm_call/tool 四级埋点，chat prepare/assemble/compact/finalize 均埋点。
 - **指标**：重点在 LLM 指标（请求量、延迟、token、成本、熔断、预算超限），Prometheus 软依赖。`business/technical/cost_metrics` 仍占位。
 - **成本与预算**：`CostTracker` + `BudgetConfig`（全局/默认用户/指定用户三级），与 `quota` 滚动窗口（5 小时/7 天）联动，超限抛 `LLMBudgetExceeded`。
-- **事件与 SSE**：chat 事件流（delta/tool_call/reasoning/compaction/done/partial）、CLI run 事件流（lifecycle_attached/step_completed/artifact_created/plan_decision_required/workflow_gate_required/...）、admin 事件流。
+- **事件与 SSE**：chat 事件流（delta/tool_call/reasoning/compaction/done/partial）、admin 事件流。
 
 ---
 
@@ -237,7 +233,7 @@ chat 主链由 `chat/assembler.py` `ContextAssembler` 主动压缩（`orchestrat
 
 ### 4.1 ReActAgent（内核）
 
-`agents/react/agent.py:92` `ReActAgent`。经典 ReAct（Reason+Act），用 LLM 原生 function calling（非文本解析）。主入口 `stream()`（`agent.py:188`）。
+`agents/react/agent.py` `ReActAgent`。经典 ReAct（Reason+Act），用 LLM 原生 function calling（非文本解析）。主入口 `stream()`。
 
 单步执行序列（所有扩展点的挂载坐标系）：
 
@@ -254,8 +250,8 @@ on_start  →  for step:  resolve_tools → before_step → [LLM 流式]
 
 `agents/lifecycle.py`：
 
-- `AgentLifecycle` ABC（`lifecycle.py:120`）：8 个 hook 全部抽象；按需覆写的实现继承 `NoopLifecycle`，由其提供默认 no-op。
-- `MultiLifecycle`（`lifecycle.py:193`）：三种合并策略——
+- `AgentLifecycle` ABC：8 个 hook 全部抽象；按需覆写的实现继承 `NoopLifecycle`，由其提供默认 no-op。
+- `MultiLifecycle`：三种合并策略——
   - 「首个非 None 胜出」：`resolve_tools` / `before_step` / `before_tool_call`（避免互相覆盖）。
   - 「pipeline 累计」：`on_tool_result`（依次替换，形成管道）。
   - 「全部都调 + 单 lifecycle 异常隔离」：`on_start` / `after_step` / `on_complete` / `on_error`。
@@ -264,45 +260,38 @@ on_start  →  for step:  resolve_tools → before_step → [LLM 流式]
 
 mode = lifecycle 组合，由编排层装配（这就是全部 mode 路由逻辑）：
 
-- chat：`[GuardLifecycleAdapter]`（`chat/runner.py:112`）
-- plan_exec：`[Guards, PlanModeLifecycle, RunStorePersistenceLifecycle]`（`agents/run_orchestrator.py:196` `_build_lifecycles`）
-- workflow：`[Guards, WorkflowLifecycle, RunStorePersistenceLifecycle]`
+- chat：`[GuardLifecycleAdapter]`（`chat/runner.py`）
+
+当前服务端仅 chat 一个 mode；机制保留，未来新增 mode（或 CLI 客户端本地装配 Plan/Workflow 类 lifecycle）时按同样方式扩展，无需改内核。
 
 ### 4.4 具体 lifecycle 实现
 
-- **GuardLifecycleAdapter**（`chat/guards/lifecycle_adapter.py:26`）：把旧 LoopGuard 体系（`StepSafetyNet`/`StuckDetector`/`TokenBudgetGuard`/`WallClockGuard`）无侵入接入新协议。
-- **PlanModeLifecycle**（`agents/plan_mode.py:52`）：`PLAN_MODE` ContextVar + `resolve_tools` 切 readonly/full schema（动态工具集）+ `before_tool_call` 拦截 `exit_plan_mode` 走 HITL 解锁。物理隔离而非靠 LLM 自律；不修改 ToolExecutor。
-- **WorkflowLifecycle**（`agents/workflow_lifecycle.py:86`）：模板驱动 phase 流水线，拦截 `advance_phase`，命中 gate 走 `workflow_gate` HITL。
-- **RunStorePersistenceLifecycle**（`agents/persistence_lifecycle.py:45`）：CLI 持久化投影；`after_step`→`step_completed`，`on_tool_result` 大产物（默认 >8KB）落 artifact 回灌占位，`on_complete/on_error`→`transition_status`。持久化失败不阻断主流程。
+- **GuardLifecycleAdapter**（`chat/guards/lifecycle_adapter.py`）：把旧 LoopGuard 体系（`StepSafetyNet`/`StuckDetector`/`TokenBudgetGuard`/`WallClockGuard`）无侵入接入新协议。
 
 ### 4.5 agent_profiles（配置即治理）
 
-- 配置模型：`config/domains/agent_profiles.py:38` `AgentProfile`（pydantic，`extra="forbid"`）。
-- 实际配置：`config/sys_config.dev.yaml:137` `agent_profiles` 段（chat / plan_exec / workflow）。
-- 加载校验：`agents/profiles.py:26` `load_profiles_at_startup`，启动期 7 项强校验（工具注册/`readonly⊆allowed`/角色存在/`plan_mode_initial⇒exit_plan_mode`/`spawn_subagent⇔sub_agents`/模板存在/model_profile 定义），任一不过拒绝启动。
-- 关键字段：`tools_allowed`/`readonly_tools`/`plan_mode_initial`/`persistence`(chat_db/run_store/none)/`requires_template`/`model_profile`(fast/smart/strong)/`large_artifact_threshold_bytes`。
+- 配置模型：`config/domains/agent_profiles.py` `AgentProfile`（pydantic，`extra="forbid"`）。
+- 实际配置：`config/sys_config.dev.yaml` `agent_profiles` 段（当前仅 chat）。
+- 加载校验：`agents/profiles.py` `load_profiles_at_startup`，启动期 5 项强校验（工具注册/角色存在/`spawn_subagent⇔sub_agents`/模板存在/model_profile 定义），任一不过拒绝启动。
+- 关键字段：`tools_allowed`/`sub_agents_allowed`/`max_steps`/`persistence`(chat_db/none)/`model_profile`(fast/smart/strong)。
 
 新增一个 mode 无需写 Python：YAML 加 profile + prompt 模板（+ 如需特殊行为再写一个 lifecycle 并在编排层装配）。
 
-### 4.6 HITL（人机交互）
+### 4.6 工具系统
 
-`agents/hitl.py`：`DecisionRegistry`（单进程全局，`hitl.py:67`）管理 `PendingDecision`（自带 `asyncio.Event`）。主 agent `await event.wait()` 阻塞；外部 `POST /v1/decisions/{token}` 调 `resolve` 唤醒；`cleanup_loop` TTL 守护过期自动 reject。`kind`：`plan` / `workflow_gate` / `tool_confirm`。
-
-### 4.7 工具系统
-
-- 基类：`tools/base.py:33` `Tool(ABC)`，实现 `run`（CPU）或 `arun`（IO）之一；元数据 `parallelism_safe`/`dangerous`/`required_scope`/`allowed_roles`/`path_role_whitelist`。
-- 注册：`tools/registry.py:29` `@register_tool`，注册期预计算 schema 缓存。
+- 基类：`tools/base.py` `Tool(ABC)`，实现 `run`（CPU）或 `arun`（IO）之一；元数据 `parallelism_safe`/`dangerous`/`required_scope`/`allowed_roles`/`path_role_whitelist`。
+- 注册：`tools/registry.py` `@register_tool`，注册期预计算 schema 缓存。
 - 执行：`tools/executor.py` `ToolExecutor`，guardrail 流水线（access→permission→rate_limit→dangerous_op）+ workspace 路径策略。
 
-### 4.8 角色（子 agent）
+### 4.7 角色（子 agent）
 
-`agents/roles/factory.py:8` `AgentRole`，7 个内置角色（triage/developer/architect/reviewer/qa/ra/devops），声明 `allowed_tools`/`model_preference`/`can_write`/`write_path_prefixes`。动态扩展：`register_custom_agent_role`。子 agent 经 `spawn_subagent` 派发，受 profile `sub_agents_allowed` 白名单约束。
+`agents/roles/factory.py` `AgentRole`，7 个内置角色（triage/developer/architect/reviewer/qa/ra/devops），声明 `allowed_tools`/`model_preference`/`can_write`/`write_path_prefixes`。动态扩展：`register_custom_agent_role`。子 agent 经 `spawn_subagent` 派发，受 profile `sub_agents_allowed` 白名单约束。
 
 ---
 
 ## 5. Chat 路径（Web 对话主链）
 
-主入口：`POST /api/v1/chat/completions`（`api/routes/v1/chat.py:78`）。
+主入口：`POST /api/v1/chat/completions`（`api/routes/v1/chat.py`）。
 
 核心流程（`chat/orchestrator.py` `TurnOrchestrator`）：
 
@@ -316,46 +305,36 @@ mode = lifecycle 组合，由编排层装配（这就是全部 mode 路由逻辑
 - **断线重连**：`run.subscribe(last_seq=N)` 先回放 `events.jsonl`（seq>last_seq）再接 broadcaster 实时；`baseline_seq` 去重防 resume 翻倍。
 - **中断**：`/chat/stop` → `run.abort()` → `abort_event.set()` → agent break → finalizer 落 aborted。
 - **续写**：`/chat/resume` 直接接入活跃 run 或启新 resume turn（`_execute_resume`，含 `ResumeStreamDedup` 流式去重）。
-- 工具集受 profile `tools_allowed` 限制，chat 默认只读（`knowledge_search`/`time_tool`）。
+- 工具集受 profile `tools_allowed` 限制，chat 默认只读（`knowledge_search`/`time_tool`/`read_message`）。
 
 ---
 
-## 6. CLI 路径（plan_exec / workflow 任务主链）
+## 6. 对外 LLM 网关端点（CLI / 第三方直连）
 
-主入口：`POST /api/v1/runs`（`api/routes/v1/runs.py:102`）。
+主入口：`POST /api/v1/llm/chat/completions`（`api/routes/v1/llm.py`）。
 
-- 入参 `mode + goal + workspace_path (+ workflow_template)`；校验 `profile.persistence == "run_store"`（chat 模式禁走 /runs）。
-- `RunStore.create_run` 落档案 → `RunOrchestrator` → `get_run_supervisor().register` 启背景 task。
-- 事件流：`GET /runs/{id}/events?follow=true` cursor 轮询 `events.jsonl`（与 chat 的 broadcaster 不同）。
-- 中止：`POST /runs/{id}/abort`。
+- **鉴权**：`X-API-Key` header（`ApiKeyUser` 依赖，`user_api_keys` 表存 SHA256 哈希）；配额/预算/限流/缓存/审计由 LLMGateway Pre/Post 中间件按 user_id 自动生效。
+- **请求体**：OpenAI Chat Completions 兼容子集（`messages`/`tools`/`tool_choice`/`stream`/`temperature`/`max_tokens`/`extra_options`/`idempotency_key`）。
+- **model 三形态**：空 → 系统默认链；`fast|smart|strong` → 档位链（跨 provider fallback）；`provider:model` → 显式 pin（对话链，同 provider 后备）。
+- **响应**：非流式返回 chat.completion JSON（扩展字段 `forge.provider/cache_hit/cost_usd/fallback_position`）；流式 SSE 输出 chat.completion.chunk + `data: [DONE]`，带 tools 时工具调用在最终块以完整 `delta.tool_calls` 一次性下发（网关层已聚合）。
 
-执行（`agents/run_orchestrator.py` `RunOrchestrator._execute`）：
+**未来 CLI 客户端的设计约定**（尚未开工）：
 
-1. `_build_llm`（GatewayBinding，按 profile.model_profile）。
-2. `_render_system_prompt`（profile 模板 + user_system_prompt + workspace_path + goal）。
-3. `_build_lifecycles`（按 profile flag 装配 Guards + PlanMode/Workflow + Persistence）。
-4. 跑 `ReActAgent.stream`；细颗粒事件经 lifecycle 落 `events.jsonl`，端到端 `done/error` 额外落 run 事件。
-
-**plan_exec（Claude Code 风格 Plan-Exec）**：
-
-- Plan 阶段 LLM 只见 `readonly_tools`（含 `exit_plan_mode`）；调 `exit_plan_mode` 触发 HITL，用户批准后 `PLAN_MODE` 关闭、写工具解锁进入 Exec。
-- 拒绝则把反馈回灌，agent 调整计划后再次提交。
-
-**workflow（模板驱动）**：
-
-- LLM 按 phase 顺序执行，每完成一 phase 调 `advance_phase`；命中 gate 走 `workflow_gate` HITL；全部完成输出综合报告。
+- 胖客户端形态：agent loop（ReActAgent + lifecycle 组合）在用户本机运行，工具直接操作本地文件系统；
+- Plan Mode / Workflow / HITL 都是客户端本地行为（终端交互确认即可，无需服务端 token 机制）；
+- LLM 调用通过本端点直连，享受服务端模型治理（热配链路/fallback/熔断）与成本治理；
+- 优先以共享包形式复用 `forge.agents` 内核（其依赖干净：仅 `forge.core.types` / `forge.llm.contracts` / `forge.tools` / `forge.prompts` / `forge.observability`，零 FastAPI/DB 依赖）。
 
 ---
 
 ## 7. 运行时安全边界
 
 - **工具白名单**：每个 mode 由 profile `tools_allowed` 限定，启动期校验工具均已注册。
-- **动态工具集（Plan Mode）**：Plan 阶段物理不暴露写工具 schema，LLM 看不到也调不到——隔离优于自律。
-- **HITL gate**：plan_exec 的写工具解锁、workflow 的 phase 推进都需用户决策（`/v1/decisions/{token}`）。
-- **角色约束**：子 agent 受 `AgentRole.can_write` / `write_path_prefixes` 与 profile `sub_agents_allowed` 双重约束。
+- **角色约束**：子 agent 受 `AgentRole.can_write` / `write_path_prefixes` 与 profile `sub_agents_allowed` 双重约束；spawn 层再叠加 `SUBAGENT_DENY_TOOLS` 硬剥离（写类/二级派发）。
 - **工具 guardrail**：`ToolExecutor` 的 access→permission→rate_limit→dangerous_op 流水线 + workspace 路径策略；危险工具进 `audit.jsonl`。
 - **Chat 侧**：profile 限制为只读/低风险工具。
-- **守护兜底**：LoopGuard（步数/死循环/token/墙钟）经 `GuardLifecycleAdapter` 对所有 mode 生效。
+- **对外 LLM 端点**：API Key 鉴权（吊销/过期/用户禁用检查）+ user 级配额/预算/入站限流。
+- **守护兜底**：LoopGuard（步数/死循环/token/墙钟）经 `GuardLifecycleAdapter` 对 agent 执行生效。
 
 ---
 
@@ -376,7 +355,7 @@ mode = lifecycle 组合，由编排层装配（这就是全部 mode 路由逻辑
 ### 8.3 前后端对齐情况
 
 - **已对齐**：Chat SSE 事件与 `/chat/*`、会话与消息接口。
-- **部分未对齐**：前端 `agentsApi` 与页面入口存在，但后端未挂 `/agents`；CLI runs 的可视化仍需补齐。
+- **部分未对齐**：前端 `agentsApi` 与页面入口存在，但后端未挂 `/agents`。
 
 ---
 
@@ -384,13 +363,13 @@ mode = lifecycle 组合，由编排层装配（这就是全部 mode 路由逻辑
 
 一句话总结：
 
-- Forge 当前是**「单一 ReActAgent 内核 + 可组合 AgentLifecycle 扩展」**的智能体框架，承载 **Chat（Web）** 与 **CLI（plan_exec / workflow）** 两条执行路径。
+- Forge 当前是**「单一 ReActAgent 内核 + 可组合 AgentLifecycle 扩展」**的智能体框架，服务端专注 **Chat（Web）** 执行路径，并以 **OpenAI 兼容网关端点** 对外开放 LLM 调用能力（供未来 CLI 胖客户端直连）。
 
 工程成熟度：
 
-- **后端**：内核 + 扩展机制 + 两条路径 + HITL + 持久化双轨已成闭环，可跑完整生命周期。
-- **前端**：聊天链路成熟；任务运行可视化仍需补齐。
-- **历史包袱**：旧 Adaptive / orchestration 模块已清理。
+- **后端**：内核 + 扩展机制 + Chat 主链 + 网关对外端点已成闭环，可跑完整生命周期。
+- **前端**：聊天链路成熟；管理可视化仍需补齐。
+- **历史包袱**：旧 CLI 执行路径 / Adaptive / orchestration 模块已清理。
 
 ---
 
@@ -403,6 +382,5 @@ mode = lifecycle 组合，由编排层装配（这就是全部 mode 路由逻辑
 3. `agents/lifecycle.py` `MultiLifecycle`（扩展机制：架构的钥匙）
 4. `chat/orchestrator.py` → `chat/turn_run.py` → `chat/supervisor.py`（Chat 主链）
 5. `tools/base.py` + `llm/gateway.py` + `llm/binding.py`（能力层）
-6. `agents/run_orchestrator.py` → `agents/plan_mode.py` → `agents/hitl.py`（CLI 进阶）
+6. `api/routes/v1/llm.py`（对外 LLM 网关端点：CLI 接入面）
 7. `agents/profiles.py` + `config/sys_config.dev.yaml` 的 `agent_profiles`（配置即治理）
-</content>

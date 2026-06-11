@@ -157,9 +157,6 @@ agent_profiles:
       tools_allowed:
         - knowledge_search
         - time_tool
-      readonly_tools: []
-      sub_agents_allowed: []
-      plan_mode_initial: false
       max_steps: 50
       persistence: chat_db
       model_profile: smart

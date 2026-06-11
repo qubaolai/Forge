@@ -35,13 +35,8 @@ logger = logging.getLogger(__name__)
 _DEFAULT_WINDOW_SECONDS: float = 60.0
 _DEFAULT_LIMIT: int = 600
 
-# 危险工具单独走更严的限制
-_DEFAULT_DANGEROUS_LIMITS: dict[str, int] = {
-    "shell": 60,
-    "write_file": 60,
-    "edit_file": 60,
-    "http_request": 60,
-}
+# 特定工具的更严限制 (当前无, 保留为 per-tool 配置扩展点)
+_DEFAULT_DANGEROUS_LIMITS: dict[str, int] = {}
 
 
 @dataclass(frozen=True)

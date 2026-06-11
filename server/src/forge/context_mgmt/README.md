@@ -55,7 +55,7 @@ snapshot.degraded       # 软降级原因列表
 - **新预算策略 / token 计量**：实现 `BudgetPolicy` / `TokenMeter`。
 - **新压缩触发/策略**：实现 `compaction/trigger` 或 `compaction/strategy`。
 
-> ⚠️ 当前生产只有 CHAT 模式经过本系统；TASK / WORKFLOW 分支（EvictingPolicy / SummarizingPolicy / StepScopedFilter / workflow_step provider）是**为 CLI / workflow 预留**的扩展点，已就绪但尚未接入生产路径——保留勿删。
+> 当前生产只有 CHAT 模式经过本系统；旧 TASK / WORKFLOW 预留扩展已随服务端瘦身移除。
 
 ## 边界与注意
 

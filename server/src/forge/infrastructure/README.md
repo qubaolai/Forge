@@ -1,6 +1,6 @@
 # `forge.infrastructure` — 基础设施
 
-数据库、缓存、队列、事件总线、JSONL、RunStore、文件存储等技术设施。业务模块依赖这里的抽象，不关心具体后端。
+数据库、缓存、队列、事件总线、JSONL、文件存储等技术设施。业务模块依赖这里的抽象，不关心具体后端。
 
 ## 设计理念
 
@@ -18,8 +18,7 @@ infrastructure/
 ├── queue/            ← TaskQueue (LocalTaskQueue 默认 / Celery 可选 / Null 降级)  [见子 README]
 ├── event_bus/        ← EventBus (进程内总线: turn.completed / 配置变更)          [见子 README]
 ├── storage/          ← FileStorage(Local/S3) + content_store + data_protocols(存储 ABC)
-├── jsonl.py          ← JSONL 原语 (append/iter/tail/iter_after + 原子写)
-└── run_store.py      ← RunStore: CLI run 运行态 (runs/<id>/ state.json + events.jsonl + artifacts)
+└── jsonl.py          ← JSONL 原语 (append/iter/tail/iter_after + 原子写)
 ```
 
 ## 如何使用
@@ -47,5 +46,5 @@ from forge.infrastructure.jsonl import ...   # cost.jsonl / audit.jsonl / events
 
 ## 边界与注意
 
-- 运行态两类均不入关系库：chat turn 事件（`chat_runs/<message_id>/`）、CLI run（`runs/<run_id>/`）。
+- Chat turn 事件（`chat_runs/<message_id>/`）不入关系库。
 - Repository 只 `flush` 不 `commit`；提交由会话上下文统一管理。

@@ -6,7 +6,6 @@ import pytest
 
 from forge.context_mgmt.filters.hybrid import EmbeddingScorer, HybridFilter
 from forge.context_mgmt.filters.null import NullFilter
-from forge.context_mgmt.filters.step_scoped import StepScopedFilter
 from forge.context_mgmt.types import ContextMode, HistoryMessage
 from forge.core.types.message import Message
 
@@ -217,14 +216,3 @@ async def test_hybrid_drops_whole_turn_when_all_messages_are_irrelevant():
     out = await hf.filter(early_turn + anchors, "q", ContextMode.CHAT)
 
     assert [m.id for m in out] == ["m1", "m2", "m3"]
-
-
-# ---------------------------------------------------------------------------
-# StepScopedFilter
-# ---------------------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_step_scoped_filter_returns_empty():
-    """阶段 4 占位实现: 返回空 (workflow 步骤无历史)."""
-    msgs = [_msg(i) for i in range(5)]
-    out = await StepScopedFilter().filter(msgs, "q", ContextMode.WORKFLOW)
-    assert out == []

@@ -53,8 +53,8 @@ async def test_window_sliding() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dangerous_tools_have_stricter_default() -> None:
-    """生产 get_rate_limiter() 工厂预加载 dangerous 限制."""
+async def test_default_limit_applies_without_per_tool_config() -> None:
+    """生产 get_rate_limiter() 工厂: 无 per-tool 配置时一律走默认上限."""
     from forge.guardrails.tool.rate_limiter import (
         get_rate_limiter,
         reset_rate_limiter,
@@ -63,8 +63,7 @@ async def test_dangerous_tools_have_stricter_default() -> None:
     reset_rate_limiter()
     try:
         rl = get_rate_limiter()
-        assert rl.limit_for("shell") == 60
-        assert rl.limit_for("write_file") == 60
+        assert rl.limit_for("knowledge_search") == 600  # default
         assert rl.limit_for("calculator") == 600  # default
     finally:
         reset_rate_limiter()

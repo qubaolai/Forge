@@ -1,11 +1,10 @@
 import { apiClient } from './client';
 import {
-  Agent, AuthTokens, ChatMessage, ChatSession, KnowledgeBase,
-  KnowledgeDocument, DocumentChunk, LoginPayload, LoginResponse,
+  AuthTokens, ChatMessage, ChatSession, LoginPayload, LoginResponse,
   GroupedModelsResponse, ModelChain, ModelChainEntry, ModelChainScope, ModelType, ModelUpsert,
   PaginatedData, PaginationParams, ProviderAdmin, ProviderKey, ProviderModel,
-  RagIndexJob, RagIndexStatus, RetrievalResult, RetrieveRequest,
-  SystemModelBinding, ToolDefinition, User, AuditLog,
+  RagIndexJob, RagIndexStatus,
+  SystemModelBinding, User,
 } from '@/types';
 
 export const authApi = {
@@ -44,60 +43,6 @@ export const chatApi = {
     apiClient.post<{ new_message_id: string }>('/chat/regenerate', { message_id: messageId }),
 };
 
-export const kbApi = {
-  list: (params: PaginationParams) => apiClient.get<PaginatedData<KnowledgeBase>>('/knowledge-bases', { params }),
-  create: (payload: Partial<KnowledgeBase>) => apiClient.post<KnowledgeBase>('/knowledge-bases', payload),
-  get: (id: string) => apiClient.get<KnowledgeBase>(`/knowledge-bases/${id}`),
-  update: (id: string, payload: Partial<KnowledgeBase>) =>
-    apiClient.patch<KnowledgeBase>(`/knowledge-bases/${id}`, payload),
-  remove: (id: string) => apiClient.delete<void>(`/knowledge-bases/${id}`),
-  retrieve: (id: string, payload: RetrieveRequest) =>
-    apiClient.post<RetrievalResult[]>(`/knowledge-bases/${id}/retrieve`, payload),
-};
-
-export const documentsApi = {
-  list: (kbId: string, params: PaginationParams & { status?: string }) =>
-    apiClient.get<PaginatedData<KnowledgeDocument>>(`/knowledge-bases/${kbId}/documents`, { params }),
-  upload: (kbId: string, file: File, onProgress?: (p: number) => void) => {
-    const form = new FormData();
-    form.append('file', file);
-    return apiClient.post<KnowledgeDocument>(
-      `/knowledge-bases/${kbId}/documents/upload`,
-      form,
-      {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        onUploadProgress: (e) => {
-          if (e.total && onProgress) onProgress(Math.round((e.loaded * 100) / e.total));
-        },
-      },
-    );
-  },
-  fromUrl: (kbId: string, url: string) =>
-    apiClient.post<KnowledgeDocument>(`/knowledge-bases/${kbId}/documents/url`, { url }),
-  get: (kbId: string, docId: string) =>
-    apiClient.get<KnowledgeDocument>(`/knowledge-bases/${kbId}/documents/${docId}`),
-  chunks: (kbId: string, docId: string, params: PaginationParams) =>
-    apiClient.get<PaginatedData<DocumentChunk>>(`/knowledge-bases/${kbId}/documents/${docId}/chunks`, { params }),
-  reindex: (kbId: string, docId: string) =>
-    apiClient.post<void>(`/knowledge-bases/${kbId}/documents/${docId}/reindex`),
-  remove: (kbId: string, docId: string) =>
-    apiClient.delete<void>(`/knowledge-bases/${kbId}/documents/${docId}`),
-};
-
-export const agentsApi = {
-  list: (params: PaginationParams) => apiClient.get<PaginatedData<Agent>>('/agents', { params }),
-  create: (payload: Partial<Agent>) => apiClient.post<Agent>('/agents', payload),
-  get: (id: string) => apiClient.get<Agent>(`/agents/${id}`),
-  update: (id: string, payload: Partial<Agent>) => apiClient.patch<Agent>(`/agents/${id}`, payload),
-  remove: (id: string) => apiClient.delete<void>(`/agents/${id}`),
-  duplicate: (id: string) => apiClient.post<Agent>(`/agents/${id}/duplicate`),
-};
-
-export const toolsApi = {
-  list: () => apiClient.get<ToolDefinition[]>('/tools'),
-};
-
-// Agent 编辑器只允许选择 Chat 模型，返回扁平列表便于消费。
 export const modelsApi = {
   list: async () => {
     const response = await apiClient.get<GroupedModelsResponse>('/models', {
@@ -160,11 +105,6 @@ export const providerKeysApi = {
     apiClient.put<ProviderKey>(`/providers/${provider}/keys/${keyId}`, payload),
   remove: (provider: string, keyId: string) =>
     apiClient.delete<void>(`/providers/${provider}/keys/${keyId}`),
-};
-
-export const auditApi = {
-  list: (params: PaginationParams & { user_id?: string; action?: string }) =>
-    apiClient.get<PaginatedData<AuditLog>>('/audit-logs', { params }),
 };
 
 export const systemApi = {

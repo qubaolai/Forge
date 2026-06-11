@@ -33,10 +33,10 @@ settings.agent_profiles.profiles["chat"].tools_allowed
 ## 如何扩展
 
 - **加一个配置项**：在对应 `domains/<域>.py` 的 pydantic 模型加字段（带默认值，保证向后兼容），在 `sys_config.*.yaml` 配置。
-- **加一个新 agent mode**：在 `sys_config.*.yaml` 的 `agent_profiles.profiles` 加一段（`tools_allowed` / `readonly_tools` / `model_profile` / `plan_mode_initial` / `persistence` / `requires_template`），无需写 Python。
+- **调整 chat agent profile**：在 `sys_config.*.yaml` 的 `agent_profiles.profiles.chat` 修改 `tools_allowed` / `model_profile` / `max_steps`。
 - **加一个新配置域**：在 `domains/` 建模型并挂到 `Settings` 根模型。
 
 ## 边界与注意
 
-- `agent_profiles` 的 7 项校验：工具已注册 / `readonly⊆allowed` / 角色存在 / `plan_mode_initial⇒exit_plan_mode` / `spawn_subagent⇔sub_agents` / 模板存在 / `model_profile` 已定义。任一不过拒绝启动。
+- `agent_profiles` 的 3 项校验：工具已注册 / 模板存在 / `model_profile` 已定义。任一不过拒绝启动。
 - `db.py` 保留 MySQL 字段是为兼容旧部署；单机默认 SQLite。

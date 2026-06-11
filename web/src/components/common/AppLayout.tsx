@@ -2,14 +2,13 @@ import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import {
-  Plus, BookOpen, Bot, Settings, LogOut,
-  Users, Cpu, FileText, Server,
+  Plus, LogOut, BookOpen,
+  Users, Cpu, Server,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
 import { sessionsApi, authApi } from '@/api';
 import { confirm } from './ConfirmDialog';
 import { cn } from '@/lib/utils';
-import { FEATURES } from '@/lib/features';
 import { SessionItem } from './SessionItem';
 
 /** 会话列表查询使用的固定 queryKey, 让所有调用方都用同一个引用。 */
@@ -65,7 +64,6 @@ export default function AppLayout() {
             <ModuleNavItem to="/admin/users" icon={<Users size={14} />} label="用户" />
             <ModuleNavItem to="/admin/models" icon={<Cpu size={14} />} label="模型配置" />
             <ModuleNavItem to="/admin/providers" icon={<Server size={14} />} label="供应商与模型" />
-            <ModuleNavItem to="/admin/audit" icon={<FileText size={14} />} label="审计日志" />
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto px-2 py-1 min-h-0">
@@ -92,13 +90,7 @@ export default function AppLayout() {
         {/* 底部:模块入口(仅普通用户) + 用户信息 */}
         <div className="border-t bg-gray-50/40 px-2 py-2 shrink-0">
           {!isAdmin && (
-            <>
-              <ModuleNavItem to="/knowledge" icon={<BookOpen size={14} />} label="知识库" />
-              {FEATURES.AGENTS && (
-                <ModuleNavItem to="/agents" icon={<Bot size={14} />} label="Agent" />
-              )}
-              <ModuleNavItem to="/settings" icon={<Settings size={14} />} label="设置" />
-            </>
+            <ModuleNavItem to="/knowledge" icon={<BookOpen size={14} />} label="知识库" />
           )}
 
           {/* 用户信息 + 登出 */}
@@ -122,19 +114,6 @@ export default function AppLayout() {
                 sideOffset={4}
                 className="z-50 min-w-[180px] bg-white border rounded-md shadow-md py-1 text-sm"
               >
-                {!isAdmin && (
-                  <>
-                    <DropdownMenu.Item
-                      onSelect={() => navigate('/settings')}
-                      className="flex items-center gap-2 px-3 py-1.5 cursor-pointer outline-none
-                        hover:bg-gray-100 data-[highlighted]:bg-gray-100"
-                    >
-                      <Settings size={13} />
-                      设置
-                    </DropdownMenu.Item>
-                    <DropdownMenu.Separator className="h-px bg-gray-200 my-1" />
-                  </>
-                )}
                 <DropdownMenu.Item
                   onSelect={async () => {
                     if (!await confirm({ message: '确认要登出吗?', confirmLabel: '登出', danger: true })) return;

@@ -2,7 +2,7 @@
 
 > 本文是一条**渐进式代码阅读路线**，配合 [architecture.md](architecture.md) 一起看。
 > 每一阶段都给出：**要回答的问题 → 按序阅读的文件（带 `file:line` 跳转） → 自检标准**。
-> 重要前提：旧 `adaptive/` 模块已删除，本文以当前真实代码为准。
+> 重要前提：旧 `adaptive/` 模块与旧 CLI 执行路径（`/v1/runs` + HITL + RunStore）均已删除，本文以当前真实代码为准。
 > 阅读建议：所有 `file:line` 链接可点击直达源码，遇到不懂的类型就跳进去看定义再回来。
 
 ---
@@ -10,13 +10,13 @@
 ## 学习路线总览
 
 ```
-阶段 0  鸟瞰         理解两条执行路径与项目分层          (30 min)
+阶段 0  鸟瞰         理解服务端职责边界与项目分层        (30 min)
 阶段 1  内核         读懂 ReActAgent 一个 step 怎么跑    (深入)
 阶段 2  扩展点       AgentLifecycle —— 全架构的钥匙      (最重要)
 阶段 3  Chat 路径    一次 Web 对话的完整生命周期         (主链)
 阶段 4  能力层       工具系统 + LLM 网关                 (横向)
-阶段 5  CLI 路径     plan_exec / workflow + HITL         (进阶)
-阶段 6  治理与解耦   agent_profiles / 事件溯源 / 持久化  (融会贯通)
+阶段 5  对外端点     /llm/chat/completions（CLI 接入面） (进阶)
+阶段 6  治理与解耦   agent_profiles / 事件溯源           (融会贯通)
 ```
 
 学习心法：**先看「内核如何无差别地跑」，再看「差异如何被外置」**。不要一开始就钻 mode 分支——因为内核里根本没有 mode 分支。
@@ -25,15 +25,15 @@
 
 ## 阶段 0：鸟瞰（先建立坐标系）
 
-**要回答的问题**：后端有几条执行路径？它们共享什么、不同什么？
+**要回答的问题**：服务端对外提供哪两个能力面？智能体执行只为谁服务？
 
 按序阅读：
 
-1. [architecture.md](architecture.md) 第 0–1 节 —— 先建立「两条路径共享 ReActAgent 内核」的总图。
-2. [server/src/forge/api/routes/router.py](server/src/forge/api/routes/router.py) —— v1 路由聚合，看后端到底挂了哪些功能域（chat / runs / decisions / artifacts / sessions / ...）。
+1. [architecture.md](architecture.md) 第 0–1 节 —— 先建立「Chat 路径（智能体执行）+ 对外 LLM 网关端点（CLI/第三方直连）」的总图。
+2. [server/src/forge/api/routes/router.py](server/src/forge/api/routes/router.py) —— v1 路由聚合，看后端到底挂了哪些功能域（chat / llm / sessions / kb / models / ...）。
 3. [server/src/forge/api/lifespan.py:42](server/src/forge/api/lifespan.py:42) `lifespan()` —— 启动装配顺序，这是组件依赖图的「事实来源」。
 
-**自检**：能用一句话说出 chat 路径与 runs 路径的入口、编排类、持久化落点各是什么（见 architecture.md 第 1 节表格）。
+**自检**：能用一句话说出 chat 路径与对外 LLM 端点各自的入口、鉴权方式、服务端职责差异（见 architecture.md 第 1 节表格）。
 
 ---
 
@@ -70,7 +70,7 @@
 
 > 这是 Forge 架构的「主扩展点」。阶段 1 里那些 `lifecycle.xxx(...)` 调用，挂的就是这里的实现。
 
-**要回答的问题**：mode 差异（chat / plan_exec / workflow）凭什么不写进 ReActAgent？
+**要回答的问题**：mode 差异凭什么不写进 ReActAgent？
 
 核心文件：[server/src/forge/agents/lifecycle.py](server/src/forge/agents/lifecycle.py)
 
@@ -84,7 +84,7 @@
    - 「pipeline 累计」：[lifecycle.py:267](server/src/forge/agents/lifecycle.py:267) `on_tool_result`
    - 「全部都调 + 异常隔离」：`on_start` / `after_step` / `on_complete` / `on_error`
 
-**自检**：能解释「为什么 `resolve_tools` 用首个胜出，而 `on_tool_result` 用 pipeline 累计」——前者多个 lifecycle 抢工具集会冲突，后者每个 lifecycle 都可能想改写结果（如先脱敏再落 artifact）。
+**自检**：能解释「为什么 `resolve_tools` 用首个胜出，而 `on_tool_result` 用 pipeline 累计」——前者多个 lifecycle 抢工具集会冲突，后者每个 lifecycle 都可能想改写结果。
 
 ---
 
@@ -140,28 +140,24 @@
 
 ---
 
-## 阶段 5：CLI 路径 —— plan_exec / workflow + HITL
+## 阶段 5：对外 LLM 端点 —— CLI / 第三方接入面
 
-> 现在回到阶段 2 的承诺：mode 差异如何用 lifecycle 组合实现。CLI 路径是扩展点的「集大成者」。
+> 服务端瘦身后，CLI 形态是「胖客户端 + 网关直连」。本阶段读懂网关如何以 HTTP 形态对外开放。
 
-**要回答的问题**：Plan Mode 怎么让 LLM「看不到」写工具？用户怎么在中途批准/否决，agent 怎么醒来？
+**要回答的问题**：外部客户端如何带着 API Key 调 LLM？配额/预算/审计在哪里生效？
 
 按序阅读：
 
-1. [server/src/forge/agents/run_orchestrator.py:47](server/src/forge/agents/run_orchestrator.py:47) `RunOrchestrator` —— CLI 编排（对标 chat 的 TurnOrchestrator）。
-2. [run_orchestrator.py:196](server/src/forge/agents/run_orchestrator.py:196) `_build_lifecycles` —— **本阶段核心**：据 profile flag 装配 `[Guards, (PlanMode), (Workflow), (Persistence)]`。看清「装配逻辑 = 全部的 mode 路由」。
-3. [server/src/forge/agents/plan_mode.py:52](server/src/forge/agents/plan_mode.py:52) `PlanModeLifecycle`：
-   - [plan_mode.py:41](server/src/forge/agents/plan_mode.py:41) `PLAN_MODE` ContextVar —— 阶段状态
-   - [plan_mode.py:94](server/src/forge/agents/plan_mode.py:94) `resolve_tools` —— 据状态返回 readonly / full schema（动态工具集落地）
-   - [plan_mode.py:97](server/src/forge/agents/plan_mode.py:97) `before_tool_call` —— 拦截 exit_plan_mode → HITL → 解锁
-4. [server/src/forge/agents/hitl.py:67](server/src/forge/agents/hitl.py:67) `DecisionRegistry` —— 人机交互内核：`create` 注册 PendingDecision → 主 agent `await event.wait()`；外部 `resolve` 唤醒（[hitl.py:103](server/src/forge/agents/hitl.py:103)）；TTL 守护 `cleanup_loop`（[hitl.py:127](server/src/forge/agents/hitl.py:127)）。
-5. [server/src/forge/api/routes/v1/decisions.py](server/src/forge/api/routes/v1/decisions.py) —— 外部提交决策的路由（`POST /v1/decisions/{token}`）。
-6. [server/src/forge/agents/workflow_lifecycle.py:86](server/src/forge/agents/workflow_lifecycle.py:86) `WorkflowLifecycle` —— 同款 HITL，拦截 `advance_phase`，命中 gate 走 `workflow_gate` 决策（[workflow_lifecycle.py:154](server/src/forge/agents/workflow_lifecycle.py:154)）。
-7. [server/src/forge/agents/persistence_lifecycle.py:108](server/src/forge/agents/persistence_lifecycle.py:108) `on_tool_result` —— 大产物落 artifact 回灌占位（节省 LLM 上下文）。
+1. [server/src/forge/api/dependencies.py](server/src/forge/api/dependencies.py) `_get_api_key_user` —— X-API-Key 鉴权链：SHA256 哈希查表 → 吊销/过期/用户禁用检查 → 返回 user。
+2. [server/src/forge/api/routes/v1/llm.py](server/src/forge/api/routes/v1/llm.py) —— 端点本体：
+   - `_build_request` —— model 三形态解析（空=默认链 / `fast|smart|strong`=档位链 / `provider:model`=显式 pin）
+   - `_to_messages` / `_tool_calls_to_openai` —— OpenAI dict ↔ 内部 Message/ToolCall 互转
+   - 流式分支 —— `gateway.stream` / `gateway.stream_with_tools` → OpenAI chat.completion.chunk SSE
+3. [server/src/forge/llm/request.py](server/src/forge/llm/request.py) `LLMRequest` —— 网关唯一输入：选链提示 + per-call 覆盖 + 横切关注点（user_id / idempotency_key / cache_enabled）。
 
-子 agent 角色（按需）：[server/src/forge/agents/roles/factory.py:20](server/src/forge/agents/roles/factory.py:20) `_builtin_roles` —— 7 个内置角色的工具/模型矩阵。
+**自检**：能讲清「端点为什么不写任何治理逻辑」——user_id 注入 LLMRequest 后，限流/预算/配额/缓存/审计全部由网关 Pre/Post 中间件生效，端点只做格式转换。
 
-**自检**：能对照阶段 1 的 step 序列，指出 PlanModeLifecycle 的每个 hook 分别挂在 step 的哪个坐标，以及 `await event.wait()` 阻塞时整个 background task 处于什么状态（挂起但不占 CPU，events.jsonl 已写 blocked 状态）。
+**未来 CLI 客户端**（尚未开工）的设计约定：复用 `forge.agents` 内核（零 FastAPI/DB 依赖），agent loop 与 Plan/Workflow lifecycle、HITL 都在客户端本地，LLM 调用直连本端点。
 
 ---
 
@@ -170,14 +166,13 @@
 > 把前面零散的「为什么这么设计」收口。
 
 1. **配置即治理**：
-   - [server/src/forge/config/domains/agent_profiles.py:38](server/src/forge/config/domains/agent_profiles.py:38) `AgentProfile` 模型
-   - [server/src/forge/agents/profiles.py:26](server/src/forge/agents/profiles.py:26) `load_profiles_at_startup` —— **逐条读 7 项启动校验**，理解「错误在启动暴露而非运行时」
-   - [server/config/sys_config.dev.yaml:137](server/config/sys_config.dev.yaml:137) `agent_profiles` 段 —— 对照三个 profile 的字段差异（tools_allowed / readonly_tools / plan_mode_initial / persistence / requires_template）
+   - [server/src/forge/config/domains/agent_profiles.py](server/src/forge/config/domains/agent_profiles.py) `AgentProfile` 模型
+   - [server/src/forge/agents/profiles.py:26](server/src/forge/agents/profiles.py:26) `load_profiles_at_startup` —— **逐条读 5 项启动校验**，理解「错误在启动暴露而非运行时」
+   - `server/config/sys_config.dev.yaml` 的 `agent_profiles` 段 —— 当前仅 chat profile
 2. **守护体系收编**：[server/src/forge/chat/guards/lifecycle_adapter.py:26](server/src/forge/chat/guards/lifecycle_adapter.py:26) `GuardLifecycleAdapter` —— 旧 LoopGuard 不重写，用适配器接入新协议（新旧桥接范例）。
 3. **事件溯源**：[server/src/forge/chat/event_store.py](server/src/forge/chat/event_store.py) + [server/src/forge/chat/broadcaster.py](server/src/forge/chat/broadcaster.py) —— 落盘 + 广播双写如何支撑断线重连。
-4. **持久化双轨**：对比 [finalizer.py](server/src/forge/chat/finalizer.py)（chat → DB）与 [run_store.py](server/src/forge/infrastructure/run_store.py)（CLI → JSONL），理解同一套 lifecycle hook 落到不同存储。
 
-**自检（终极）**：尝试口述「如果要新增一个 mode（比如 `review_only`），需要改哪些地方」。正确答案应是：① YAML 加一段 profile；② 写一个 prompt 模板；③ （若需特殊行为）写一个新 lifecycle 并在编排层的 `_build_lifecycles` 装配。**完全不需要动 ReActAgent**。能答到这，说明已掌握整个架构。
+**自检（终极）**：尝试口述「如果要新增一个 mode（比如 `review_only`），需要改哪些地方」。正确答案应是：① YAML 加一段 profile；② 写一个 prompt 模板；③ （若需特殊行为）写一个新 lifecycle 并在编排层装配。**完全不需要动 ReActAgent**。能答到这，说明已掌握整个架构。
 
 ---
 
@@ -186,12 +181,12 @@
 | 我想… | 从哪开始 |
 |-------|---------|
 | 加一个新工具 | [base.py:33](server/src/forge/tools/base.py:33) + `@register_tool`，再加进某 profile 的 `tools_allowed` |
-| 加一个新 mode | [sys_config.dev.yaml:137](server/config/sys_config.dev.yaml:137) 加 profile + prompt 模板 |
+| 加一个新 mode | `sys_config.dev.yaml` 加 profile + prompt 模板 |
 | 改 agent 单步行为 | 写新 `AgentLifecycle`（[lifecycle.py:120](server/src/forge/agents/lifecycle.py:120)），别改内核 |
 | 改 SSE 事件协议 | [chat.py:54](server/src/forge/api/routes/v1/chat.py:54) `_sse` + 前端 `web/src/types/index.ts` |
 | 改 LLM 路由 / 加 provider | [gateway.py](server/src/forge/llm/gateway.py) + `llm/providers/` + `llm/registry.py` |
 | 加一个守护规则 | `guards/` 实现 LoopGuard，注册进 [runner.py:50](server/src/forge/chat/runner.py:50) `_default_guard_factories` |
-| 改人机交互 | [hitl.py:67](server/src/forge/agents/hitl.py:67) `DecisionRegistry` + [decisions.py](server/src/forge/api/routes/v1/decisions.py) |
+| 改对外 LLM 端点 | [llm.py](server/src/forge/api/routes/v1/llm.py) + [schemas/llm.py](server/src/forge/api/schemas/llm.py) |
 
 ## 附录 B：阅读顺序一图流
 
@@ -206,9 +201,7 @@
    │
    ├── 阶段4 tools/base.py + llm/gateway.py + binding.py      (能力层)
    │
-   └── 阶段5 run_orchestrator.py → plan_mode.py → hitl.py     (CLI 进阶)
+   └── 阶段5 api/routes/v1/llm.py                             (对外端点)
               │
 阶段6 profiles.py + agent_profiles.yaml + guards/adapter      (融会贯通)
 ```
-</content>
-</invoke>

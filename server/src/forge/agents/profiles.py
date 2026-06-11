@@ -24,24 +24,19 @@ _loaded = False
 
 
 def load_profiles_at_startup() -> dict[str, AgentProfile]:
-    """启动期一次性加载并校验. 必须在 ToolRegistry / AGENT_ROLES / PromptRegistry
+    """启动期一次性加载并校验. 必须在 ToolRegistry / PromptRegistry
     都已就绪后调用.
 
     校验项:
-        1. tools_allowed / readonly_tools 中每个工具名在 ToolRegistry 已注册
-        2. readonly_tools ⊆ tools_allowed
-        3. sub_agents_allowed 中每个 role 在 agents/roles 已注册
-        4. plan_mode_initial=True ⇒ exit_plan_mode in readonly_tools
-        5. sub_agents_allowed 非空 ⇔ spawn_subagent in tools_allowed
-        6. system_prompt_template 在 PromptRegistry 存在
-        7. model_profile 在 model_profiles 字典定义
+        1. tools_allowed 中每个工具名在 ToolRegistry 已注册
+        2. system_prompt_template 在 PromptRegistry 存在
+        3. model_profile 在 model_profiles 字典定义
 
     任一失败 → raise RuntimeError(校验报告)
     """
     global _loaded
 
     # 延迟 import 防止启动期循环
-    from forge.agents.roles import AGENT_ROLES
     from forge.prompts import get_registry
     from forge.tools.registry import ToolRegistry
 
@@ -50,53 +45,24 @@ def load_profiles_at_startup() -> dict[str, AgentProfile]:
     profiles_cfg = cfg.profiles
     model_profile_dict = cfg.model_profiles.model_dump()
     tool_registry_names = {t.name for t in ToolRegistry.get_all()}
-    role_names = set(AGENT_ROLES.keys())
 
     errors: list[str] = []
     for mode, p in profiles_cfg.items():
         prefix = f"agent_profiles.profiles[{mode!r}]"
 
-        # 1 + 2
-        tool_set = set(p.tools_allowed)
+        # 1
         for tn in p.tools_allowed:
             if tn not in tool_registry_names:
                 errors.append(f"{prefix}.tools_allowed: 未注册工具 {tn!r}")
-        for tn in p.readonly_tools:
-            if tn not in tool_registry_names:
-                errors.append(f"{prefix}.readonly_tools: 未注册工具 {tn!r}")
-            if tn not in tool_set:
-                errors.append(
-                    f"{prefix}.readonly_tools: {tn!r} 不在 tools_allowed 中"
-                )
 
-        # 3
-        for role in p.sub_agents_allowed:
-            if role not in role_names:
-                errors.append(f"{prefix}.sub_agents_allowed: 未知角色 {role!r}")
-
-        # 4
-        if p.plan_mode_initial and "exit_plan_mode" not in p.readonly_tools:
-            errors.append(
-                f"{prefix}: plan_mode_initial=true 但 readonly_tools 缺 exit_plan_mode"
-            )
-
-        # 5
-        spawn_in_tools = "spawn_subagent" in tool_set
-        sub_agents_non_empty = bool(p.sub_agents_allowed)
-        if spawn_in_tools != sub_agents_non_empty:
-            errors.append(
-                f"{prefix}: spawn_subagent 与 sub_agents_allowed 不一致 "
-                f"(spawn_in_tools={spawn_in_tools}, sub_agents_non_empty={sub_agents_non_empty})"
-            )
-
-        # 6
+        # 2
         if not registry.exists(p.system_prompt_template):
             errors.append(
                 f"{prefix}.system_prompt_template: 模板 "
                 f"{p.system_prompt_template!r} 不存在"
             )
 
-        # 7
+        # 3
         if not model_profile_dict.get(p.model_profile):
             errors.append(
                 f"{prefix}.model_profile: 未定义档位 {p.model_profile!r}, "

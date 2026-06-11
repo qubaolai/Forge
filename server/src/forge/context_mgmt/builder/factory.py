@@ -18,7 +18,6 @@ from forge.context_mgmt.builder.message_assembler import MessageAssembler
 from forge.context_mgmt.builder.prompt_renderer import PromptRenderer
 from forge.context_mgmt.digest.policy import DigestPolicy
 from forge.context_mgmt.filters.hybrid import EmbeddingScorer, HybridFilter
-from forge.context_mgmt.filters.null import NullFilter
 from forge.context_mgmt.meter.token_meter import get_token_meter
 from forge.context_mgmt.protocols import (
     BudgetPolicy,
@@ -30,7 +29,6 @@ from forge.context_mgmt.protocols import (
 from forge.context_mgmt.providers.facts import FactsProvider
 from forge.context_mgmt.providers.history import HistoryProvider
 from forge.context_mgmt.providers.summary import SummaryProvider
-from forge.context_mgmt.providers.workspace import WorkspaceProvider
 from forge.context_mgmt.tool_policy.verbatim import VerbatimPolicy
 from forge.context_mgmt.types import ContextMode
 from forge.infrastructure.storage import MessageStore
@@ -45,11 +43,11 @@ def _default_history_filter(mode: ContextMode) -> HistoryFilter:
     CHAT:     HybridFilter (近期锚点 + 语义过滤)。settings.context.semantic_recall 开启
               且 embedder 可用时, 用 EmbeddingScorer (读缓存向量) 给早期轮次打分;
               否则不做语义过滤。
-    其他:     NullFilter (不改变历史, 后续由 CLI / Workflow 显式注入专用过滤器)
+    其他:     HybridFilter (服务端瘦身后仅保留 chat, 非 chat 仅作测试兜底)
     """
     if mode == ContextMode.CHAT:
         return _build_chat_history_filter()
-    return NullFilter()
+    return HybridFilter()
 
 
 def _build_chat_history_filter() -> HistoryFilter:
@@ -91,20 +89,12 @@ def _default_tool_result_policy(mode: ContextMode) -> ToolResultPolicy:
     """按 mode 选默认 ToolResultPolicy.
 
     CHAT:     TruncatingPolicy (跨轮加载的大 tool 结果截断到 500 token)
-    TASK:     EvictingPolicy (跨轮 tool 结果用占位符替代; 当轮执行不受影响)
-    WORKFLOW: SummarizingPolicy (LLM 摘要; 当前降级到 Truncating)
     其他:     VerbatimPolicy
     """
-    from forge.context_mgmt.tool_policy.evicting import EvictingPolicy
-    from forge.context_mgmt.tool_policy.summarizing import SummarizingPolicy
     from forge.context_mgmt.tool_policy.truncating import TruncatingPolicy
 
     if mode == ContextMode.CHAT:
         return TruncatingPolicy()
-    if mode == ContextMode.TASK:
-        return EvictingPolicy()
-    if mode == ContextMode.WORKFLOW:
-        return SummarizingPolicy()
     return VerbatimPolicy()
 
 
@@ -156,7 +146,7 @@ def build_context_builder(
         tool_result_policy: 可选, 默认按 mode 选择.
         budget_policy:     可选, 默认 DefaultBudgetPolicy.
         token_meter:       可选, 默认全局单例.
-        extra_providers:   附加 Provider (如 workflow_step), 追加到默认 Provider 列表.
+        extra_providers:   附加 Provider, 追加到默认 Provider 列表.
         digest_policy:     可选, 单条超长消息引用化策略; 默认按 settings.context.digest 构造.
         digest_cap:        可选, 单条折叠 token 上限; 默认取自 settings。
     """
@@ -179,7 +169,6 @@ def build_context_builder(
         ),
         SummaryProvider(memory_store, meter),
         FactsProvider(memory_store, meter),
-        WorkspaceProvider(meter),
     ]
     if extra_providers:
         providers.extend(extra_providers)

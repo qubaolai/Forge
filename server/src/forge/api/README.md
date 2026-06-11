@@ -25,10 +25,10 @@ api/
 ## 启动装配顺序（`lifespan.py`，即组件依赖图）
 
 ```
-Logging/Tracing → PromptRegistry → ToolRegistry + AGENT_ROLES
-  → load_profiles_at_startup (7 项强校验)
+Logging/Tracing → PromptRegistry → ToolRegistry
+  → load_profiles_at_startup (3 项强校验)
   → Database → TaskQueue → EventBus + memory hooks → Redis + ModelConfigCache
-  → LLMGateway → RAG 组件 → DecisionRegistry.cleanup_loop → ChatTurnSupervisor.cleanup
+  → LLMGateway → RAG 组件 → ChatTurnSupervisor.cleanup
 ```
 
 ## 如何使用
@@ -48,6 +48,5 @@ Logging/Tracing → PromptRegistry → ToolRegistry + AGENT_ROLES
 
 ## 边界与注意
 
-- `documents.py` / `retrieval.py` / `feedback.py` 路由文件存在但未在 `router.py` 挂载（占位/未启用）。
-- HITL 决策统一 `POST /v1/decisions/{token}`，旧 `/runs/{id}/decide` 已废弃。
-- SSE 三类：chat（broadcaster 实时 + events.jsonl 回放）、CLI run（cursor 轮询）、admin。
+- 服务端不再提供远程 CLI run / HITL / artifact 路由。
+- SSE 两类：chat（broadcaster 实时 + events.jsonl 回放）、admin。

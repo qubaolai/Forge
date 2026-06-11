@@ -6,14 +6,11 @@
     - parameters:  JSON Schema dict, 描述参数结构
     - run / arun:  执行函数, 二选一; 接收 dict, 返回任何可 JSON 序列化的结果
 
-P1 引入的元数据扩展 (类属性, 子类按需覆盖):
+元数据扩展 (类属性, 子类按需覆盖):
     - parallelism_safe:   同 step 内能否并行
     - dangerous:          危险工具 → 走 audit log
     - audit_payload_fields: audit 写入时保留哪些参数字段 (其余 redact)
     - timeout_sec:        软上限 (具体语义由工具自己解释)
-    - required_scope:     必须的执行作用域, 例如 "workspace" (路径校验)
-    - allowed_roles:      仅这些角色能调用 (空 = 不限)
-    - path_role_whitelist: role -> 路径前缀白名单 (仅涉及路径的工具填)
 
 设计原则:
     - 同步工具实现 run (CPU bound / 纯计算); 异步工具实现 arun (IO bound,
@@ -58,21 +55,7 @@ class Tool(ABC):
     audit_payload_fields: tuple[str, ...] = ()
 
     # 软超时 (秒). None = 工具自己决定; 工具可在 run/arun 内读取并应用.
-    # 注意: workspace 全局 shell timeout 由 executor.policy 兜底夹紧.
     timeout_sec: float | None = None
-
-    # ──────── 权限 ────────
-
-    # 此工具要求的作用域. 例如 "workspace" 要求路径必须在 workspace 内.
-    # 未设置 → 不做额外作用域校验.
-    required_scope: str | None = None
-
-    # role 允许列表; 空表示不限 (单机宽松默认).
-    allowed_roles: tuple[str, ...] = ()
-
-    # 仅适用涉及路径的工具: role -> 路径前缀白名单.
-    # 留空交由 workspace settings 兜底.
-    path_role_whitelist: dict[str, tuple[str, ...]] = {}
 
     # ──────── 入口 ────────
 

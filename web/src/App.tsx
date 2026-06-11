@@ -10,13 +10,9 @@ import LoginPage from '@/pages/auth/LoginPage';
 import ChatPage from '@/pages/chat/ChatPage';
 import KnowledgeListPage from '@/pages/knowledge/KnowledgeListPage';
 import KnowledgeDetailPage from '@/pages/knowledge/KnowledgeDetailPage';
-import AgentListPage from '@/pages/agents/AgentListPage';
-import AgentEditorPage from '@/pages/agents/AgentEditorPage';
-import SettingsPage from '@/pages/settings/SettingsPage';
 import AdminUsersPage from '@/pages/admin/AdminUsersPage';
 import AdminModelsPage from '@/pages/admin/AdminModelsPage';
 import AdminProvidersPage from '@/pages/admin/AdminProvidersPage';
-import AdminAuditPage from '@/pages/admin/AdminAuditPage';
 import AppLayout from '@/components/common/AppLayout';
 import { ToastContainer } from '@/components/common/Toast';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
@@ -155,21 +151,12 @@ export default function App() {
                   <Route index element={<KnowledgeListPage />} />
                   <Route path=":kbId" element={<KnowledgeDetailPage />} />
                 </Route>
-
-                <Route path="agents">
-                  <Route index element={<AgentListPage />} />
-                  <Route path="new" element={<AgentEditorPage />} />
-                  <Route path=":agentId" element={<AgentEditorPage />} />
-                </Route>
-
-                <Route path="settings/*" element={<SettingsPage />} />
               </Route>
 
               <Route path="admin" element={<RequireRole roles={['owner', 'admin']}><Outlet /></RequireRole>}>
                 <Route path="users" element={<AdminUsersPage />} />
                 <Route path="models" element={<AdminModelsPage />} />
                 <Route path="providers" element={<AdminProvidersPage />} />
-                <Route path="audit" element={<AdminAuditPage />} />
               </Route>
             </Route>
 
