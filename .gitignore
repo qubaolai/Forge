@@ -14,6 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
+data/
+.vscode/
 
 lib64/
 parts/
