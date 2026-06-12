@@ -135,7 +135,7 @@ class ProviderRepository:
             stmt = (
                 select(ModelOrm)
                 .where(ModelOrm.provider_id == provider.id)
-                .where(ModelOrm.is_enabled == True)
+                .where(ModelOrm.is_enabled.is_(True))
             )
             res = await self.db.execute(stmt)
             models = list(res.scalars().all())

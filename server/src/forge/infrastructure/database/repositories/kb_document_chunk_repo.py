@@ -32,6 +32,15 @@ from forge.infrastructure.database.repositories.base import BaseRepository
 logger = logging.getLogger(__name__)
 
 
+def _to_int(value: str | int | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize_extra(extra: Any) -> dict:
     """允许传入 dict / JSON-string / None, 统一成 dict."""
     if extra is None:
@@ -74,8 +83,8 @@ class KbDocumentChunkRepository(BaseRepository):
             rows.append(
                 {
                     "id": p["id"],
-                    "document_id": p["document_id"],
-                    "kb_id": p["kb_id"],
+                    "document_id": _to_int(p["document_id"]),
+                    "kb_id": _to_int(p["kb_id"]),
                     "seq": int(p.get("seq", 0)),
                     "content": p["content"],
                     "header_path": p.get("header_path", "") or "",
@@ -126,20 +135,20 @@ class KbDocumentChunkRepository(BaseRepository):
         for row in rows:
             await self.session.merge(KbDocumentChunkOrm(**row))
 
-    async def delete_by_document(self, document_id: str) -> int:
+    async def delete_by_document(self, document_id: str | int) -> int:
         """按 document_id 批量删除该文档所有父块. 返回删除行数."""
-        stmt = delete(KbDocumentChunkOrm).where(KbDocumentChunkOrm.document_id == document_id)
+        stmt = delete(KbDocumentChunkOrm).where(KbDocumentChunkOrm.document_id == _to_int(document_id))
         result = await self.session.execute(stmt)
         return int(getattr(result, "rowcount", 0) or 0)
 
     # ==================================================================
     # 读
     # ==================================================================
-    async def count_by_document(self, document_id: str) -> int:
+    async def count_by_document(self, document_id: str | int) -> int:
         stmt = (
             select(func.count())
             .select_from(KbDocumentChunkOrm)
-            .where(KbDocumentChunkOrm.document_id == document_id)
+            .where(KbDocumentChunkOrm.document_id == _to_int(document_id))
         )
         res = await self.session.execute(stmt)
         return int(res.scalar_one())

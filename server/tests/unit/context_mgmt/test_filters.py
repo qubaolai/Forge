@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import pytest
 
 from forge.context_mgmt.filters.hybrid import EmbeddingScorer, HybridFilter
@@ -14,7 +16,7 @@ def _msg(
     turn_index: int,
     content: str = "x",
     *,
-    role: str = "user",
+    role: Literal["system", "user", "assistant", "tool"] = "user",
     message_id: str | None = None,
 ) -> HistoryMessage:
     return HistoryMessage(

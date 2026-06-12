@@ -22,7 +22,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from forge.core.request_context import current_user_id
 from forge.infrastructure.database.database import session_scope
@@ -132,7 +132,7 @@ class KnowledgeSearchTool(Tool):
             embedder = await runtime.resolve_embedding()
             vector_doc_ids = (
                 await doc_repo.list_vector_ready_doc_ids(
-                    kb_ids, str(getattr(embedder, "_forge_model_id"))
+                    kb_ids, str(cast(Any, embedder)._forge_model_id)
                 )
                 if embedder is not None else []
             )

@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -100,14 +100,14 @@ def test_executor_is_parallelism_safe_unknown_is_false() -> None:
 def _stub_llm_with_calls(tool_calls_per_step: list[list[ToolCall]]):
     """造一个最简 LLM stub: 按预设的 step 返回 tool_calls, 最后一步无 tool_calls (终态).
 
-    chat_with_tools_stream 是同步迭代器, 返回 chunk dict.
+    chat_with_tools_stream 是异步迭代器, 返回 chunk dict.
     """
 
     class _Stub:
         def __init__(self):
             self.step = 0
 
-        def chat_with_tools_stream(self, messages, tools, **kwargs):
+        async def chat_with_tools_stream(self, messages, tools, **kwargs):
             calls = tool_calls_per_step[self.step] if self.step < len(tool_calls_per_step) else []
             self.step += 1
             # 单 chunk: 给 content_delta = "" + tool_calls + finish_reason
@@ -198,7 +198,7 @@ async def test_mixed_preserves_order_in_messages() -> None:
             self.step = 0
             self.last_messages: list[Message] = []
 
-        def chat_with_tools_stream(self, messages, tools_, **kwargs):
+        async def chat_with_tools_stream(self, messages, tools_, **kwargs):
             self.last_messages = list(messages)
             calls_now = calls if self.step == 0 else []
             self.step += 1
@@ -213,7 +213,7 @@ async def test_mixed_preserves_order_in_messages() -> None:
             captured_messages.extend(self.last_messages)
 
     llm = _CaptureLLM()
-    agent = ReActAgent(llm=llm, tools=tools, executor=executor, max_steps=3)
+    agent = ReActAgent(llm=cast(Any, llm), tools=tools, executor=executor, max_steps=3)
     await _collect_events(agent.stream("hi"))
 
     # 第二轮 LLM 调用看到的 messages: 末尾应该是 [assistant_with_tool_calls,

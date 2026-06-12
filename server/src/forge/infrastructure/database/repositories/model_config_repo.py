@@ -12,33 +12,49 @@ from forge.infrastructure.database.orm.model_config_orm import (
 )
 from forge.infrastructure.database.orm.model_orm import ModelOrm
 
-CONFIG_ORM_BY_TYPE = {
-    "chat": ChatModelConfigOrm,
-    "embedding": EmbeddingModelConfigOrm,
-    "reranker": RerankerModelConfigOrm,
-}
-
 
 class ModelConfigRepository:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
     async def get(self, model_id: int, model_type: str):
-        orm = CONFIG_ORM_BY_TYPE.get(model_type)
-        if orm is None:
+        if model_type == "chat":
+            chat_stmt = select(ChatModelConfigOrm).where(ChatModelConfigOrm.model_id == model_id)
+            return (await self.db.execute(chat_stmt)).scalar_one_or_none()
+        elif model_type == "embedding":
+            embedding_stmt = select(EmbeddingModelConfigOrm).where(
+                EmbeddingModelConfigOrm.model_id == model_id
+            )
+            return (await self.db.execute(embedding_stmt)).scalar_one_or_none()
+        elif model_type == "reranker":
+            reranker_stmt = select(RerankerModelConfigOrm).where(
+                RerankerModelConfigOrm.model_id == model_id
+            )
+            return (await self.db.execute(reranker_stmt)).scalar_one_or_none()
+        else:
             return None
-        stmt = select(orm).where(orm.model_id == model_id)
-        return (await self.db.execute(stmt)).scalar_one_or_none()
 
     async def create(self, model_id: int, model_type: str, config: dict):
-        orm = CONFIG_ORM_BY_TYPE.get(model_type)
-        if orm is None:
+        if model_type == "chat":
+            await self._validate_model_type(model_id, model_type)
+            chat_row = ChatModelConfigOrm(model_id=model_id, **config)
+            self.db.add(chat_row)
+            await self.db.flush()
+            return chat_row
+        elif model_type == "embedding":
+            await self._validate_model_type(model_id, model_type)
+            embedding_row = EmbeddingModelConfigOrm(model_id=model_id, **config)
+            self.db.add(embedding_row)
+            await self.db.flush()
+            return embedding_row
+        elif model_type == "reranker":
+            await self._validate_model_type(model_id, model_type)
+            reranker_row = RerankerModelConfigOrm(model_id=model_id, **config)
+            self.db.add(reranker_row)
+            await self.db.flush()
+            return reranker_row
+        else:
             raise ValueError(f"不支持的模型类型: {model_type}")
-        await self._validate_model_type(model_id, model_type)
-        row = orm(model_id=model_id, **config)
-        self.db.add(row)
-        await self.db.flush()
-        return row
 
     async def update(self, model_id: int, model_type: str, config: dict):
         await self._validate_model_type(model_id, model_type)

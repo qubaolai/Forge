@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from forge.context_mgmt.digest.policy import DigestPolicy
@@ -77,7 +79,7 @@ def _request() -> ContextRequest:
 
 def _provider(rows, digest_store) -> HistoryProvider:
     return HistoryProvider(
-        _FakeMessageStore(rows),
+        cast(Any, _FakeMessageStore(rows)),
         NullFilter(),
         VerbatimPolicy(),
         _CharMeter(),

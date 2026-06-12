@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import time
+from collections.abc import Generator
 from unittest.mock import MagicMock
 
 import pytest
@@ -31,7 +32,7 @@ from forge.infrastructure.queue.celery_queue import CeleryTaskQueue
 
 
 @pytest.fixture(autouse=True)
-def _reset() -> None:
+def _reset() -> Generator[None, None, None]:
     reset_task_queue()
     yield
     reset_task_queue()

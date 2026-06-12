@@ -34,7 +34,7 @@ class ModelRepository:
     async def list_by_provider(self, provider_id: int, enabled_only: bool = False) -> list[ModelOrm]:
         stmt = select(ModelOrm).where(ModelOrm.provider_id == provider_id)
         if enabled_only:
-            stmt = stmt.where(ModelOrm.is_enabled == True)
+            stmt = stmt.where(ModelOrm.is_enabled.is_(True))
         res = await self.db.execute(stmt)
         return list(res.scalars().all())
 
@@ -42,7 +42,7 @@ class ModelRepository:
         """获取某类型下所有已启用的模型（跨供应商）。"""
         stmt = (
             select(ModelOrm)
-            .where(and_(ModelOrm.model_type == model_type, ModelOrm.is_enabled == True))
+            .where(and_(ModelOrm.model_type == model_type, ModelOrm.is_enabled.is_(True)))
         )
         res = await self.db.execute(stmt)
         return list(res.scalars().all())
@@ -78,7 +78,7 @@ class ModelRepository:
                 and_(
                     ProviderOrm.name == provider_name,
                     ModelOrm.name == model_name,
-                    ModelOrm.is_enabled == True,  # noqa: E712
+                    ModelOrm.is_enabled.is_(True),
                     ProviderOrm.is_enabled == 1,
                 )
             )
@@ -94,7 +94,7 @@ class ModelRepository:
             .join(ProviderOrm, ProviderOrm.id == ModelOrm.provider_id)
             .where(
                 and_(
-                    ModelOrm.is_enabled == True,
+                    ModelOrm.is_enabled.is_(True),
                     ProviderOrm.is_enabled == 1,
                 )
             )
@@ -105,7 +105,7 @@ class ModelRepository:
     # ---- 写入 ----
 
     # 同步时允许更新的字段（仅模型本身信息，不改业务字段）
-    _SYNC_UPDATABLE_FIELDS = frozenset({"display_name"})
+    _SYNC_UPDATABLE_FIELDS: frozenset[str] = frozenset({"display_name"})
 
     async def sync_upsert(
         self, provider_id: int, model_data: dict
@@ -200,11 +200,11 @@ class ModelRepository:
     # ---- 管理端手动 CRUD ----
 
     # 管理端允许更新的字段（不含 provider_id / model_id 等业务主键）
-    _ADMIN_UPDATABLE_FIELDS = frozenset({
+    _ADMIN_UPDATABLE_FIELDS: frozenset[str] = frozenset({
         "display_name", "is_enabled",
     })
 
-    _NULLABLE_ADMIN_FIELDS = frozenset()
+    _NULLABLE_ADMIN_FIELDS: frozenset[str] = frozenset()
 
     async def create(self, provider_id: int, data: dict) -> ModelOrm:
         """管理端手动新增模型。"""

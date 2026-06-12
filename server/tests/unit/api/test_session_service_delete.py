@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -55,7 +56,7 @@ async def test_delete_cascades_summary_cleanup() -> None:
     ):
         await svc.delete(_session("9001"))
 
-    svc.session_repo.delete.assert_awaited_once()
+    cast(Any, svc.session_repo.delete).assert_awaited_once()
     delete_mock.assert_awaited_once_with("9001")
 
 
@@ -79,4 +80,4 @@ async def test_summary_cleanup_failure_does_not_block_delete() -> None:
     ):
         await svc.delete(_session())  # 不抛
 
-    svc.session_repo.delete.assert_awaited_once()
+    cast(Any, svc.session_repo.delete).assert_awaited_once()

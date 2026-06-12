@@ -111,15 +111,15 @@ async def run_rag_rebuild_task(job_id: str) -> None:
                 version: int = expected_version,
                 model_id: int = expected_model_id,
             ) -> None:
-                latest = (await db.execute(
+                latest_binding = (await db.execute(
                     select(SystemModelBindingOrm.version, SystemModelBindingOrm.model_id).where(
                         SystemModelBindingOrm.role == "rag_embedding"
                     )
                 )).one_or_none()
                 if (
-                    latest is None
-                    or latest[0] != version
-                    or latest[1] != model_id
+                    latest_binding is None
+                    or latest_binding[0] != version
+                    or latest_binding[1] != model_id
                 ):
                     raise RuntimeError("RAG Embedding 绑定已变化")
 
@@ -132,15 +132,15 @@ async def run_rag_rebuild_task(job_id: str) -> None:
                 )
                 job.succeeded_documents += 1
             except Exception as exc:  # noqa: BLE001
-                binding = (await db.execute(
+                latest_binding = (await db.execute(
                     select(SystemModelBindingOrm.version, SystemModelBindingOrm.model_id).where(
                         SystemModelBindingOrm.role == "rag_embedding"
                     )
                 )).one_or_none()
                 if (
-                    binding is None
-                    or binding[0] != expected_version
-                    or binding[1] != expected_model_id
+                    latest_binding is None
+                    or latest_binding[0] != expected_version
+                    or latest_binding[1] != expected_model_id
                 ):
                     current.vector_index_status = "stale"
                     job.status = "cancelled"
@@ -155,15 +155,15 @@ async def run_rag_rebuild_task(job_id: str) -> None:
     async with factory() as db:
         job = await db.get(RagIndexRebuildJobOrm, int(job_id))
         if job is not None:
-            binding = (await db.execute(
+            final_binding = (await db.execute(
                 select(SystemModelBindingOrm.version, SystemModelBindingOrm.model_id).where(
                     SystemModelBindingOrm.role == "rag_embedding"
                 )
             )).one_or_none()
             if (
-                binding is None
-                or binding[0] != job.binding_version
-                or binding[1] != job.model_id
+                final_binding is None
+                or final_binding[0] != job.binding_version
+                or final_binding[1] != job.model_id
             ):
                 job.status = "cancelled"
             else:

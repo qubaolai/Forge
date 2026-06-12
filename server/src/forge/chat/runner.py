@@ -34,6 +34,7 @@ from forge.config.domains.agent_profiles import AgentProfile
 from forge.core.types.message import Message
 from forge.tools.base import Tool
 from forge.tools.registry import ToolRegistry
+
 # WallClockGuard 默认时限 (秒): 软提醒 / 警告 / 硬停
 _WALL_CLOCK_SOFT_LIMIT_SEC = 120.0
 _WALL_CLOCK_WARN_LIMIT_SEC = 180.0

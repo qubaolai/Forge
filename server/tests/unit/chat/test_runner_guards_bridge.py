@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from forge.agents.lifecycle import StepContext
@@ -50,14 +52,14 @@ def _ctx(step: int = 0) -> StepContext:
 @pytest.mark.asyncio
 async def test_all_pass_returns_none() -> None:
     """全部 pass -> 返回 None (无 decision)."""
-    adapter = GuardLifecycleAdapter([_Pass(), _Pass()])
+    adapter = GuardLifecycleAdapter(cast(Any, [_Pass(), _Pass()]))
     decision = await adapter.before_step(_ctx())
     assert decision is None
 
 
 @pytest.mark.asyncio
 async def test_hint_injects_but_does_not_force() -> None:
-    adapter = GuardLifecycleAdapter([_Hint("提示 A")])
+    adapter = GuardLifecycleAdapter(cast(Any, [_Hint("提示 A")]))
     decision = await adapter.before_step(_ctx())
     assert decision is not None
     assert decision.inject_system_messages == ["提示 A"]
@@ -66,7 +68,7 @@ async def test_hint_injects_but_does_not_force() -> None:
 
 @pytest.mark.asyncio
 async def test_force_stop_sets_text_only() -> None:
-    adapter = GuardLifecycleAdapter([_Force()])
+    adapter = GuardLifecycleAdapter(cast(Any, [_Force()]))
     decision = await adapter.before_step(_ctx())
     assert decision is not None
     assert decision.force_text_only is True
@@ -76,7 +78,7 @@ async def test_force_stop_sets_text_only() -> None:
 @pytest.mark.asyncio
 async def test_any_force_stop_wins() -> None:
     """即使有 hint, 只要任意 force_stop, 整步 force_text_only=True."""
-    adapter = GuardLifecycleAdapter([_Hint("提示 A"), _Force(), _Hint("提示 B")])
+    adapter = GuardLifecycleAdapter(cast(Any, [_Hint("提示 A"), _Force(), _Hint("提示 B")]))
     decision = await adapter.before_step(_ctx())
     assert decision is not None
     assert decision.force_text_only is True
@@ -88,7 +90,7 @@ async def test_any_force_stop_wins() -> None:
 @pytest.mark.asyncio
 async def test_crash_isolated() -> None:
     """一个 guard 崩了, 其他照常工作."""
-    adapter = GuardLifecycleAdapter([_Crash(), _Hint("仍然给提示")])
+    adapter = GuardLifecycleAdapter(cast(Any, [_Crash(), _Hint("仍然给提示")]))
     decision = await adapter.before_step(_ctx())
     assert decision is not None
     assert decision.inject_system_messages == ["仍然给提示"]

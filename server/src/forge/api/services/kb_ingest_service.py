@@ -30,6 +30,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
+from typing import Any, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -110,13 +111,15 @@ class KbIngestService:
 
         embedder = await self.rag_runtime.resolve_embedding()
         child_store = await self.rag_runtime.vector_store_for(embedder)
+        doc_id = str(document.id)
+        kb_id = str(kb.id)
 
         # 1. parsing
-        await doc_repo.update_status(document.id, "parsing", progress=10)
+        await doc_repo.update_status(doc_id, "parsing", progress=10)
         parser = self.parser_dispatcher.get(file_path)
         if parser is None:
             await doc_repo.update_status(
-                document.id,
+                doc_id,
                 "failed",
                 message=f"未支持的文件格式: {file_path.suffix}",
             )
@@ -128,35 +131,35 @@ class KbIngestService:
         try:
             elements = parser.parse(file_path)
         except Exception as e:
-            await doc_repo.update_status(document.id, "failed", message=f"解析失败: {e}")
+            await doc_repo.update_status(doc_id, "failed", message=f"解析失败: {e}")
             raise KbIngestError(f"解析 {file_path} 失败: {e}") from e
 
         if not elements:
-            await doc_repo.update_status(document.id, "failed", message="解析为空, 无可入库内容")
+            await doc_repo.update_status(doc_id, "failed", message="解析为空, 无可入库内容")
             raise KbIngestError(f"文件 {file_path} 解析结果为空")
 
         # 2. chunking
-        await doc_repo.update_status(document.id, "chunking", progress=30)
+        await doc_repo.update_status(doc_id, "chunking", progress=30)
         chunker = select_chunker(elements, self.chunk_config)
-        chunks = chunker.chunk(elements, doc_id=document.id, doc_version="v1")
+        chunks = chunker.chunk(elements, doc_id=doc_id, doc_version="v1")
         # 注入 kb_id (chunker 不感知 KB)
         for ch in chunks:
-            ch.kb_id = kb.id
+            ch.kb_id = kb_id
         parents = [c for c in chunks if c.chunk_type == ChunkType.PARENT]
         children = [c for c in chunks if c.chunk_type == ChunkType.CHILD]
         if not parents:
-            await doc_repo.update_status(document.id, "failed", message="切分后无可入库父块")
+            await doc_repo.update_status(doc_id, "failed", message="切分后无可入库父块")
             raise KbIngestError(f"文件 {file_path} 切分结果为空")
 
         # 3. embedding
-        await doc_repo.update_status(document.id, "embedding", progress=60)
+        await doc_repo.update_status(doc_id, "embedding", progress=60)
         embeddings: list[list[float]] = []
         if embedder is not None:
             try:
                 embed_texts = [self._build_embed_text(c) for c in children]
                 embeddings = embedder.embed_documents(embed_texts) if children else []
             except Exception as e:
-                await doc_repo.update_status(document.id, "failed", message=f"向量化失败: {e}")
+                await doc_repo.update_status(doc_id, "failed", message=f"向量化失败: {e}")
                 raise KbIngestError(f"embed 失败: {e}") from e
 
         # 4. Saga 写库外 + MySQL
@@ -171,27 +174,27 @@ class KbIngestService:
             )
         except Exception as e:
             logger.exception("入库失败, 触发补偿清理: doc=%s", document.id)
-            self._compensate(document.id, child_store)
-            await doc_repo.update_status(document.id, "failed", message=f"入库失败: {e}")
+            self._compensate(doc_id, child_store)
+            await doc_repo.update_status(doc_id, "failed", message=f"入库失败: {e}")
             raise KbIngestError(f"入库失败: {e}") from e
 
         # 5. 终态
         await doc_repo.update_status(
-            document.id,
+            doc_id,
             "indexed",
             progress=100,
             chunk_count=len(parents),
             mark_indexed=True,
         )
         document.embedding_model_id = (
-            int(embedder._forge_model_id) if embedder is not None else None  # type: ignore[attr-defined]
+            int(cast(Any, embedder)._forge_model_id) if embedder is not None else None
         )
         document.vector_index_status = "ready" if embedder is not None else "stale"
         document.vector_index_error = None
         document.vector_indexed_at = document.indexed_at if embedder is not None else None
         if update_kb_stats:
             await kb_repo.update_stats(
-                kb.id,
+                kb_id,
                 chunk_count_delta=len(parents),
             )
 
@@ -233,10 +236,11 @@ class KbIngestService:
             raise KbIngestError(f"文件 {file_path} 解析结果为空")
 
         chunker = select_chunker(elements, self.chunk_config)
-        chunks = chunker.chunk(elements, doc_id=document.id, doc_version="v1")
+        doc_id = str(document.id)
+        chunks = chunker.chunk(elements, doc_id=doc_id, doc_version="v1")
         children = [c for c in chunks if c.chunk_type == ChunkType.CHILD]
         for child in children:
-            child.kb_id = document.kb_id
+            child.kb_id = str(document.kb_id)
         try:
             embeddings = embedder.embed_documents(
                 [self._build_embed_text(child) for child in children]
@@ -246,11 +250,11 @@ class KbIngestService:
 
         if before_vector_write is not None:
             await before_vector_write()
-        child_store.delete_by_doc(document.id)
+        child_store.delete_by_doc(doc_id)
         if children:
             child_store.add_children(children, embeddings)
 
-        document.embedding_model_id = int(embedder._forge_model_id)  # type: ignore[attr-defined]
+        document.embedding_model_id = int(cast(Any, embedder)._forge_model_id)
         document.vector_index_status = "ready"
         document.vector_index_error = None
         document.vector_indexed_at = datetime.utcnow()
@@ -274,11 +278,11 @@ class KbIngestService:
             embedder = await self.rag_runtime.resolve_embedding()
             child_store = await self.rag_runtime.vector_store_for(embedder)
             if child_store is not None:
-                child_store.delete_by_doc(document.id)
+                child_store.delete_by_doc(str(document.id))
         except Exception:  # noqa: BLE001
             logger.exception("删除向量库子块失败: doc=%s", document.id)
         try:
-            self.bm25_store.delete_by_doc(document.id)
+            self.bm25_store.delete_by_doc(str(document.id))
         except Exception:  # noqa: BLE001
             logger.exception("删除 BM25 子块失败: doc=%s", document.id)
         # 再清 MySQL 父块 (CASCADE 也能带走, 但显式删避免依赖外键)
@@ -306,9 +310,10 @@ class KbIngestService:
                   同一 session, 调用方 commit 时统一生效)
         """
         # 4.1 清理库外 (重入时兜底)
+        doc_id = str(document.id)
         if child_store is not None:
-            child_store.delete_by_doc(document.id)
-        self.bm25_store.delete_by_doc(document.id)
+            child_store.delete_by_doc(doc_id)
+        self.bm25_store.delete_by_doc(doc_id)
         # 4.2 清父块 (重入时兜底)
         await chunk_repo.delete_by_document(document.id)
 
@@ -319,7 +324,7 @@ class KbIngestService:
             self.bm25_store.add_children(children)
 
         # 4.4 写 MySQL 父块 (commit 由外层控制)
-        parent_dicts = [self._chunk_to_parent_dict(p, document.kb_id) for p in parents]
+        parent_dicts = [self._chunk_to_parent_dict(p, str(document.kb_id)) for p in parents]
         await chunk_repo.save_many(parent_dicts)
 
     def _compensate(self, document_id: str, child_store: ChildVectorStore | None) -> None:

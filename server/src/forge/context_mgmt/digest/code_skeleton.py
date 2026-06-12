@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any, cast
 
 from forge.context_mgmt.digest.segmenter import RawSegment
 from forge.context_mgmt.digest.types import Segment
@@ -88,7 +89,7 @@ def _extract_signatures(
     except Exception:  # noqa: BLE001 — 依赖未安装, 走启发式
         return []
     try:
-        parser = get_parser(ts_lang)
+        parser = get_parser(cast(Any, ts_lang))
         tree = parser.parse(code.encode("utf-8"))
     except Exception as exc:  # noqa: BLE001
         logger.debug("tree-sitter 解析失败 lang=%s: %s", ts_lang, exc)

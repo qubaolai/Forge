@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from typing import Any, cast
 
 from sqlalchemy import select
 
@@ -58,6 +59,7 @@ class BoundModelResolver:
         if impl != "mock" and not api_key:
             raise RuntimeError(f"供应商 {provider.name} 没有可用 API-Key")
         runtime_config = self._runtime_config(model.name, model.model_type, config, api_key)
+        instance: object
         if model.model_type == "embedding":
             from forge.retrieval.embedders.factory import EmbedderFactory
             instance = EmbedderFactory.create(impl, runtime_config)
@@ -66,7 +68,7 @@ class BoundModelResolver:
             instance = RerankerFactory.create(impl, runtime_config)
         else:
             raise RuntimeError(f"系统绑定不支持模型类型: {model.model_type}")
-        instance._forge_model_id = str(model.id)  # type: ignore[attr-defined]
+        cast(Any, instance)._forge_model_id = str(model.id)
         with self._lock:
             self._cache = {
                 key: value

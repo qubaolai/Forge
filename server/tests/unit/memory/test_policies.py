@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import Any
 
 import pytest
 
@@ -22,7 +23,7 @@ from forge.memory.scope import MemoryScope
 
 
 def _fact(content: str = "用户偏好 Python", **overrides) -> Fact:
-    base = {
+    base: dict[str, Any] = {
         "id": "fact_001",
         "user_id": "user_abc",
         "content": content,

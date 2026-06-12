@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -79,9 +80,10 @@ async def test_new_turn_preserves_compaction_event_order_and_prompt() -> None:
             )
             return snapshot
 
-    orchestrator = TurnOrchestrator(_ContextManager())
-    orchestrator._finalizer = SimpleNamespace(finalize=AsyncMock(return_value=None))
-    orchestrator._setup_runner = AsyncMock(return_value=_Runner())
+    orchestrator = TurnOrchestrator(cast(Any, _ContextManager()))
+    orchestrator_any = cast(Any, orchestrator)
+    orchestrator_any._finalizer = SimpleNamespace(finalize=AsyncMock(return_value=None))
+    orchestrator_any._setup_runner = AsyncMock(return_value=_Runner())
     run = _Run()
     body = SimpleNamespace(model_options=SimpleNamespace(model_dump=lambda: {}))
 
@@ -89,7 +91,7 @@ async def test_new_turn_preserves_compaction_event_order_and_prompt() -> None:
         "forge.chat.orchestrator.get_settings",
         return_value=SimpleNamespace(memory=SimpleNamespace(enabled=True)),
     ):
-        await orchestrator._execute_new_turn(run, _ctx(), body)
+        await orchestrator_any._execute_new_turn(run, _ctx(), body)
 
     assert [event["type"] for event in run.events] == [
         "message_start",
@@ -97,22 +99,23 @@ async def test_new_turn_preserves_compaction_event_order_and_prompt() -> None:
         "compaction_done",
         "context_usage",
     ]
-    assert orchestrator._setup_runner.await_args.args[1] == "rendered prompt"
+    assert orchestrator_any._setup_runner.await_args.args[1] == "rendered prompt"
 
 
 @pytest.mark.asyncio
 async def test_new_turn_disables_compaction_when_memory_is_disabled() -> None:
     manager = SimpleNamespace(build=AsyncMock(return_value=_snapshot()))
-    orchestrator = TurnOrchestrator(manager)
-    orchestrator._finalizer = SimpleNamespace(finalize=AsyncMock(return_value=None))
-    orchestrator._setup_runner = AsyncMock(return_value=_Runner())
+    orchestrator = TurnOrchestrator(cast(Any, manager))
+    orchestrator_any = cast(Any, orchestrator)
+    orchestrator_any._finalizer = SimpleNamespace(finalize=AsyncMock(return_value=None))
+    orchestrator_any._setup_runner = AsyncMock(return_value=_Runner())
     body = SimpleNamespace(model_options=SimpleNamespace(model_dump=lambda: {}))
 
     with patch(
         "forge.chat.orchestrator.get_settings",
         return_value=SimpleNamespace(memory=SimpleNamespace(enabled=False)),
     ):
-        await orchestrator._execute_new_turn(_Run(), _ctx(), body)
+        await orchestrator_any._execute_new_turn(_Run(), _ctx(), body)
 
     assert manager.build.await_args.kwargs["allow_compaction"] is False
 
@@ -120,9 +123,10 @@ async def test_new_turn_disables_compaction_when_memory_is_disabled() -> None:
 @pytest.mark.asyncio
 async def test_resume_never_allows_active_compaction() -> None:
     manager = SimpleNamespace(build=AsyncMock(return_value=_snapshot()))
-    orchestrator = TurnOrchestrator(manager)
-    orchestrator._finalizer = SimpleNamespace(finalize=AsyncMock(return_value=None))
-    orchestrator._setup_runner = AsyncMock(return_value=_Runner())
+    orchestrator = TurnOrchestrator(cast(Any, manager))
+    orchestrator_any = cast(Any, orchestrator)
+    orchestrator_any._finalizer = SimpleNamespace(finalize=AsyncMock(return_value=None))
+    orchestrator_any._setup_runner = AsyncMock(return_value=_Runner())
     prev = ResumeState(
         original_user_message="问题",
         prev_content="",
@@ -134,7 +138,7 @@ async def test_resume_never_allows_active_compaction() -> None:
         prev_status="aborted",
     )
 
-    await orchestrator._execute_resume(_Run(), _ctx(), prev)
+    await orchestrator_any._execute_resume(_Run(), _ctx(), prev)
 
     assert manager.build.await_args.kwargs == {"allow_compaction": False}
-    assert orchestrator._setup_runner.await_args.args[1] == "rendered prompt"
+    assert orchestrator_any._setup_runner.await_args.args[1] == "rendered prompt"

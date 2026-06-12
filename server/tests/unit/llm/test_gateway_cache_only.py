@@ -55,7 +55,7 @@ class _FakeClient:
 
 class _FakePool:
     def __init__(self) -> None:
-        self.reconciled = []
+        self.reconciled: list[tuple[str, list[dict], dict]] = []
 
     def reconcile_provider(self, impl: str, keys: list[dict], client_options: dict) -> dict:
         self.reconciled.append((impl, keys, client_options))

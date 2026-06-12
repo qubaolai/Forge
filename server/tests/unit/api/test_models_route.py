@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from forge.api.routes.v1.models import list_models
@@ -66,7 +68,7 @@ class _FakeCache:
 @pytest.mark.asyncio
 async def test_list_models_grouped_by_provider() -> None:
     response = await list_models(
-        db=None,
+        db=cast(Any, None),
         model_cache=_FakeCache(),
         provider=None,
         model_type="chat",
@@ -98,7 +100,7 @@ async def test_list_models_grouped_by_provider() -> None:
 @pytest.mark.asyncio
 async def test_list_models_provider_filter() -> None:
     response = await list_models(
-        db=None,
+        db=cast(Any, None),
         model_cache=_FakeCache(),
         provider="openai",
         model_type="chat",

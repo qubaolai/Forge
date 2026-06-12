@@ -90,10 +90,10 @@ async def list_models(
             provider_rows = [p for p in provider_rows if p.name == provider]
 
         for provider_row in provider_rows:
-            provider_models = await model_repo.list_by_provider(provider_row.id, enabled_only=True)
+            db_models = await model_repo.list_by_provider(provider_row.id, enabled_only=True)
             if model_type:
-                provider_models = [m for m in provider_models if m.model_type == model_type]
-            if not provider_models:
+                db_models = [m for m in db_models if m.model_type == model_type]
+            if not db_models:
                 continue
 
             models = [
@@ -107,7 +107,7 @@ async def list_models(
                     },
                     provider_row.name,
                 )
-                for m in provider_models
+                for m in db_models
             ]
             groups.append({"provider": provider_row.name, "models": models})
 

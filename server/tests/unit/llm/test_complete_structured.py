@@ -50,9 +50,11 @@ async def test_first_success_injects_schema_and_returns_raw() -> None:
     print(f"响应内容: {resp}")
 
     assert len(calls) == 1
-    structured = calls[0].extra_options["structured_output"]
+    extra_options = calls[0].extra_options
+    assert extra_options is not None
+    structured = extra_options["structured_output"]
     assert structured == {"schema": SCHEMA, "name": "foo", "strict": True}
-    assert calls[0].extra_options["seed"] == 7  # 原有键保留
+    assert extra_options["seed"] == 7  # 原有键保留
     assert resp.content == '{"a": 1}'  # 原样返回
     # 入参未被原地修改
     assert req.extra_options == {"seed": 7}

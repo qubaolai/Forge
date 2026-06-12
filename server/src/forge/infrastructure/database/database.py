@@ -10,7 +10,7 @@
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 
-from sqlalchemy import text
+from sqlalchemy import insert, text, update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -102,7 +102,7 @@ def _ensure_additive_columns(sync_conn) -> None:
 
 def _migrate_model_configs(sync_conn) -> None:
     """把旧 models 扁平字段幂等迁移到按调用类型配置表。"""
-    from sqlalchemy import inspect, select, update
+    from sqlalchemy import inspect, select
 
     from forge.infrastructure.database.orm.model_config_orm import (
         ChatModelConfigOrm,
@@ -143,7 +143,7 @@ def _migrate_model_configs(sync_conn) -> None:
                 caps.append("vision")
             if row.get("supports_thinking"):
                 caps.append("thinking")
-            sync_conn.execute(ChatModelConfigOrm.__table__.insert().values(
+            sync_conn.execute(insert(ChatModelConfigOrm).values(
                 model_id=model_id,
                 context_window=row.get("context_window") or 128000,
                 max_output_tokens=row.get("max_output_tokens") or 4096,
@@ -156,7 +156,7 @@ def _migrate_model_configs(sync_conn) -> None:
         elif model_type == "embedding" and model_id not in existing_embedding:
             dimension = int(extra.pop("dimension", 1024))
             batch_size = int(extra.pop("batch_size", 10))
-            sync_conn.execute(EmbeddingModelConfigOrm.__table__.insert().values(
+            sync_conn.execute(insert(EmbeddingModelConfigOrm).values(
                 model_id=model_id,
                 dimension=dimension,
                 batch_size=batch_size,
@@ -169,7 +169,7 @@ def _migrate_model_configs(sync_conn) -> None:
             ))
         elif model_type == "reranker" and model_id not in existing_reranker:
             truncation = dict(extra.pop("truncation", {}) or {})
-            sync_conn.execute(RerankerModelConfigOrm.__table__.insert().values(
+            sync_conn.execute(insert(RerankerModelConfigOrm).values(
                 model_id=model_id,
                 timeout_seconds=float(extra.pop("timeout", 5.0)),
                 max_retries=int(extra.pop("max_retries", 2)),
@@ -191,18 +191,18 @@ def _migrate_model_configs(sync_conn) -> None:
             values["max_batch_size"] = row["batch_size"]
         if values:
             sync_conn.execute(
-                update(EmbeddingModelConfigOrm.__table__)
+                update(EmbeddingModelConfigOrm)
                 .where(EmbeddingModelConfigOrm.model_id == row["model_id"])
                 .values(**values)
             )
 
     sync_conn.execute(
-        update(ModelOrm.__table__).where(ModelOrm.model_type == "text").values(model_type="chat")
+        update(ModelOrm).where(ModelOrm.model_type == "text").values(model_type="chat")
     )
     existing_roles = set(sync_conn.execute(select(SystemModelBindingOrm.role)).scalars())
     for role in ("rag_embedding", "semantic_history_embedding", "rag_reranker"):
         if role not in existing_roles:
-            sync_conn.execute(SystemModelBindingOrm.__table__.insert().values(role=role, version=0))
+            sync_conn.execute(insert(SystemModelBindingOrm).values(role=role, version=0))
 
     _seed_tier_chains(sync_conn)
 
@@ -251,7 +251,7 @@ def _seed_tier_chains(sync_conn) -> None:
             provider, model = ref.split(":", 1)
             if (provider, model) in enabled_pairs:
                 entries = [{"provider": provider, "model": model}]
-        sync_conn.execute(ModelChainOrm.__table__.insert().values(
+        sync_conn.execute(insert(ModelChainOrm).values(
             scope="tier", chain_key=tier, entries=entries or None, version=0,
         ))
 

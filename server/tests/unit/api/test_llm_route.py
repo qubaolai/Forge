@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 from fastapi import HTTPException
@@ -23,7 +24,7 @@ from forge.core.types.message import ToolCall
 
 
 def _body(**overrides) -> LLMChatCompletionIn:
-    base = {"messages": [{"role": "user", "content": "你好"}]}
+    base: dict[str, Any] = {"messages": [{"role": "user", "content": "你好"}]}
     base.update(overrides)
     return LLMChatCompletionIn(**base)
 

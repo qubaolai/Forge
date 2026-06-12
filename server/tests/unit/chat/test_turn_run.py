@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -40,7 +41,7 @@ async def test_unhandled_exception_marks_message_error(tmp_path, monkeypatch) ->
         user_id="u1",
         on_unhandled_error=mark_error,
     )
-    run.store = _FakeStore()
+    run.store = cast(Any, _FakeStore())
 
     async def _boom() -> str:
         raise RuntimeError("上下文构建失败")
@@ -50,4 +51,4 @@ async def test_unhandled_exception_marks_message_error(tmp_path, monkeypatch) ->
 
     assert status == TERMINAL_ERROR
     mark_error.assert_awaited_once_with("上下文构建失败")
-    assert run.store.events[-1]["type"] == "error"
+    assert cast(Any, run.store).events[-1]["type"] == "error"

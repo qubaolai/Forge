@@ -99,7 +99,7 @@ def test_incomplete_lifecycle_cannot_be_instantiated() -> None:
         pass
 
     with pytest.raises(TypeError):
-        IncompleteLifecycle()
+        IncompleteLifecycle()  # type: ignore[abstract]
 
 
 def test_selective_lifecycle_can_extend_noop() -> None:

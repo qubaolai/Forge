@@ -4,10 +4,10 @@ from sqlalchemy import JSON, BigInteger, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base
-from forge.infrastructure.database.orm.mixins import BigIntPKMixin, table_args
+from forge.infrastructure.database.orm.mixins import TimestampMixin, table_args
 
 
-class KbDocumentChunkOrm(Base, BigIntPKMixin):
+class KbDocumentChunkOrm(Base, TimestampMixin):
     """知识库文档父块表。
 
     本表唯一 ID = 父块语义 chunk_id (形如 ``{doc_id}__p_x``, 由切分阶段生成),

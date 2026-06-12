@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -218,12 +219,13 @@ async def test_finalize_with_prev_state_writes_merged_content() -> None:
     assert events[0].type == "done"
 
     # update_message 被传入的 result 应是合并后
+    assert update.await_args is not None
     call_args = update.await_args.args
     # _update_message(self, ctx, result, build_meta, status)
     # patched method 不绑定 self, 所以 args[1] 是合并后的 RunResult
     merged_result = call_args[1]
     assert merged_result.content == "老新"
-    publish.assert_awaited_once()
+    cast(Any, publish).assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 """Model ORM — 统一模型注册表。"""
 
 
-from sqlalchemy import JSON, BigInteger, Boolean, Index, Integer, String
+from sqlalchemy import BigInteger, Boolean, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base

@@ -20,7 +20,7 @@ class RagRuntime:
     async def vector_store_for(self, embedder):
         if embedder is None:
             return None
-        model_id = str(embedder._forge_model_id)  # type: ignore[attr-defined]
+        model_id = str(embedder._forge_model_id)
         with self._lock:
             if model_id in self._vector_stores:
                 return self._vector_stores[model_id]

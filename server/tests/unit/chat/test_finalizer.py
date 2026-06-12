@@ -86,6 +86,7 @@ async def test_stop_yields_done_and_publishes() -> None:
     assert events[0].to_dict()["finish_reason"] == "stop"
     publish.assert_awaited_once()
     # DB status=done
+    assert update.await_args is not None
     args, kwargs = update.await_args
     assert args[-1] == "done" or kwargs.get("status") == "done"
 

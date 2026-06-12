@@ -21,7 +21,7 @@ async def test_vector_rebuild_does_not_touch_bm25_or_document_status(monkeypatch
     class VectorStore:
         def __init__(self) -> None:
             self.deleted: list[str] = []
-            self.added = []
+            self.added: list[tuple[list[Chunk], list[list[float]]]] = []
 
         def delete_by_doc(self, doc_id: str) -> None:
             self.deleted.append(doc_id)
@@ -105,5 +105,5 @@ async def test_vector_rebuild_does_not_touch_bm25_or_document_status(monkeypatch
     assert document.status == "indexed"
     assert document.embedding_model_id == 9001
     assert document.vector_index_status == "ready"
-    assert runtime.store.deleted == [1001]
+    assert runtime.store.deleted == ["1001"]
     assert len(runtime.store.added) == 1

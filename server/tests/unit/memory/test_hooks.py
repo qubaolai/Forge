@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -40,6 +41,10 @@ class FakeQueue:
 
     def submit(self, task_name, **kwargs):
         self.calls.append((task_name, kwargs))
+
+
+def _install_memory_hooks(bus: FakeBus, queue: FakeQueue, **kwargs: Any) -> None:
+    install_memory_hooks(cast(Any, bus), cast(Any, queue), **kwargs)
 
 
 def _patch_repo_count(count: int):
@@ -75,19 +80,19 @@ def _patch_repo_count(count: int):
 # ---------------------------------------------------------------------------
 def test_install_disabled_does_not_subscribe() -> None:
     bus = FakeBus()
-    install_memory_hooks(bus, FakeQueue(), every_n_turns=10, enabled=False)
+    _install_memory_hooks(bus, FakeQueue(), every_n_turns=10, enabled=False)
     assert bus.subs == {}
 
 
 def test_install_zero_n_does_not_subscribe() -> None:
     bus = FakeBus()
-    install_memory_hooks(bus, FakeQueue(), every_n_turns=0, enabled=True)
+    _install_memory_hooks(bus, FakeQueue(), every_n_turns=0, enabled=True)
     assert bus.subs == {}
 
 
 def test_install_registers_handler() -> None:
     bus = FakeBus()
-    install_memory_hooks(bus, FakeQueue(), every_n_turns=10, enabled=True)
+    _install_memory_hooks(bus, FakeQueue(), every_n_turns=10, enabled=True)
     assert EVENT_TURN_COMPLETED in bus.subs
     assert len(bus.subs[EVENT_TURN_COMPLETED]) == 1
 
@@ -103,7 +108,7 @@ async def _run_handler(bus: FakeBus, payload: dict) -> None:
 @pytest.mark.asyncio
 async def test_below_threshold_no_submit() -> None:
     bus, queue = FakeBus(), FakeQueue()
-    install_memory_hooks(bus, queue, every_n_turns=5)
+    _install_memory_hooks(bus, queue, every_n_turns=5)
     p1, p2 = _patch_repo_count(9)
     with p1, p2:
         await _run_handler(bus, {"session_id": "s1"})
@@ -113,7 +118,7 @@ async def test_below_threshold_no_submit() -> None:
 @pytest.mark.asyncio
 async def test_at_threshold_submits() -> None:
     bus, queue = FakeBus(), FakeQueue()
-    install_memory_hooks(bus, queue, every_n_turns=5)  # 阈值 = 10
+    _install_memory_hooks(bus, queue, every_n_turns=5)  # 阈值 = 10
     p1, p2 = _patch_repo_count(10)
     with p1, p2:
         await _run_handler(bus, {"session_id": "s1"})
@@ -123,7 +128,7 @@ async def test_at_threshold_submits() -> None:
 @pytest.mark.asyncio
 async def test_multiple_of_threshold_submits() -> None:
     bus, queue = FakeBus(), FakeQueue()
-    install_memory_hooks(bus, queue, every_n_turns=5)
+    _install_memory_hooks(bus, queue, every_n_turns=5)
     p1, p2 = _patch_repo_count(30)  # 3 * 10
     with p1, p2:
         await _run_handler(bus, {"session_id": "s1"})
@@ -134,7 +139,7 @@ async def test_multiple_of_threshold_submits() -> None:
 async def test_zero_count_no_submit() -> None:
     """全新 session, 0 条消息: 不该 submit (虽然 0 % N == 0)."""
     bus, queue = FakeBus(), FakeQueue()
-    install_memory_hooks(bus, queue, every_n_turns=5)
+    _install_memory_hooks(bus, queue, every_n_turns=5)
     p1, p2 = _patch_repo_count(0)
     with p1, p2:
         await _run_handler(bus, {"session_id": "s1"})
@@ -147,7 +152,7 @@ async def test_zero_count_no_submit() -> None:
 @pytest.mark.asyncio
 async def test_missing_session_id_is_silent() -> None:
     bus, queue = FakeBus(), FakeQueue()
-    install_memory_hooks(bus, queue, every_n_turns=5)
+    _install_memory_hooks(bus, queue, every_n_turns=5)
     await _run_handler(bus, {})  # 不抛即可
     assert queue.calls == []
 
@@ -155,7 +160,7 @@ async def test_missing_session_id_is_silent() -> None:
 @pytest.mark.asyncio
 async def test_db_failure_is_swallowed() -> None:
     bus, queue = FakeBus(), FakeQueue()
-    install_memory_hooks(bus, queue, every_n_turns=5)
+    _install_memory_hooks(bus, queue, every_n_turns=5)
 
     with patch(
         "forge.infrastructure.database.database.get_session_factory",
@@ -172,7 +177,7 @@ async def test_db_failure_is_swallowed() -> None:
 async def test_both_thresholds_dispatch_both_tasks() -> None:
     """摘要与抽取阈值同时满足: 两个任务都派发 (共用一次 count 查询)."""
     bus, queue = FakeBus(), FakeQueue()
-    install_memory_hooks(
+    _install_memory_hooks(
         bus, queue, every_n_turns=5, facts_enabled=True, extract_every_n_turns=5
     )
     p1, p2 = _patch_repo_count(10)
@@ -188,7 +193,7 @@ async def test_both_thresholds_dispatch_both_tasks() -> None:
 async def test_only_extract_threshold_dispatches_extract_only() -> None:
     """count=6: 抽取阈值 (3 轮) 满足, 摘要阈值 (5 轮) 不满足."""
     bus, queue = FakeBus(), FakeQueue()
-    install_memory_hooks(
+    _install_memory_hooks(
         bus, queue, every_n_turns=5, facts_enabled=True, extract_every_n_turns=3
     )
     p1, p2 = _patch_repo_count(6)
@@ -201,7 +206,7 @@ async def test_only_extract_threshold_dispatches_extract_only() -> None:
 async def test_missing_user_id_skips_extract_keeps_summarize() -> None:
     """payload 缺 user_id: 摘要正常派发, 抽取跳过."""
     bus, queue = FakeBus(), FakeQueue()
-    install_memory_hooks(
+    _install_memory_hooks(
         bus, queue, every_n_turns=5, facts_enabled=True, extract_every_n_turns=5
     )
     p1, p2 = _patch_repo_count(10)
@@ -213,7 +218,7 @@ async def test_missing_user_id_skips_extract_keeps_summarize() -> None:
 @pytest.mark.asyncio
 async def test_facts_disabled_never_dispatches_extract() -> None:
     bus, queue = FakeBus(), FakeQueue()
-    install_memory_hooks(
+    _install_memory_hooks(
         bus, queue, every_n_turns=5, facts_enabled=False, extract_every_n_turns=5
     )
     p1, p2 = _patch_repo_count(10)

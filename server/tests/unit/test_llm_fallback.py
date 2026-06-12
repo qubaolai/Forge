@@ -367,7 +367,7 @@ async def test_rate_limit_marks_cooldown_and_switches_same_model_key(monkeypatch
 
     class _Pool:
         def __init__(self) -> None:
-            self.calls = []
+            self.calls: list[tuple[str, str, float]] = []
 
         def mark_cooldown(self, impl: str, api_key: str, seconds: float) -> None:
             self.calls.append((impl, api_key, seconds))
