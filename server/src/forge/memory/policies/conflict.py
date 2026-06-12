@@ -78,7 +78,7 @@ class ConflictResolver(ABC):
         """
         Args:
             scope: 当前作用域 (理论上 similar_existing 已按此过滤, 这里再传一遍
-                只是方便 resolver 做额外判断, 比如 "跨 workspace 的不算冲突").
+                只是方便 resolver 做额外判断).
             new_fact: 待写入的新事实, id 可能尚未生成.
             similar_existing: 由 Store 预先按语义相似度召回的 top-k 已有事实.
                 空列表表示无相似项 -- 此时通常应返回 Insert.
@@ -101,4 +101,30 @@ class NoOpConflictResolver(ConflictResolver):
         new_fact: Fact,
         similar_existing: list[Fact],
     ) -> Resolution:
+        return Insert(content=new_fact.content)
+
+
+# ---------------------------------------------------------------------------
+# 阈值去重: Stage 3 (事实层) 默认
+# ---------------------------------------------------------------------------
+class ThresholdDedupResolver(ConflictResolver):
+    """相似度阈值去重: 已有事实里最高相似分 >= 阈值则 Skip, 否则 Insert.
+
+    similar_existing 由 Store 预先按语义召回, Fact.score 即余弦相似度.
+    纯规则、零 LLM 成本; 语义级冲突合并 (LLMJudgeConflictResolver) 留作后续方向.
+    """
+
+    def __init__(self, dedup_threshold: float = 0.92) -> None:
+        self._threshold = dedup_threshold
+
+    async def resolve(
+        self,
+        scope: MemoryScope,
+        new_fact: Fact,
+        similar_existing: list[Fact],
+    ) -> Resolution:
+        if similar_existing:
+            top = max(similar_existing, key=lambda f: f.score)
+            if top.score >= self._threshold:
+                return Skip(reason=f"dup>={self._threshold:.2f} (top={top.score:.3f})")
         return Insert(content=new_fact.content)

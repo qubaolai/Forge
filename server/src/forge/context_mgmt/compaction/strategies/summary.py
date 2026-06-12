@@ -45,7 +45,7 @@ class SummaryCompaction(CompactionStrategy):
         from forge.memory.summary.service import InfrastructureError
 
         try:
-            await self._get_service().summarize_session(session_id, workspace_id=None)
+            await self._get_service().summarize_session(session_id)
         except InfrastructureError as exc:
             logger.warning(
                 "SummaryCompaction 失败 session=%s: %s -- 上层应降级",

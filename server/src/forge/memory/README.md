@@ -22,18 +22,21 @@ ContextBuilder 拼上下文的素材有四路: `system + history + summary + fac
 memory/
 ├── base.py                  ← 对外契约: MemoryStore ABC + Summary / Fact / FactRecallRequest 数据类型 + MemoryStoreError
 ├── null.py                  ← NullMemoryStore: 关闭记忆系统时的占位 (摘要/事实读全返回空)
-├── scope.py                 ← MemoryScope 值对象 (user_id / workspace_id / tenant_id) — 隔离的最小单位
+├── scope.py                 ← MemoryScope 值对象 (user_id) — 隔离的最小单位
 ├── composite.py             ← CompositeMemoryStore: 把 SummaryStore + FactStore 组合成 MemoryStore
 ├── hooks.py                 ← install_memory_hooks(): 订阅 turn.completed, 按 every_n_turns 派发任务
 ├── policies/                ← 策略层 (ABC + NoOp)
 │   ├── conflict.py          ConflictResolver: 写入新事实时与已有冲突的处理
 │   └── forgetting.py        ForgettingPolicy: 召回过滤 + 物理 prune 双钩子
-├── summary/                 ← 摘要子系统
+├── summary/                 ← 摘要子系统 (增量滚动: 旧摘要 + 水位后新消息喂 LLM 融合)
 │   ├── store.py             SummaryStore: MySQL 持久化 (session_id PK, upsert + version++)
 │   └── summarizer.py        Summarizer: LLM 驱动的摘要生成 (走独立 model 配置)
-├── facts/                   ← 长期事实 (PR #5, Stage 3+)
+├── facts/                   ← 长期事实子系统 (user_facts 表 + int8 量化向量召回)
+│   ├── store.py             FactStore: write 经 ConflictResolver / recall 按 user 暴力余弦
+│   └── service.py           FactExtractionService: 水位 + LLM 结构化抽取 + build_fact_store 装配
 └── tasks/                   ← Celery 任务定义 (autodiscover 入口)
-    └── summarize.py         @shared_task("memory.summarize") + 业务实现 _run
+    ├── summarize.py         @shared_task("memory.summarize")
+    └── extract_facts.py     @shared_task("memory.extract_facts")
 ```
 
 ## 总体设计
@@ -53,7 +56,7 @@ memory/
 ┌──────────────────────────────────────────────────────────────────────┐
 │ CompositeMemoryStore (composite.py)                                  │
 │  - get_summary    → SummaryStore.get                                 │
-│  - recall_facts   → FactStore.recall (PR #5; Stage 2 永远返回 [])     │
+│  - recall_facts   → FactStore.recall (facts.enabled=false 时返回 []) │
 └──────────────────────────────────────────────────────────────────────┘
 
 ╔══════════════════════════════════════════════════════════════════════╗
@@ -98,16 +101,22 @@ memory/
 ### `Fact` (用户级)
 | 字段 | 说明 |
 |---|---|
-| `id` | `fact_xxx` |
-| `user_id` | 谁的事实 |
+| `id` | 雪花 (str) |
+| `user_id` | 谁的事实 (唯一隔离维度) |
 | `content` | "用户偏好 Python" |
 | `source` | `"llm_extracted"` \| `"user_manual"` |
 | `score` | 召回时填 (语义相似度); 写入时忽略 |
+| `source_session_id` | 来源会话 (溯源, 为将来 "删会话连带遗忘" 留口) |
+
+持久化: `user_facts` 表, 向量复用 int8 对称量化 BLOB 模式 (`forge.utils.vector`),
+召回按 user 拉全量暴力余弦 (单用户事实量级小, 不引入向量库); embedder 不可用 /
+换模型后旧向量不匹配时回退 recency (score=0). 抽取水位独立存
+`fact_extraction_watermarks` 表 (Skip/空抽取也推进, 避免重复送 LLM).
 
 ### `MemoryScope` (隔离边界)
-**不是策略, 是值对象**. 永远要隔离, 变化点只在 "粒度":
-- Stage 2: `user_id` 维度
-- Stage 3+: 加 `workspace_id` / `tenant_id` 字段, Store 多一个过滤项即可
+**不是策略, 是值对象**. 永远要隔离, 唯一维度是 `user_id`
+(server 端不做 workspace / 多租户; 若未来需要, 给值对象添字段 +
+Store 查询加过滤即可, 不存在 "换隔离策略实现" 这件事).
 
 ## 触发与生命周期
 
@@ -143,7 +152,8 @@ memory/
 
 调用点: `FactStore.write()` 内, "新事实 vs 语义相似的已有事实" 比对.
 
-返回 ADT `Resolution = Insert | Replace | Merge | Skip`, Store 用 `match` 分发. Stage 2 装 `NoOpConflictResolver` (永远 Insert).
+返回 ADT `Resolution = Insert | Replace | Merge | Skip`, Store 用 `match` 分发.
+事实层默认装 `ThresholdDedupResolver` (最高相似分 >= `dedup_threshold` 则 Skip).
 
 | 未来实现 | 行为 |
 |---|---|
@@ -176,6 +186,13 @@ memory:
     max_summary_tokens: 1500
   trigger:
     every_n_turns: 10
+  facts:                                          # 用户长期事实层
+    enabled: ${MEMORY_FACTS_ENABLED:false}        # 代码默认关 (灰度), dev 显式开
+    extract_every_n_turns: 5
+    top_k: 5
+    min_score: 0.5
+    dedup_threshold: 0.92
+    max_facts_per_turn: 10
 ```
 
 ## 部署要点
@@ -191,11 +208,10 @@ memory:
 | 需求 | 改哪里 |
 |---|---|
 | 新加触发条件 (eg "每次 user 主动说 '记一下'") | 在 `_stream_chat` 加新 `publish` 调用, 同一事件名或新事件名; `hooks.py` 加 `bus.subscribe` |
-| 长期事实 (Stage 3) | 实现 `FactStore` + `FactExtractor`, 在 `composite.py` 装上, 在 `tasks/` 加 `extract_facts` 任务 |
+| 事实管理 API (设置页增删查) | 复用 `context_mgmt.memory_factory.get_fact_store()` 单例, 新增 `/api/v1/memory/facts` 路由 |
 | 真实 conflict 策略 | 新建 `policies/conflict_xxx.py` 继承 ABC, 注入 `FactStore` |
 | 真实 forgetting 策略 | 新建 `policies/forgetting_xxx.py`; Celery beat 周期跑 `prune_facts` 任务 |
 | 跨进程事件 (web ↔ worker 之间需要互通) | 把 `InProcessEventBus` 换成 `RedisPubSubEventBus`, `get_event_bus()` 内部分发 |
-| 多租户隔离 | 给 `MemoryScope` 加 `tenant_id`, 各 Store 查询加过滤; 不需要换 "IsolationStrategy" |
 
 ## 相关文档
 

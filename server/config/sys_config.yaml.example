@@ -206,6 +206,30 @@ memory:
     # N 越小摘要越频繁。
     every_n_turns: ${MEMORY_TRIGGER_EVERY_N:10}
 
+  # 用户长期事实层 (跨会话记忆): LLM 抽取 + 语义召回。
+  facts:
+    # 是否启用事实抽取与召回。代码默认关闭 (灰度)。
+    enabled: ${MEMORY_FACTS_ENABLED:false}
+
+    # 每 N 轮派发一次抽取任务。
+    extract_every_n_turns: ${MEMORY_FACTS_EXTRACT_EVERY_N:5}
+
+    # 上下文组装时召回的事实条数上限。
+    top_k: ${MEMORY_FACTS_TOP_K:5}
+
+    # 召回相似度下限 (低于此分过滤)。
+    min_score: ${MEMORY_FACTS_MIN_SCORE:0.5}
+
+    # 写入去重阈值: 与已有事实相似度 >= 此值则跳过。
+    dedup_threshold: ${MEMORY_FACTS_DEDUP_THRESHOLD:0.92}
+
+    # 单次抽取最多落库多少条事实。
+    max_facts_per_turn: ${MEMORY_FACTS_MAX_PER_TURN:10}
+
+    # 抽取模型 provider/model。留空走 utility 档位。
+    provider: ${MEMORY_FACTS_PROVIDER:}
+    model: ${MEMORY_FACTS_MODEL:}
+
 # LLM 通用策略配置。
 # 供应商与模型目录由数据库维护，配置文件不再承载 providers 列表。
 llm:

@@ -5,9 +5,9 @@
 1. **文件存储 (blob)** — ``FileStorage`` / ``LocalFileStorage``, 给 KB 上传文件
    等大对象用. 本地磁盘 V1, 对象存储 (OSS / S3) V2 扩展点.
 
-2. **结构化数据存储 (data)** — ``data_protocols.py`` 定义 7 个 ABC
+2. **结构化数据存储 (data)** — ``data_protocols.py`` 定义 8 个 ABC
    (SessionStore / MessageStore / CostStore / AuditStore / SummaryStore /
-   KnowledgeBaseStore / KbDocumentStore) 及共享数据视图
+   FactStore / KnowledgeBaseStore / KbDocumentStore) 及共享数据视图
    (SessionView / ChatMessageView).
 
 业务代码 (chat / memory / api / kb) 只 import 本模块的 ABC 与视图,
@@ -24,6 +24,7 @@ from forge.infrastructure.storage.data_protocols import (
     AuditStore,
     ChatMessageView,
     CostStore,
+    FactStore,
     KbDocumentStore,
     KnowledgeBaseStore,
     MessageStore,
@@ -44,6 +45,7 @@ __all__ = [
     "CostStore",
     "AuditStore",
     "SummaryStore",
+    "FactStore",
     "KnowledgeBaseStore",
     "KbDocumentStore",
     # 共享数据视图

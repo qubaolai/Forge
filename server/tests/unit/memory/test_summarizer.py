@@ -69,3 +69,35 @@ async def test_summarize_llm_failure_returns_empty() -> None:
     s = Summarizer(gw)
     msgs = [Message(role="user", content="x"), Message(role="assistant", content="y")]
     assert await s.summarize(msgs) == ""
+
+
+# ---------------------------------------------------------------------------
+# 增量滚动: previous_summary 模板分支 (走真实 PromptRegistry 渲染)
+# ---------------------------------------------------------------------------
+def _sent_prompt(gw) -> str:
+    """取 gateway.complete 收到的 LLMRequest 的 prompt 文本."""
+    req = gw.complete.call_args.args[0]
+    return req.messages[0].content
+
+
+@pytest.mark.asyncio
+async def test_summarize_with_previous_summary_renders_in_prompt() -> None:
+    gw = _gateway()
+    s = Summarizer(gw)
+    msgs = [Message(role="user", content="继续"), Message(role="assistant", content="好")]
+    await s.summarize(msgs, previous_summary="既有摘要: 用户在调研 RAG")
+
+    prompt = _sent_prompt(gw)
+    assert "既有摘要: 用户在调研 RAG" in prompt
+    assert "整体替换" in prompt  # 增量指令块已渲染
+
+
+@pytest.mark.asyncio
+async def test_summarize_without_previous_summary_omits_block() -> None:
+    gw = _gateway()
+    s = Summarizer(gw)
+    msgs = [Message(role="user", content="问"), Message(role="assistant", content="答")]
+    await s.summarize(msgs)
+
+    prompt = _sent_prompt(gw)
+    assert "既有摘要" not in prompt

@@ -33,7 +33,8 @@ if TYPE_CHECKING:
     from forge.infrastructure.database.orm.knowledge_base_orm import (
         KnowledgeBaseOrm,
     )
-    from forge.memory.base import Summary
+    from forge.memory.base import Fact, FactRecallRequest, FactSource, Summary
+    from forge.memory.scope import MemoryScope
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +129,14 @@ class MessageStore(ABC):
     async def load_recent(
         self,
         session_id: str,
+        limit: int = 30,
+    ) -> list[ChatMessageView]: ...
+
+    @abstractmethod
+    async def load_after(
+        self,
+        session_id: str,
+        after_message_id: str | None,
         limit: int = 30,
     ) -> list[ChatMessageView]: ...
 
@@ -264,31 +273,54 @@ class SummaryStore(ABC):
     """会话长期摘要存储 (memory 模块的 stage 2 backend)."""
 
     @abstractmethod
-    async def get(
-        self,
-        session_id: str,
-        *,
-        workspace_id: str | None = None,
-    ) -> Summary | None: ...
+    async def get(self, session_id: str) -> Summary | None: ...
 
     @abstractmethod
     async def upsert(
         self,
         *,
         session_id: str,
-        workspace_id: str | None = None,
         content: str,
         covered_until_message_id: str | None,
         token_count: int,
     ) -> Summary: ...
 
     @abstractmethod
-    async def delete(
+    async def delete(self, session_id: str) -> None: ...
+
+
+# ---------------------------------------------------------------------------
+# 5.5 FactStore  ←  memory.facts.store.FactStore (用户长期事实, user 级隔离)
+# ---------------------------------------------------------------------------
+class FactStore(ABC):
+    """用户长期事实存储 (memory 模块的 stage 3 backend).
+
+    所有方法强制吃 MemoryScope, 在签名层阻止 "忘了按 user 过滤" 的越权 bug.
+    """
+
+    @abstractmethod
+    async def write(
         self,
-        session_id: str,
+        scope: MemoryScope,
         *,
-        workspace_id: str | None = None,
-    ) -> None: ...
+        content: str,
+        source: FactSource = "llm_extracted",
+        source_session_id: str | None = None,
+    ) -> Fact | None: ...
+
+    @abstractmethod
+    async def recall(self, request: FactRecallRequest) -> list[Fact]: ...
+
+    @abstractmethod
+    async def delete(self, scope: MemoryScope, fact_id: str) -> bool: ...
+
+    @abstractmethod
+    async def list_by_user(
+        self,
+        scope: MemoryScope,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[Fact], int]: ...
 
 
 # ---------------------------------------------------------------------------

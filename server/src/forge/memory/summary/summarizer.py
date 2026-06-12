@@ -43,11 +43,18 @@ class Summarizer:
         self._preferred_provider = preferred_provider
         self._preferred_model = preferred_model
 
-    async def summarize(self, messages: list[Message]) -> str:
+    async def summarize(
+        self,
+        messages: list[Message],
+        *,
+        previous_summary: str | None = None,
+    ) -> str:
         """把一段对话压缩成摘要 (async).
 
         Args:
             messages: 完整对话 (user/assistant). system 消息会被过滤掉.
+            previous_summary: 既有摘要 (增量滚动时传入); LLM 须在保留其中仍有效
+                信息的基础上融合新对话, 避免覆盖写丢失早期内容.
 
         Returns:
             摘要正文 (可能为空字符串, 表示对话太稀薄无可摘要).
@@ -61,6 +68,7 @@ class Summarizer:
             self.PROMPT_NAME,
             messages=cleaned,
             max_tokens=self._max_tokens,
+            previous_summary=previous_summary or "",
         )
 
         req = LLMRequest(

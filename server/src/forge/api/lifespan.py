@@ -115,9 +115,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             task_queue,
             every_n_turns=settings.memory.trigger.every_n_turns,
             enabled=settings.memory.enabled,
+            facts_enabled=settings.memory.facts.enabled,
+            extract_every_n_turns=settings.memory.facts.extract_every_n_turns,
         )
     except Exception:  # noqa: BLE001
-        logger.exception("memory hooks 安装失败, 摘要任务不会被派发")
+        logger.exception("memory hooks 安装失败, 摘要/事实抽取任务不会被派发")
 
     # 2.3 context digest hooks (软: 失败仅日志; 与 memory 各自独立订阅 turn.completed)
     from forge.context_mgmt.digest.hooks import install_digest_hooks

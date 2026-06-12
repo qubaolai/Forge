@@ -199,10 +199,10 @@ chat 主链由 `chat/assembler.py` `ContextAssembler` 主动压缩（`orchestrat
 
 「读路径（同步）+ 写路径（事件驱动）」：
 
-- **读路径**：Context 构建阶段通过 `MemoryStore` 读取 `get_summary` / `recall_facts`。`CompositeMemoryStore` 已接 `SummaryStore`；`FactStore` 仍为占位（`recall_facts` 返回空）；关闭时走 `NullMemoryStore`。
-- **写路径**：`TurnFinalizer` 对话成功后 publish `turn.completed` → `memory.hooks.install_memory_hooks` 订阅（`memory/hooks.py`）→ 满足 `every_n_turns` 阈值派发 `memory.summarize` 任务 → `SummaryService` 读近 N 条 → `Summarizer` 走 LLMGateway → `SummaryStore.upsert` 写 `session_summaries`。
+- **读路径**：Context 构建阶段通过 `MemoryStore` 读取 `get_summary` / `recall_facts`。`CompositeMemoryStore` 接 `SummaryStore` + `FactStore`（`memory/facts/store.py`：`user_facts` 表 + int8 量化向量按 user 暴力余弦召回，`memory.facts.enabled` 灰度开关）；关闭时走 `NullMemoryStore`。
+- **写路径**：`TurnFinalizer` 对话成功后 publish `turn.completed` → `memory.hooks.install_memory_hooks` 订阅（`memory/hooks.py`）→ 按各自阈值派发两类任务：`memory.summarize`（**增量滚动摘要**：旧摘要 + `covered_until_message_id` 水位后新消息喂 LLM 融合 → `SummaryStore.upsert` 写 `session_summaries`）与 `memory.extract_facts`（`FactExtractionService` 读 `fact_extraction_watermarks` 水位 → LLM 结构化抽取用户长期事实 → `ThresholdDedupResolver` 相似度去重 → 写 `user_facts`，带 `source_session_id` 溯源）。
 
-写路径把 chat 请求与摘要写入解耦，避免拉长时延。策略层（`ConflictResolver` / `ForgettingPolicy` / `MemoryScope`）已定义，当前默认 NoOp。
+写路径把 chat 请求与摘要/抽取写入解耦，避免拉长时延。策略层：`ConflictResolver` 事实层默认 `ThresholdDedupResolver`；`ForgettingPolicy` 仍为 NoOp。会话删除时 `SessionService.delete` 级联清理会话摘要（用户事实不随会话删除）。
 
 ### 3.13 存储系统（Storage Architecture）
 

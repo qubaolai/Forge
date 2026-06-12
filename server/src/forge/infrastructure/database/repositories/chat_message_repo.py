@@ -68,6 +68,33 @@ class ChatMessageRepository(MessageStore):
         items = (await self.db.execute(stmt)).scalars().all()
         return self._to_views(list(reversed(items)))
 
+    async def load_after(
+        self,
+        session_id: str,
+        after_message_id: str | None,
+        limit: int = 30,
+    ) -> list[ChatMessageView]:
+        """加载某条消息之后的消息 (id 升序, 取最旧的 limit 条).
+
+        增量摘要 / 事实抽取的水位查询: 雪花 ID 单调递增, 直接 id > 水位比较,
+        不依赖水位行本身仍然存在。after_message_id 非法/None 时等价于从头取最早 limit 条。
+        """
+        sid = _to_int(session_id)
+        if sid is None:
+            return []
+        after_id = _to_int(after_message_id) or 0
+        stmt = (
+            select(ChatMessageOrm)
+            .where(
+                ChatMessageOrm.session_id == sid,
+                ChatMessageOrm.id > after_id,
+            )
+            .order_by(ChatMessageOrm.id.asc())
+            .limit(limit)
+        )
+        items = (await self.db.execute(stmt)).scalars().all()
+        return self._to_views(items)
+
     async def load_cursor_page(
         self, session_id: str, cursor: int | None = None, limit: int = 30
     ) -> tuple[list[ChatMessageView], bool]:

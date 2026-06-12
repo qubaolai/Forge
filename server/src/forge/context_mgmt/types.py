@@ -197,7 +197,6 @@ class ContextRequest:
     exclude_message_ids: tuple[str, ...] = ()
 
     # ---- 层叠上下文 ----
-    workspace_id: str | None = None
     workflow_id: str | None = None
     workspace_context: WorkspaceContextLayer | None = None
     workflow_context: WorkflowContextLayer | None = None

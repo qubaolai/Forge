@@ -42,15 +42,19 @@ class _Ctx:
         llm_summary: str = "好的摘要",
         upsert_raises: Exception | None = None,
         llm_init_raises: Exception | None = None,
+        previous=None,
     ) -> None:
         self.rows = rows
         self.llm_summary = llm_summary
         self.upsert_raises = upsert_raises
         self.llm_init_raises = llm_init_raises
+        self.previous = previous  # SummaryStore.get 返回的旧摘要 (增量路径)
         self.patches: list = []
         # 暴露给断言用
         self.upsert_mock: AsyncMock | None = None
         self.summarizer_calls: list = []
+        self.load_recent_mock: AsyncMock | None = None
+        self.load_after_mock: AsyncMock | None = None
 
     def __enter__(self):
         # 1. settings
@@ -81,6 +85,9 @@ class _Ctx:
         )
         repo = MagicMock()
         repo.load_recent = AsyncMock(return_value=self.rows)
+        repo.load_after = AsyncMock(return_value=self.rows)
+        self.load_recent_mock = repo.load_recent
+        self.load_after_mock = repo.load_after
         self.patches.append(
             patch(
                 "forge.infrastructure.database.repositories.chat_message_repo.ChatMessageRepository",
@@ -119,8 +126,10 @@ class _Ctx:
                     "preferred_model": preferred_model,
                 })
 
-            async def summarize(self, messages):
-                outer.summarizer_calls.append({"messages": messages})
+            async def summarize(self, messages, *, previous_summary=None):
+                outer.summarizer_calls.append(
+                    {"messages": messages, "previous_summary": previous_summary}
+                )
                 return outer.llm_summary
 
         self.patches.append(
@@ -153,6 +162,9 @@ class _Ctx:
         class _FakeStore:
             def __init__(self, factory) -> None:
                 pass
+
+            async def get(self, session_id):
+                return outer.previous
 
             async def upsert(self, **kwargs):  # noqa: D401
                 return await upsert(**kwargs)

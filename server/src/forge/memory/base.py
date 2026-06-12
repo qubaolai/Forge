@@ -36,7 +36,6 @@ class Summary:
     covered_until_message_id: str | None  # 摘要覆盖到哪条消息 (再往后是原文 history)
     token_count: int  # 摘要本身的 token 估算
     updated_at: datetime
-    workspace_id: str | None = None
     version: int = 1  # 每次重生成 +1
 
 
@@ -49,6 +48,7 @@ class Fact:
     content: str  # "用户偏好 Python"
     source: FactSource
     score: float = 0.0  # recall 返回时填 (语义相似度); 写入时忽略
+    source_session_id: str | None = None  # 来源会话 (溯源); 手动添加为 None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -78,12 +78,7 @@ class MemoryStore(ABC):
     """无状态. 同一实例可并发处理多个请求."""
 
     @abstractmethod
-    async def get_summary(
-        self,
-        session_id: str,
-        *,
-        workspace_id: str | None = None,
-    ) -> Summary | None:
+    async def get_summary(self, session_id: str) -> Summary | None:
         """取该 session 当前最新摘要.
 
         Returns:

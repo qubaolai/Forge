@@ -64,7 +64,7 @@ class StaticMemory:
         self._facts = facts or []
         self.recall_calls: list[FactRecallRequest] = []
 
-    async def get_summary(self, session_id, *, workspace_id=None):
+    async def get_summary(self, session_id):
         return self._summary
 
     async def recall_facts(self, request: FactRecallRequest) -> list[Fact]:
@@ -73,7 +73,7 @@ class StaticMemory:
 
 
 class BrokenMemory:
-    async def get_summary(self, session_id, *, workspace_id=None):
+    async def get_summary(self, session_id):
         raise MemoryStoreError("summary backend down")
 
     async def recall_facts(self, request: FactRecallRequest) -> list[Fact]:

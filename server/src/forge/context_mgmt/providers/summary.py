@@ -29,9 +29,7 @@ class SummaryProvider(ContentProvider):
         if not request.enable_summary:
             return []
         try:
-            summary = await self._memory.get_summary(
-                request.session_id, workspace_id=request.workspace_id
-            )
+            summary = await self._memory.get_summary(request.session_id)
         except MemoryStoreError as exc:
             logger.warning("取摘要失败: %s", exc)
             raise ContentProviderError("summary_fetch_failed", str(exc)) from exc

@@ -8,8 +8,8 @@
       (ContextBuilder 上游会降级).
     - 永远 upsert (session_id 主键), version 原地 +1.
 
-无 FK 约束: session 删除时由 SessionLog-backed repository 显式调用
-``delete(session_id)`` 清理摘要.
+无 FK 约束: session 删除时由 ``SessionService.delete`` 显式调用
+``delete(session_id)`` 级联清理摘要 (best-effort).
 """
 
 from __future__ import annotations
@@ -50,12 +50,7 @@ class SummaryStore(SummaryStoreBase):
     # ------------------------------------------------------------------
     # 读
     # ------------------------------------------------------------------
-    async def get(
-        self,
-        session_id: str,
-        *,
-        workspace_id: str | None = None,
-    ) -> Summary | None:
+    async def get(self, session_id: str) -> Summary | None:
         """取该 session 最新摘要; 没有返回 None.
 
         Raises:
@@ -63,9 +58,9 @@ class SummaryStore(SummaryStoreBase):
         """
         try:
             async with self._factory() as db:
-                stmt = select(SessionSummaryOrm).where(SessionSummaryOrm.session_id == _to_int(session_id))
-                if workspace_id is not None:
-                    stmt = stmt.where(SessionSummaryOrm.workspace_id == workspace_id)
+                stmt = select(SessionSummaryOrm).where(
+                    SessionSummaryOrm.session_id == _to_int(session_id)
+                )
                 row = (await db.execute(stmt)).scalar_one_or_none()
         except SQLAlchemyError as exc:
             logger.warning("SummaryStore.get 失败 session=%s: %s", session_id, exc)
@@ -82,7 +77,6 @@ class SummaryStore(SummaryStoreBase):
         self,
         *,
         session_id: str,
-        workspace_id: str | None = None,
         content: str,
         covered_until_message_id: str | None,
         token_count: int,
@@ -101,7 +95,6 @@ class SummaryStore(SummaryStoreBase):
                 # 存在 -> UPDATE 内容并 version+1. 一句完成原子 upsert.
                 stmt = mysql_insert(SessionSummaryOrm).values(
                     session_id=_to_int(session_id),
-                    workspace_id=workspace_id,
                     content=content,
                     covered_until_message_id=_to_int(covered_until_message_id),
                     token_count=token_count,
@@ -109,7 +102,6 @@ class SummaryStore(SummaryStoreBase):
                 )
                 stmt = stmt.on_duplicate_key_update(
                     content=stmt.inserted.content,
-                    workspace_id=stmt.inserted.workspace_id,
                     covered_until_message_id=stmt.inserted.covered_until_message_id,
                     token_count=stmt.inserted.token_count,
                     version=SessionSummaryOrm.version + 1,
@@ -121,8 +113,6 @@ class SummaryStore(SummaryStoreBase):
                 select_stmt = select(SessionSummaryOrm).where(
                     SessionSummaryOrm.session_id == _to_int(session_id)
                 )
-                if workspace_id is not None:
-                    select_stmt = select_stmt.where(SessionSummaryOrm.workspace_id == workspace_id)
                 row = (await db.execute(select_stmt)).scalar_one()
                 return _orm_to_summary(row)
         except SQLAlchemyError as exc:
@@ -130,19 +120,14 @@ class SummaryStore(SummaryStoreBase):
             raise MemoryStoreError(f"SummaryStore.upsert failed: {exc}") from exc
 
     # ------------------------------------------------------------------
-    # 删 (session 删除时清理; 由 SessionLog repo 显式调用, 无 FK cascade)
+    # 删 (session 删除时清理; 由 SessionService.delete 显式调用, 无 FK cascade)
     # ------------------------------------------------------------------
-    async def delete(
-        self,
-        session_id: str,
-        *,
-        workspace_id: str | None = None,
-    ) -> None:
+    async def delete(self, session_id: str) -> None:
         try:
             async with self._factory() as db:
-                stmt = delete(SessionSummaryOrm).where(SessionSummaryOrm.session_id == _to_int(session_id))
-                if workspace_id is not None:
-                    stmt = stmt.where(SessionSummaryOrm.workspace_id == workspace_id)
+                stmt = delete(SessionSummaryOrm).where(
+                    SessionSummaryOrm.session_id == _to_int(session_id)
+                )
                 await db.execute(stmt)
                 await db.commit()
         except SQLAlchemyError as exc:
@@ -161,6 +146,5 @@ def _orm_to_summary(row: SessionSummaryOrm) -> Summary:
         ),
         token_count=row.token_count,
         updated_at=row.updated_at or datetime.utcnow(),
-        workspace_id=getattr(row, "workspace_id", None),
         version=row.version,
     )

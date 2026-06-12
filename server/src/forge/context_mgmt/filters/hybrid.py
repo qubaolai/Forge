@@ -179,12 +179,7 @@ def _as_vector(raw: Any) -> list[float]:
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    """纯 Python 余弦相似度."""
-    import math
+    """纯 Python 余弦相似度 (委托共享实现)."""
+    from forge.utils.vector import cosine_similarity
 
-    dot = sum(x * y for x, y in zip(a, b, strict=False))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    if na == 0.0 or nb == 0.0:
-        return 0.0
-    return dot / (na * nb)
+    return cosine_similarity(a, b)

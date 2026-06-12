@@ -1,5 +1,6 @@
 """会话业务：校验归属、CRUD、列表。"""
 
+import logging
 from collections.abc import Sequence
 from typing import Annotated
 
@@ -15,6 +16,8 @@ from forge.infrastructure.database.repositories.chat_session_repo import (
     ChatSessionRepository,
 )
 from forge.infrastructure.storage.data_protocols import ChatMessageView, SessionView
+
+logger = logging.getLogger(__name__)
 
 
 class SessionService:
@@ -69,6 +72,22 @@ class SessionService:
 
     async def delete(self, session: SessionView) -> None:
         await self.session_repo.delete(session)
+        await self._delete_summary(session.id)
+
+    @staticmethod
+    async def _delete_summary(session_id: str) -> None:
+        """级联清理会话摘要 (best-effort): 摘要清理失败不阻断删除主流程.
+
+        SummaryStore 自管 DB 会话且自行 commit, 与本请求事务解耦, 局部 import
+        避免 api 层对 memory 模块的常驻依赖.
+        """
+        try:
+            from forge.infrastructure.database.database import get_session_factory
+            from forge.memory.summary.store import SummaryStore
+
+            await SummaryStore(get_session_factory()).delete(session_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("会话摘要级联清理失败 session=%s: %s", session_id, exc)
 
     async def list_messages(
         self, session_id: str, page: int, page_size: int

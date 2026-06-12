@@ -18,6 +18,7 @@ import pytest
 
 from forge.memory.hooks import (
     EVENT_TURN_COMPLETED,
+    TASK_EXTRACT_FACTS,
     TASK_SUMMARIZE,
     install_memory_hooks,
 )
@@ -120,17 +121,6 @@ async def test_at_threshold_submits() -> None:
 
 
 @pytest.mark.asyncio
-async def test_at_threshold_submits_with_workspace_id() -> None:
-    """payload 带 workspace_id 时, submit 应一并透传."""
-    bus, queue = FakeBus(), FakeQueue()
-    install_memory_hooks(bus, queue, every_n_turns=5)
-    p1, p2 = _patch_repo_count(10)
-    with p1, p2:
-        await _run_handler(bus, {"session_id": "s1", "workspace_id": "ws_a"})
-    assert queue.calls == [(TASK_SUMMARIZE, {"session_id": "s1", "workspace_id": "ws_a"})]
-
-
-@pytest.mark.asyncio
 async def test_multiple_of_threshold_submits() -> None:
     bus, queue = FakeBus(), FakeQueue()
     install_memory_hooks(bus, queue, every_n_turns=5)
@@ -173,3 +163,60 @@ async def test_db_failure_is_swallowed() -> None:
     ):
         await _run_handler(bus, {"session_id": "s1"})  # 不抛
     assert queue.calls == []
+
+
+# ---------------------------------------------------------------------------
+# 事实抽取: 双阈值派发
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_both_thresholds_dispatch_both_tasks() -> None:
+    """摘要与抽取阈值同时满足: 两个任务都派发 (共用一次 count 查询)."""
+    bus, queue = FakeBus(), FakeQueue()
+    install_memory_hooks(
+        bus, queue, every_n_turns=5, facts_enabled=True, extract_every_n_turns=5
+    )
+    p1, p2 = _patch_repo_count(10)
+    with p1, p2:
+        await _run_handler(bus, {"session_id": "s1", "user_id": "u1"})
+    assert queue.calls == [
+        (TASK_SUMMARIZE, {"session_id": "s1"}),
+        (TASK_EXTRACT_FACTS, {"session_id": "s1", "user_id": "u1"}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_only_extract_threshold_dispatches_extract_only() -> None:
+    """count=6: 抽取阈值 (3 轮) 满足, 摘要阈值 (5 轮) 不满足."""
+    bus, queue = FakeBus(), FakeQueue()
+    install_memory_hooks(
+        bus, queue, every_n_turns=5, facts_enabled=True, extract_every_n_turns=3
+    )
+    p1, p2 = _patch_repo_count(6)
+    with p1, p2:
+        await _run_handler(bus, {"session_id": "s1", "user_id": "u1"})
+    assert queue.calls == [(TASK_EXTRACT_FACTS, {"session_id": "s1", "user_id": "u1"})]
+
+
+@pytest.mark.asyncio
+async def test_missing_user_id_skips_extract_keeps_summarize() -> None:
+    """payload 缺 user_id: 摘要正常派发, 抽取跳过."""
+    bus, queue = FakeBus(), FakeQueue()
+    install_memory_hooks(
+        bus, queue, every_n_turns=5, facts_enabled=True, extract_every_n_turns=5
+    )
+    p1, p2 = _patch_repo_count(10)
+    with p1, p2:
+        await _run_handler(bus, {"session_id": "s1"})
+    assert queue.calls == [(TASK_SUMMARIZE, {"session_id": "s1"})]
+
+
+@pytest.mark.asyncio
+async def test_facts_disabled_never_dispatches_extract() -> None:
+    bus, queue = FakeBus(), FakeQueue()
+    install_memory_hooks(
+        bus, queue, every_n_turns=5, facts_enabled=False, extract_every_n_turns=5
+    )
+    p1, p2 = _patch_repo_count(10)
+    with p1, p2:
+        await _run_handler(bus, {"session_id": "s1", "user_id": "u1"})
+    assert queue.calls == [(TASK_SUMMARIZE, {"session_id": "s1"})]

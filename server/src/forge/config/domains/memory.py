@@ -24,9 +24,32 @@ class MemoryTriggerSettings(BaseSettings):
     every_n_turns: int = 10
 
 
+class MemoryFactsSettings(BaseSettings):
+    """用户长期事实层 (跨会话记忆): 抽取触发 / 召回 / 去重.
+
+    默认关闭 (灰度); dev 环境在 sys_config.dev.yaml 显式打开.
+    provider/model 留空走 utility 档位 (与 summarizer 同语义).
+    """
+    model_config = SettingsConfigDict(extra="ignore")
+
+    enabled: bool = False
+    # 每 N 轮 (1 轮 = 1 user + 1 assistant = 2 条消息) 派发一次抽取任务
+    extract_every_n_turns: int = 5
+    # 召回 top_k 与相似度下限 (读路径)
+    top_k: int = 5
+    min_score: float = 0.5
+    # 写入去重: 与已有事实相似度 >= 此阈值则跳过
+    dedup_threshold: float = 0.92
+    # 单次抽取最多落库多少条事实 (防 LLM 发散)
+    max_facts_per_turn: int = 10
+    provider: str = ""
+    model: str = ""
+
+
 class MemorySettings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
     enabled: bool = True
     summarizer: MemorySummarizerSettings = MemorySummarizerSettings()
     trigger: MemoryTriggerSettings = MemoryTriggerSettings()
+    facts: MemoryFactsSettings = MemoryFactsSettings()

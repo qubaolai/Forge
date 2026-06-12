@@ -8,15 +8,18 @@ from typing import Any
 TaskHandler = Callable[..., Any]
 
 
-async def handle_memory_summarize(
-    *,
-    session_id: str,
-    workspace_id: str | None = None,
-) -> None:
+async def handle_memory_summarize(*, session_id: str) -> None:
     """本地执行会话摘要任务."""
     from forge.memory.tasks.summarize import run_summarize_task
 
-    await run_summarize_task(session_id, workspace_id=workspace_id)
+    await run_summarize_task(session_id)
+
+
+async def handle_memory_extract_facts(*, session_id: str, user_id: str) -> None:
+    """本地执行事实抽取任务."""
+    from forge.memory.tasks.extract_facts import run_extract_facts_task
+
+    await run_extract_facts_task(session_id, user_id)
 
 
 async def handle_cost_flush() -> int:
@@ -48,6 +51,7 @@ async def handle_rag_index_rebuild(*, job_id: str) -> None:
 
 _DEFAULT_HANDLERS: dict[str, TaskHandler] = {
     "memory.summarize": handle_memory_summarize,
+    "memory.extract_facts": handle_memory_extract_facts,
     "observability.cost.flush": handle_cost_flush,
     "context.digest": handle_context_digest,
     "context.embedding": handle_context_embedding,

@@ -5,6 +5,6 @@ Celery worker 启动时通过 autodiscover_tasks(["forge.memory.tasks"])
 `queue.submit("memory.<name>", ...)` 寻址, 不 import 装饰器.
 """
 
-from . import summarize  # noqa: F401  -- 触发任务注册
+from . import extract_facts, summarize  # noqa: F401  -- 触发任务注册
 
-__all__ = ["summarize"]
+__all__ = ["extract_facts", "summarize"]

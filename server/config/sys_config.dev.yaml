@@ -53,6 +53,16 @@ memory:
     max_summary_tokens: 1500
   trigger:
     every_n_turns: ${MEMORY_TRIGGER_EVERY_N:5}
+  # 用户长期事实层 (跨会话记忆): LLM 抽取 + 语义召回; 代码默认关, dev 显式开
+  facts:
+    enabled: ${MEMORY_FACTS_ENABLED:true}
+    extract_every_n_turns: ${MEMORY_FACTS_EXTRACT_EVERY_N:5}
+    top_k: 5
+    min_score: 0.5
+    dedup_threshold: 0.92
+    max_facts_per_turn: 10
+    provider: ${MEMORY_FACTS_PROVIDER:}
+    model: ${MEMORY_FACTS_MODEL:}
 
 # 上下文管理 (短期、会话级; 与 memory 解耦)
 context:

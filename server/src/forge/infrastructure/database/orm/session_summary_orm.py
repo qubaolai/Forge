@@ -1,6 +1,6 @@
 """会话摘要表 — 每个 session 一条，原地 upsert。"""
 
-from sqlalchemy import BigInteger, Index, Integer, String, Text
+from sqlalchemy import BigInteger, Index, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from forge.infrastructure.database.orm.base import Base
@@ -12,9 +12,6 @@ class SessionSummaryOrm(Base, BigIntPKMixin):
 
     session_id: Mapped[int] = mapped_column(
         BigInteger, unique=True, nullable=False, comment="→ chat_sessions.id (雪花)"
-    )
-    workspace_id: Mapped[str | None] = mapped_column(
-        String(255), nullable=True, index=True, comment="工作空间 ID"
     )
     content: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="摘要正文")
     covered_until_message_id: Mapped[int | None] = mapped_column(

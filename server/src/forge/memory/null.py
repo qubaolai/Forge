@@ -12,13 +12,7 @@ from forge.memory.base import Fact, FactRecallRequest, MemoryStore, Summary
 class NullMemoryStore(MemoryStore):
     """MemoryStore ABC 的空实现."""
 
-    async def get_summary(
-        self,
-        session_id: str,
-        *,
-        workspace_id: str | None = None,
-    ) -> Summary | None:
-        _ = workspace_id
+    async def get_summary(self, session_id: str) -> Summary | None:
         return None
 
     async def recall_facts(self, request: FactRecallRequest) -> list[Fact]:

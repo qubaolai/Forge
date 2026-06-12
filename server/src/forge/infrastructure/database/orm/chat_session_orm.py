@@ -16,7 +16,6 @@ class ChatSessionOrm(Base, BigIntPKMixin):
         BigInteger, nullable=False, comment="→ users.id (雪花, 应用层引用, 无 FK)"
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="", comment="会话标题")
-    workspace_id: Mapped[str] = mapped_column(String(255), nullable=False, default="", comment="workspace 路径")
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="active", comment="active / deleted"
     )

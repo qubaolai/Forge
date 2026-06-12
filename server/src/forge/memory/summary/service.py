@@ -30,17 +30,18 @@ class InfrastructureError(Exception):
 class SummaryService:
     """无状态. 复用单例即可."""
 
-    async def summarize_session(
-        self,
-        session_id: str,
-        *,
-        workspace_id: str | None = None,
-    ) -> Summary | None:
-        """加载 history -> LLM 摘要 -> upsert SummaryStore.
+    async def summarize_session(self, session_id: str) -> Summary | None:
+        """增量滚动摘要: 旧摘要 + 水位后新消息 -> LLM 融合 -> upsert SummaryStore.
+
+        首次 (无旧摘要) 取最近 history_limit 条全量摘要; 之后只取
+        covered_until_message_id 之后的增量消息, 与旧摘要一起喂给 LLM,
+        避免旧摘要被覆盖时丢失早期信息. 水位后无新消息时直接返回 None (幂等不空烧).
+        增量积压超过 history_limit 时本次只消化最旧一批, 水位推进到已消化处,
+        下次触发继续消化.
 
         Returns:
             Summary: upsert 后的最新摘要 (含 version).
-            None:    没历史 / 无可摘要内容 / LLM 返回空字符串.
+            None:    水位后无新消息 / 无可摘要内容 / LLM 返回空字符串.
 
         Raises:
             InfrastructureError: LLM 初始化 / DB 写入失败.
@@ -58,16 +59,31 @@ class SummaryService:
         settings = get_settings()
         # factory 既喂给只读 history 查询, 也注入 SummaryStore (其内部自管会话).
         factory = get_session_factory()
+        store = SummaryStore(factory)
 
-        # 1. 加载 history
+        # 1. 取旧摘要 (增量滚动的水位); 读失败按 "无旧摘要" 处理, 退化为全量
+        previous: Summary | None = None
+        try:
+            previous = await store.get(session_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("读取旧摘要失败 session=%s, 退化为全量摘要: %s", session_id, exc)
+
+        # 2. 加载 history: 有旧摘要只取水位之后的增量, 否则取最近 N 条
         async with factory() as db:
             repo = ChatMessageRepository(db)
-            rows = await repo.load_recent(
-                session_id, limit=settings.memory.summarizer.history_limit
-            )
+            if previous is not None and previous.covered_until_message_id:
+                rows = await repo.load_after(
+                    session_id,
+                    previous.covered_until_message_id,
+                    limit=settings.memory.summarizer.history_limit,
+                )
+            else:
+                rows = await repo.load_recent(
+                    session_id, limit=settings.memory.summarizer.history_limit
+                )
 
         if not rows:
-            logger.info("摘要跳过 session=%s 无历史", session_id)
+            logger.info("摘要跳过 session=%s 水位后无新消息", session_id)
             return None
 
         messages: list[Message] = []
@@ -79,9 +95,9 @@ class SummaryService:
             logger.info("摘要跳过 session=%s 无有效消息", session_id)
             return None
 
-        covered_until = rows[-1].id  # load_recent 已按时间升序
+        covered_until = rows[-1].id  # load_recent / load_after 均按 id 升序
 
-        # 2. 构造 Summarizer (走 LLMGateway utility 档位, task_type="utility")
+        # 3. 构造 Summarizer (走 LLMGateway utility 档位, task_type="utility")
         try:
             provider = settings.memory.summarizer.provider or None
             model = settings.memory.summarizer.model or None
@@ -98,19 +114,20 @@ class SummaryService:
         )
         used_model = model or "<utility-routed>"
 
-        # 3. 生成 (async, 直接 await)
-        summary_text = await summarizer.summarize(messages)
+        # 4. 生成 (async, 直接 await): 旧摘要喂回 LLM, 新摘要 = 融合(旧摘要 + 增量消息)
+        summary_text = await summarizer.summarize(
+            messages,
+            previous_summary=previous.content if previous else None,
+        )
         if not summary_text:
             logger.info("摘要跳过 session=%s LLM 返回空", session_id)
             return None
 
-        # 4. 持久化
+        # 5. 持久化
         token_count = max(1, len(summary_text) // 2)
-        store = SummaryStore(factory)
         try:
             summary = await store.upsert(
                 session_id=session_id,
-                workspace_id=workspace_id,
                 content=summary_text,
                 covered_until_message_id=covered_until,
                 token_count=token_count,
@@ -119,10 +136,8 @@ class SummaryService:
             raise InfrastructureError(f"SummaryStore.upsert 失败: {exc}") from exc
 
         logger.info(
-            "摘要写入成功 session=%s workspace=%s content_len=%d covered_until=%s "
-            "model=%s version=%d",
+            "摘要写入成功 session=%s content_len=%d covered_until=%s model=%s version=%d",
             session_id,
-            workspace_id or "<none>",
             len(summary_text),
             covered_until,
             used_model,

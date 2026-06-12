@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import logging
-from array import array
 
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -22,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from forge.infrastructure.database.orm.message_embedding_orm import (
     MessageEmbeddingOrm,
 )
+from forge.utils.vector import dequantize_int8 as _dequantize_int8
+from forge.utils.vector import quantize_int8 as _quantize_int8
 
 logger = logging.getLogger(__name__)
 
@@ -33,29 +34,6 @@ def _to_int(value: str | int | None) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
-
-
-def _quantize_int8(vec: list[float]) -> bytes:
-    """对称量化为 int8 字节: scale = max(|v|)/127; q = round(v/scale), clip 到 [-127,127].
-
-    余弦相似度对正标量 scale 不变, 故无需回存 scale。全零向量 (peak=0) 退化为全零字节。
-    """
-    if not vec:
-        return b""
-    peak = max(abs(x) for x in vec)
-    if peak == 0.0:
-        return bytes(len(vec))
-    scale = peak / 127.0
-    return array(
-        "b", (max(-127, min(127, round(x / scale))) for x in vec)
-    ).tobytes()
-
-
-def _dequantize_int8(blob: bytes | None) -> list[float]:
-    """int8 字节还原为 list[float] (按量化值原样, 不乘 scale —— cosine 不受影响)。"""
-    if not blob:
-        return []
-    return [float(x) for x in array("b", blob)]
 
 
 class MessageEmbeddingStore:
