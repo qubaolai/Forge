@@ -177,7 +177,7 @@ class ReActAgent(BaseAgent):
         tool_calls 在 finish_reason='tool_calls' 时一次性产出.
 
         Args:
-            lifecycle: 生命周期扩展点 (mode / 持久化 / Plan Mode / HITL 都通过它接入).
+            lifecycle: 生命周期扩展点 (守护 / 持久化 / 动态工具集等都通过它接入).
                 None 表示纯 ReAct, 行为与 max_steps + 默认 tool_schemas 等价.
             run_ctx: 传给 lifecycle.on_start 的 run 静态上下文.
         """
@@ -233,7 +233,7 @@ class ReActAgent(BaseAgent):
                         elapsed_seconds=time.monotonic() - run_started_at,
                     )
 
-                    # lifecycle.resolve_tools: 动态工具集核心 (Plan Mode 切 readonly/full)
+                    # lifecycle.resolve_tools: 动态工具集核心 (按需切换本步可见工具)
                     current_tool_schemas = self._default_tool_schemas
                     if lifecycle is not None:
                         try:

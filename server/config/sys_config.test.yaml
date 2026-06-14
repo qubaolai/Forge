@@ -158,5 +158,4 @@ agent_profiles:
         - knowledge_search
         - time_tool
       max_steps: 50
-      persistence: chat_db
       model_profile: smart

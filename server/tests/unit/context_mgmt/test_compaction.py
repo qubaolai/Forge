@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from forge.context_mgmt.compaction.controller import CompactionController
-from forge.context_mgmt.compaction.strategies.null import NullCompaction
 from forge.context_mgmt.compaction.trigger.composite import CompositeTrigger
 from forge.context_mgmt.compaction.trigger.explicit import ExplicitTrigger
 from forge.context_mgmt.compaction.trigger.threshold import ThresholdTrigger
@@ -170,14 +169,3 @@ async def test_compact_now_with_failing_strategy():
     assert result.success is False
     assert result.trigger_source == "explicit"
     assert "LLM down" in result.failure_reason
-
-
-# ---------------------------------------------------------------------------
-# 6. NullCompaction (task / workflow 默认)
-# ---------------------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_null_compaction_is_noop():
-    null = NullCompaction()
-    result = await null.compact("s1", _make_snapshot(total_tokens=999))
-    assert result.success is False
-    assert result.strategy_used == "null"

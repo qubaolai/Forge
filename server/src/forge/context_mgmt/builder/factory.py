@@ -1,9 +1,7 @@
 """DefaultContextBuilder 装配工厂.
 
-build_context_builder(mode, message_store, ...) 根据 ContextMode 选择默认实现:
-
-    - CHAT: HybridFilter (近期锚点 + 可选语义过滤)
-    - 其他模式: NullFilter (不改变历史, 由未来调用方显式注入专用过滤器)
+build_context_builder(message_store, ...) 组装 chat 路径的默认实现:
+    HybridFilter (近期锚点 + 可选语义过滤) + TruncatingPolicy + DefaultBudgetPolicy。
 """
 
 from __future__ import annotations
@@ -29,30 +27,17 @@ from forge.context_mgmt.protocols import (
 from forge.context_mgmt.providers.facts import FactsProvider
 from forge.context_mgmt.providers.history import HistoryProvider
 from forge.context_mgmt.providers.summary import SummaryProvider
-from forge.context_mgmt.tool_policy.verbatim import VerbatimPolicy
-from forge.context_mgmt.types import ContextMode
 from forge.infrastructure.storage import MessageStore
 from forge.memory.base import MemoryStore
 
 logger = logging.getLogger(__name__)
 
 
-def _default_history_filter(mode: ContextMode) -> HistoryFilter:
-    """按 mode 选默认 HistoryFilter.
+def _default_history_filter() -> HistoryFilter:
+    """默认 HistoryFilter: HybridFilter (近期锚点 + 语义过滤)。
 
-    CHAT:     HybridFilter (近期锚点 + 语义过滤)。settings.context.semantic_recall 开启
-              且 embedder 可用时, 用 EmbeddingScorer (读缓存向量) 给早期轮次打分;
-              否则不做语义过滤。
-    其他:     HybridFilter (服务端瘦身后仅保留 chat, 非 chat 仅作测试兜底)
-    """
-    if mode == ContextMode.CHAT:
-        return _build_chat_history_filter()
-    return HybridFilter()
-
-
-def _build_chat_history_filter() -> HistoryFilter:
-    """CHAT 模式 HybridFilter 装配 (含语义召回 opt-in)。
-
+    settings.context.semantic_recall 开启且 embedder 可用时, 用 EmbeddingScorer
+    (读缓存向量) 给早期轮次打分; 否则不做语义过滤。
     关闭 / 装配失败时回退默认 HybridFilter, 不做语义过滤。
     """
     try:
@@ -85,20 +70,14 @@ def _build_chat_history_filter() -> HistoryFilter:
         return HybridFilter()
 
 
-def _default_tool_result_policy(mode: ContextMode) -> ToolResultPolicy:
-    """按 mode 选默认 ToolResultPolicy.
-
-    CHAT:     TruncatingPolicy (跨轮加载的大 tool 结果截断到 500 token)
-    其他:     VerbatimPolicy
-    """
+def _default_tool_result_policy() -> ToolResultPolicy:
+    """默认 ToolResultPolicy: TruncatingPolicy (跨轮加载的大 tool 结果截断到 500 token)."""
     from forge.context_mgmt.tool_policy.truncating import TruncatingPolicy
 
-    if mode == ContextMode.CHAT:
-        return TruncatingPolicy()
-    return VerbatimPolicy()
+    return TruncatingPolicy()
 
 
-def _default_digest(mode: ContextMode) -> tuple[DigestPolicy | None, int, Any]:
+def _default_digest() -> tuple[DigestPolicy | None, int, Any]:
     """按 settings.context.digest 构造默认 DigestPolicy + 单条 cap + DigestStore.
 
     关闭 / 未配置 / cap<=0 时返回 (None, 0, None), HistoryProvider 完全旁路 digest。
@@ -124,7 +103,6 @@ def _default_digest(mode: ContextMode) -> tuple[DigestPolicy | None, int, Any]:
 
 def build_context_builder(
     *,
-    mode: ContextMode,
     message_store: MessageStore,
     memory_store: MemoryStore,
     history_filter: HistoryFilter | None = None,
@@ -139,11 +117,10 @@ def build_context_builder(
     """组装一个 DefaultContextBuilder.
 
     Args:
-        mode:              业务模式, 决定默认 Filter / Policy.
         message_store:     当前请求持有的 MessageStore (含 DB session).
         memory_store:      长寿单例, 由调用方传入 (避免本工厂耦合 memory.factory).
-        history_filter:    可选, 默认按 mode 选择.
-        tool_result_policy: 可选, 默认按 mode 选择.
+        history_filter:    可选, 默认 HybridFilter.
+        tool_result_policy: 可选, 默认 TruncatingPolicy.
         budget_policy:     可选, 默认 DefaultBudgetPolicy.
         token_meter:       可选, 默认全局单例.
         extra_providers:   附加 Provider, 追加到默认 Provider 列表.
@@ -151,13 +128,13 @@ def build_context_builder(
         digest_cap:        可选, 单条折叠 token 上限; 默认取自 settings。
     """
     meter = token_meter or get_token_meter()
-    h_filter = history_filter or _default_history_filter(mode)
-    t_policy = tool_result_policy or _default_tool_result_policy(mode)
+    h_filter = history_filter or _default_history_filter()
+    t_policy = tool_result_policy or _default_tool_result_policy()
     b_policy = budget_policy or DefaultBudgetPolicy()
 
     # 显式传入则用之 (单测 / 特殊编排); 否则按 settings 取默认。
     if digest_policy is None and digest_cap is None:
-        d_policy, d_cap, d_store = _default_digest(mode)
+        d_policy, d_cap, d_store = _default_digest()
         d_store = digest_store or d_store
     else:
         d_policy, d_cap, d_store = digest_policy, (digest_cap or 0), digest_store

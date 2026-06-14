@@ -1,31 +1,23 @@
 """BudgetPolicy: 从 ContextRequest 计算 WindowBudget.
 
-按 ContextMode 给不同的预算比例:
-    CHAT:     system 15% / dialogue 40% / tool_result 15% (剩 30% 输出预算)
-    TASK:     system 20% / dialogue  0% / tool_result 50% (剩 30%)
-    WORKFLOW: system 20% / dialogue 15% / tool_result 35% (剩 30%)
+固定的输入预算比例:
+    system 15% / dialogue 40% / tool_result 15% (剩 30% 输出预算)
 """
 
 from __future__ import annotations
 
 from forge.context_mgmt.protocols import BudgetPolicy
-from forge.context_mgmt.types import ContextMode, ContextRequest, WindowBudget
+from forge.context_mgmt.types import ContextRequest, WindowBudget
 
 
 class DefaultBudgetPolicy(BudgetPolicy):
-    """按 mode 给固定比例的预算分配策略."""
+    """固定比例的预算分配策略."""
 
-    # mode -> (system, dialogue, tool_result) 比例
-    _RATIOS: dict[ContextMode, tuple[float, float, float]] = {
-        ContextMode.CHAT:     (0.15, 0.40, 0.15),
-        ContextMode.TASK:     (0.20, 0.00, 0.50),
-        ContextMode.WORKFLOW: (0.20, 0.15, 0.35),
-    }
+    # (system, dialogue, tool_result) 比例
+    _RATIO: tuple[float, float, float] = (0.15, 0.40, 0.15)
 
     def allocate(self, request: ContextRequest) -> WindowBudget:
-        sys_r, dlg_r, tr_r = self._RATIOS.get(
-            request.mode, self._RATIOS[ContextMode.CHAT]
-        )
+        sys_r, dlg_r, tr_r = self._RATIO
         w = request.context_window
         budget = WindowBudget(
             context_window=w,

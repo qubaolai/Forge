@@ -51,7 +51,6 @@ from forge.context_mgmt.manager import ContextManager
 from forge.context_mgmt.memory_factory import get_memory_store
 from forge.context_mgmt.types import (
     CompactionResult,
-    ContextMode,
     ContextRequest,
     ContextSnapshot,
 )
@@ -247,7 +246,6 @@ class TurnOrchestrator:
             user_id=ctx.user_id,
             session_id=ctx.session_id,
             current_user_message=ctx.current_user_message,
-            mode=ContextMode.CHAT,
             system_prompt_vars={"user_name": ctx.user_name},
             context_window=ctx.context_window,
             exclude_message_ids=tuple(ctx.exclude_message_ids),
@@ -355,7 +353,6 @@ class TurnOrchestrator:
             user_id=ctx.user_id,
             session_id=ctx.session_id,
             current_user_message=ctx.current_user_message,
-            mode=ContextMode.CHAT,
             system_prompt_vars={"user_name": ctx.user_name},
             context_window=ctx.context_window,
             exclude_message_ids=tuple(ctx.exclude_message_ids),
@@ -530,7 +527,6 @@ def build_turn_orchestrator() -> TurnOrchestrator:
 
         async with session_scope() as db:
             builder = build_context_builder(
-                mode=ContextMode.CHAT,
                 message_store=ChatMessageRepository(db),
                 memory_store=get_memory_store(),
             )

@@ -145,15 +145,13 @@ mode = lifecycle 组合，由编排层装配（**这是全部的 mode 路由逻�
 - 实际配置：`server/config/sys_config.dev.yaml` 的 `agent_profiles` 段（当前仅 chat profile）
 - 加载 + 启动期校验：[profiles.py](server/src/forge/agents/profiles.py) `load_profiles_at_startup`
 
-启动期 5 项强校验（任一不过直接拒绝启动）：
+启动期 3 项强校验（任一不过直接拒绝启动）：
 
 1. `tools_allowed` 每个工具名在 ToolRegistry 已注册
-2. `sub_agents_allowed` 每个 role 已注册
-3. `sub_agents_allowed` 非空 ⇔ `spawn_subagent in tools_allowed`
-4. `system_prompt_template` 在 PromptRegistry 存在
-5. `model_profile` 在 `model_profiles` 字典定义
+2. `system_prompt_template` 在 PromptRegistry 存在
+3. `model_profile` 在 `model_profiles` 字典定义
 
-profile 关键字段：`persistence`（chat_db / none）、`model_profile`（fast / smart / strong）、`tools_allowed`、`sub_agents_allowed`、`max_steps`。
+profile 关键字段：`model_profile`（fast / smart / strong）、`tools_allowed`、`max_steps`。
 
 Runner 据 profile 自动过滤工具：[runner.py](server/src/forge/chat/runner.py) `ReActRunner.from_profile`。
 
@@ -167,15 +165,7 @@ Runner 据 profile 自动过滤工具：[runner.py](server/src/forge/chat/runner
 - 注册：[registry.py:29](server/src/forge/tools/registry.py:29) `@register_tool` 装饰器，注册期预计算 schema 缓存。
 - 执行：`ToolExecutor`（`server/src/forge/tools/executor.py`）带 guardrail 流水线（access → permission → rate_limit → dangerous_op）+ workspace 路径策略。
 
-### 6.2 AgentRole（子 agent 角色扩展点）
-
-[roles/factory.py](server/src/forge/agents/roles/factory.py) `AgentRole`。7 个内置角色（triage / developer / architect / reviewer / qa / ra / devops），每个声明 `allowed_tools` / `model_preference` / `can_write` / `write_path_prefixes`。
-
-- 动态扩展：`register_custom_agent_role`（进程级，默认不覆盖内置）
-
-子 agent 通过 `spawn_subagent` 工具派发，受 profile 的 `sub_agents_allowed` 白名单约束，spawn 层 `SUBAGENT_DENY_TOOLS` 再硬剥离写类/二级派发工具。
-
-### 6.3 LLM 网关（Provider / 中间件 / 路由扩展点）
+### 6.2 LLM 网关（Provider / 中间件 / 路由扩展点）
 
 [gateway.py](server/src/forge/llm/gateway.py) `LLMGateway` 是业务层**唯一对外入口**。调用链：
 
@@ -192,7 +182,7 @@ LLMRequest
 - Provider 动态注册：`llm/registry.py` + `llm/providers/`
 - 对 agent 的适配：`GatewayLLMAdapter`（[binding.py](server/src/forge/llm/binding.py)）把网关包装成 `chat_with_tools_stream` facade，`ReActAgent` 只依赖 `ToolCallingLLM` ABC（[contracts.py](server/src/forge/llm/contracts.py)）。
 
-### 6.4 对外 LLM 端点（网关的 HTTP 形态）
+### 6.3 对外 LLM 端点（网关的 HTTP 形态）
 
 [llm.py](server/src/forge/api/routes/v1/llm.py) 把 `LLMGateway` 以 OpenAI 兼容 HTTP 端点形式暴露：
 

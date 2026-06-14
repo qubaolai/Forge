@@ -1,4 +1,4 @@
-"""HybridFilter: 近期锚点 + 语义过滤 (chat 模式默认).
+"""HybridFilter: 近期锚点 + 语义过滤 (chat 历史过滤默认实现).
 
 策略:
     1. 把历史按 turn_index 分组 (同轮 user/assistant/tool 共享 turn_index)
@@ -20,7 +20,7 @@ from collections import OrderedDict
 from typing import Any
 
 from forge.context_mgmt.protocols import HistoryFilter
-from forge.context_mgmt.types import ContextMode, HistoryMessage
+from forge.context_mgmt.types import HistoryMessage
 from forge.retrieval.embedders.base import Embedder
 
 logger = logging.getLogger(__name__)
@@ -103,7 +103,6 @@ class HybridFilter(HistoryFilter):
         self,
         messages: list[HistoryMessage],
         query: str,
-        mode: ContextMode,
     ) -> list[HistoryMessage]:
         if not messages:
             return []

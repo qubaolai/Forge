@@ -51,9 +51,7 @@ class MessageAssembler:
         chunks = gather_result.chunks
 
         # ---- 1. 组装 system message 文本 ----
-        system_text, workspace_tokens = self._build_system_text(
-            rendered_prompt, chunks
-        )
+        system_text = self._build_system_text(rendered_prompt, chunks)
         system_msg = Message(role="system", content=system_text)
 
         # ---- 2. 历史裁剪 (按 dialogue_budget) ----
@@ -101,7 +99,6 @@ class MessageAssembler:
         layers = self._aggregate_layers(
             rendered_prompt=rendered_prompt,
             chunks=chunks,
-            workspace_tokens=workspace_tokens,
             kept_history=kept_history,
             dlg_tokens=dlg_tokens,
             current_msg=current_msg,
@@ -152,29 +149,18 @@ class MessageAssembler:
         return snapshot
 
     # ------------------------------------------------------------------
-    # 内部: 组装 system text + 统计 workspace 层 token
+    # 内部: 组装 system text
     # ------------------------------------------------------------------
     def _build_system_text(
         self,
         rendered_prompt: str,
         chunks: dict[str, list[ContentChunk]],
-    ) -> tuple[str, int]:
-        """按 base → workspace → facts → summary 顺序拼 system 文本.
-
-        Returns:
-            (system_text, workspace_tokens)
-        """
+    ) -> str:
+        """按 base → facts → summary 顺序拼 system 文本."""
         parts: list[str] = []
-        workspace_tokens = 0
 
         if rendered_prompt and rendered_prompt.strip():
             parts.append(rendered_prompt.strip())
-
-        # workspace 层 (含 workspace/project_decisions/workflow/role_history)
-        for c in chunks.get("workspace", []):
-            if c.text:
-                parts.append(c.text)
-                workspace_tokens += c.estimated_tokens
 
         # facts 层
         for c in chunks.get("facts", []):
@@ -186,7 +172,7 @@ class MessageAssembler:
             if c.text:
                 parts.append(c.text)
 
-        return "\n\n".join(parts), workspace_tokens
+        return "\n\n".join(parts)
 
     # ------------------------------------------------------------------
     # 内部: 历史裁剪 (从最新往前累加, 超预算停止)
@@ -223,7 +209,6 @@ class MessageAssembler:
         *,
         rendered_prompt: str,
         chunks: dict[str, list[ContentChunk]],
-        workspace_tokens: int,
         kept_history: list[Message],
         dlg_tokens: int,
         current_msg: Message,
@@ -240,17 +225,7 @@ class MessageAssembler:
             ratio=sys_tokens / cw if cw else 0.0,
         ))
 
-        # 2. workspace 层 (合并多个 chunk) — chat 模式无 workspace_context 时不记录
-        ws_chunks = chunks.get("workspace", [])
-        if workspace_tokens > 0:
-            layers.append(LayerUsage(
-                name="workspace",
-                token_count=workspace_tokens,
-                ratio=workspace_tokens / cw if cw else 0.0,
-                message_count=len(ws_chunks),
-            ))
-
-        # 3. facts 层
+        # 2. facts 层
         facts_chunk = self._first_chunk(chunks, "facts")
         facts_tokens = facts_chunk.estimated_tokens if facts_chunk else 0
         facts_count = facts_chunk.message_count if facts_chunk else 0
@@ -261,7 +236,7 @@ class MessageAssembler:
             message_count=facts_count,
         ))
 
-        # 4. summary 层
+        # 3. summary 层
         summary_chunk = self._first_chunk(chunks, "summary")
         summary_tokens = summary_chunk.estimated_tokens if summary_chunk else 0
         layers.append(LayerUsage(
@@ -270,7 +245,7 @@ class MessageAssembler:
             ratio=summary_tokens / cw if cw else 0.0,
         ))
 
-        # 5. dialogue 层 (用 trim 累加出的 kept_tokens, 免再次 count_messages)
+        # 4. dialogue 层 (用 trim 累加出的 kept_tokens, 免再次 count_messages)
         history_chunk = self._first_chunk(chunks, "history")
         dlg_truncated = (
             history_chunk is not None
@@ -284,7 +259,7 @@ class MessageAssembler:
             truncated=dlg_truncated,
         ))
 
-        # 6. tool_results 层 (阶段 1 暂为 0, 阶段 2 在 HistoryProvider 拆分后填充)
+        # 5. tool_results 层 (当前暂为 0, tool 结果统计在 HistoryProvider 拆分后填充)
         layers.append(LayerUsage(
             name="tool_results",
             token_count=0,
@@ -292,7 +267,7 @@ class MessageAssembler:
             message_count=0,
         ))
 
-        # 7. current_input 层
+        # 6. current_input 层
         cur_tokens = self._meter.count_messages([current_msg])
         layers.append(LayerUsage(
             name="current_input",

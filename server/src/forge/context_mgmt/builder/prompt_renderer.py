@@ -2,7 +2,7 @@
 
 行为:
     - 若 ContextRequest.system_prompt_override 非空, 直接返回 (跳过模板渲染).
-      用于 adaptive 路径 _build_task_system_prompt() 等动态生成场景.
+      chat 路径在编排层预渲染好 system prompt 后用它直接注入.
     - 否则调 PromptRegistry.render(template, **vars).
       模板渲染失败会被 PromptRegistry 内部捕获并返回 fallback 文本.
 

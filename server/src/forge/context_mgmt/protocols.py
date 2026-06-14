@@ -8,12 +8,12 @@
 
 扩展点清单:
     - TokenMeter:        token 计量 (包装 llm/token_counter.py)
-    - BudgetPolicy:      WindowBudget 分配策略 (按 mode)
-    - ContentProvider:   异步提供一类上下文素材 (history / summary / facts / workspace)
+    - BudgetPolicy:      WindowBudget 分配策略
+    - ContentProvider:   异步提供一类上下文素材 (history / summary / facts)
     - HistoryFilter:     决定哪些历史消息进入上下文 (recent / semantic / hybrid)
-    - ToolResultPolicy:  决定工具结果如何出现在历史中 (truncate / evict / summarize)
+    - ToolResultPolicy:  决定工具结果如何出现在历史中 (truncate)
     - CompactionTrigger: 压缩触发条件判断 (threshold / explicit / scheduled)
-    - CompactionStrategy: 压缩执行 (summary / selective_drop / hybrid / null)
+    - CompactionStrategy: 压缩执行 (summary)
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ from abc import ABC, abstractmethod
 from forge.context_mgmt.types import (
     CompactionResult,
     ContentChunk,
-    ContextMode,
     ContextRequest,
     ContextSnapshot,
     HistoryMessage,
@@ -107,7 +106,6 @@ class HistoryFilter(ABC):
 
     实现:
         - HybridFilter:   近期锚点 + 语义过滤 (chat 默认)
-        - NullFilter:     返回原列表 (空实现)
     """
 
     @abstractmethod
@@ -115,7 +113,6 @@ class HistoryFilter(ABC):
         self,
         messages: list[HistoryMessage],
         query: str,
-        mode: ContextMode,
     ) -> list[HistoryMessage]: ...
 
 
@@ -126,10 +123,7 @@ class ToolResultPolicy(ABC):
     """处理跨轮加载回来的 tool_result content.
 
     实现:
-        - VerbatimPolicy:    保持原样 (调试用)
         - TruncatingPolicy:  截断到 MAX tokens (chat 默认)
-        - EvictingPolicy:    替换为占位符 (task 默认)
-        - SummarizingPolicy: LLM 摘要 (workflow 默认)
     """
 
     @abstractmethod

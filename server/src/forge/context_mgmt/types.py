@@ -1,10 +1,10 @@
 """上下文管理系统的统一值对象 (跨子系统的共享数据类型).
 
 设计:
-    - ContextRequest:   统一入参 (chat / task / workflow 三模式均使用).
+    - ContextRequest:   统一入参 (chat 路径).
     - ContextSnapshot:  统一出参 (含 messages + 用量 + 降级信息).
-    - ContextUsage:     近实时用量视图 (CLI / 前端展示).
-    - WindowBudget:     单次请求按 mode 分配的 token 预算 (不含 output).
+    - ContextUsage:     近实时用量视图 (前端展示).
+    - WindowBudget:     单次请求的 token 预算分配 (不含 output).
     - ContentChunk:     ContentProvider 的输出单元 (带 layer + token 预估).
     - HistoryMessage:   带元信息的历史消息 (供 HistoryFilter 决策).
     - CompactionResult: 压缩操作的可观测输出.
@@ -18,49 +18,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any
 
 from forge.core.types.message import Message
 
 
 # ---------------------------------------------------------------------------
-# 0. 层叠上下文层 (从旧 forge/context/base.py 迁入).
-# ---------------------------------------------------------------------------
-@dataclass(frozen=True)
-class WorkspaceContextLayer:
-    """注入 system 上下文的 workspace 层."""
-
-    workspace_id: str
-    root_path: str
-    assistant_prompt: str = ""
-    settings: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class WorkflowContextLayer:
-    """注入 system 上下文的 workflow 层."""
-
-    workflow_id: str
-    template_id: str
-    mode: str = "light"
-    role_artifacts: dict[str, Any] = field(default_factory=dict)
-    recent_events: tuple[dict[str, Any], ...] = ()
-
-
-# ---------------------------------------------------------------------------
-# 1. ContextMode: 三种业务模式, 驱动默认 Filter / Policy / Strategy 选择.
-# ---------------------------------------------------------------------------
-class ContextMode(str, Enum):
-    """上下文管理的业务模式."""
-
-    CHAT = "chat"          # 对话模式: hybrid filter + 截断 tool 结果 + summary 压缩
-    TASK = "task"          # 代码任务模式: 无对话历史 + evict tool 结果 + 无压缩
-    WORKFLOW = "workflow"  # 工作流模式: step 隔离 + 摘要 tool 结果 + 无压缩
-
-
-# ---------------------------------------------------------------------------
-# 2. WindowBudget: 单次请求的 token 输入分配 (不包含 output).
+# 1. WindowBudget: 单次请求的 token 输入分配 (不包含 output).
 #    output 是计算属性 = context_window - total_input_budget,
 #    调用方拿去当 LLM max_tokens 参数.
 # ---------------------------------------------------------------------------
@@ -96,7 +60,7 @@ class WindowBudget:
 
 
 # ---------------------------------------------------------------------------
-# 3. ContentChunk: ContentProvider 的输出单元.
+# 2. ContentChunk: ContentProvider 的输出单元.
 #    每个 chunk 携带 estimated_tokens, 让 MessageAssembler 裁剪时不重复计数.
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
@@ -132,7 +96,7 @@ class ContentChunk:
 
 
 # ---------------------------------------------------------------------------
-# 4. HistoryMessage: 带元信息的历史消息, 供 HistoryFilter 做相关性决策.
+# 3. HistoryMessage: 带元信息的历史消息, 供 HistoryFilter 做相关性决策.
 # ---------------------------------------------------------------------------
 @dataclass
 class HistoryMessage:
@@ -160,24 +124,16 @@ class HistoryMessage:
 
 
 # ---------------------------------------------------------------------------
-# 5. ContextRequest: 统一入参.
+# 4. ContextRequest: 统一入参 (由 chat 路径的 TurnContext 映射而来).
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class ContextRequest:
-    """一次上下文构建请求的完整描述.
-
-    chat 路径:     由 TurnContext 映射而来.
-    adaptive 路径: 由 TaskNode + workspace 信息映射而来.
-    workflow 路径: 由 step + workflow_run 映射而来.
-    """
+    """一次上下文构建请求的完整描述."""
 
     # ---- 身份 ----
     user_id: str
     session_id: str
     current_user_message: str
-
-    # ---- 模式 (驱动默认配置) ----
-    mode: ContextMode = ContextMode.CHAT
 
     # ---- system prompt ----
     system_prompt_template: str = "chat/default_system"  # Jinja2 模板名
@@ -196,23 +152,12 @@ class ContextRequest:
     # ---- 历史过滤 ----
     exclude_message_ids: tuple[str, ...] = ()
 
-    # ---- 层叠上下文 ----
-    workflow_id: str | None = None
-    workspace_context: WorkspaceContextLayer | None = None
-    workflow_context: WorkflowContextLayer | None = None
-    project_decisions: tuple[str, ...] = ()
-    role_history: tuple[str, ...] = ()
-
-    # ---- 工作流模式专用 ----
-    step_id: str | None = None
-    step_inputs: dict[str, Any] = field(default_factory=dict)
-
     # ---- 调用方标识 (用于日志 / trace) ----
     caller: str = "chat"
 
 
 # ---------------------------------------------------------------------------
-# 6. ContextUsage: 近实时上下文用量分层视图.
+# 5. ContextUsage: 近实时上下文用量分层视图.
 # ---------------------------------------------------------------------------
 # 健康信号阈值
 _WARNING_RATIO = 0.70
@@ -234,12 +179,10 @@ class LayerUsage:
 # 标准层名 (按 system message 组合顺序排列)
 _STANDARD_LAYERS = (
     "system_prompt",   # 基础系统提示词
-    "workspace",       # ASSISTANT.md + workspace settings
     "facts",           # 长期用户事实
     "summary",         # 早期对话摘要
     "dialogue",        # 对话历史 (user / assistant 文本)
     "tool_results",    # 工具调用结果历史
-    "workflow_step",   # 工作流步骤输入 + 跨步 artifacts
     "current_input",   # 本轮用户消息
 )
 
@@ -269,7 +212,7 @@ class ContextUsage:
 
 
 # ---------------------------------------------------------------------------
-# 7. ContextSnapshot: 统一出参.
+# 6. ContextSnapshot: 统一出参.
 # ---------------------------------------------------------------------------
 @dataclass
 class ContextSnapshot:
@@ -328,7 +271,7 @@ class ContextSnapshot:
 
 
 # ---------------------------------------------------------------------------
-# 8. CompactionResult: 压缩操作的可观测输出.
+# 7. CompactionResult: 压缩操作的可观测输出.
 #    trigger_source 仅供 log / SSE, 不进 SummaryStore.
 # ---------------------------------------------------------------------------
 @dataclass

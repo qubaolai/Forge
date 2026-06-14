@@ -1,17 +1,16 @@
 """Agent 生命周期协议.
 
-ReActAgent 的所有扩展点统一通过 AgentLifecycle 暴露; mode (chat / plan_exec
-/ workflow) 差异完全外置为 lifecycle 组合, 不在 ReActAgent 内分支.
+ReActAgent 的所有扩展点统一通过 AgentLifecycle 暴露; 行为差异完全外置为
+lifecycle 组合, 不在 ReActAgent 内分支.
 
 调用时机 (按 stream() 循环顺序):
     on_start                     -> run 开始, 整个流只调一次
     每个 step 内:
-        resolve_tools            -> 拿本步给 LLM 看的 tool_schemas
-                                    (动态工具集核心: Plan/Exec 切换靠它)
+        resolve_tools            -> 拿本步给 LLM 看的 tool_schemas (动态工具集)
         before_step              -> 注入引导 / 决定强制纯文本
         [LLM 调用]
         for tc in tool_calls:
-            before_tool_call     -> 拦截工具调用 (Plan Mode 双保险, 未来 HITL)
+            before_tool_call     -> 拦截工具调用
             [tool 执行 或 用 veto 替代 message]
             on_tool_result       -> 大产物落 artifact 回灌占位 等
         after_step               -> 持久化 checkpoint / 自定义 SSE step 事件
@@ -46,8 +45,6 @@ logger = logging.getLogger(__name__)
 class RunContext:
     """整个 run 的静态上下文 (传给 on_start 用)."""
 
-    run_id: str | None = None  # 关联的持久化 run 标识, chat 模式可为 None
-    mode: str = "chat"  # agent_mode (chat / plan_exec / workflow / ...)
     user_id: str | None = None
     session_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)

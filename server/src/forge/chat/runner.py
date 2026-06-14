@@ -6,9 +6,6 @@ ReActRunner 的职责:
     1. 用 GuardLifecycleAdapter 把 LoopGuard 链接入 AgentLifecycle 协议
     2. 跑 ReActAgent.stream, 透传事件
     3. 累计 RunResult 给 Finalizer 用
-
-未来加入 plan_exec / workflow mode 时, 通过 ReActRunner.from_profile 装配
-不同的 lifecycle 数组即可扩展行为, 无需新 Runner 类.
 """
 
 from __future__ import annotations
@@ -19,7 +16,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable, Iterable
 
 from forge.agents.base import AgentEvent
-from forge.agents.lifecycle import AgentLifecycle, MultiLifecycle, RunContext
+from forge.agents.lifecycle import MultiLifecycle, RunContext
 from forge.agents.react.agent import ReActAgent
 from forge.chat.guards import (
     GuardLifecycleAdapter,
@@ -103,7 +100,6 @@ class ReActRunner(AgentRunner):
         *,
         max_steps: int = DEFAULT_MAX_STEPS,
         guard_factories: list[GuardFactory] | None = None,
-        extra_lifecycles: list[AgentLifecycle] | None = None,
         role: str = "local",
         tools: Iterable[Tool] | None = None,
     ) -> None:
@@ -111,7 +107,6 @@ class ReActRunner(AgentRunner):
         self._system_prompt = system_prompt
         self._max_steps = max_steps
         self._guard_factories = guard_factories
-        self._extra_lifecycles = list(extra_lifecycles or [])
         self._role = role
         self._tools = list(tools) if tools is not None else None
         self.result: RunResult = RunResult()
@@ -123,18 +118,13 @@ class ReActRunner(AgentRunner):
         abort_event: asyncio.Event,
     ) -> AsyncIterator[AgentEvent]:
         """跑 ReAct stream, 透传事件, 同时累计 RunResult."""
-        # 装配 lifecycle: GuardLifecycleAdapter 一定有; extra_lifecycles 由
-        # 上层按需追加 (当前 chat 路径无额外 lifecycle).
+        # 装配 lifecycle: GuardLifecycleAdapter 接入 LoopGuard 链.
         guards: list[LoopGuard] = [
             factory(self._max_steps) for factory in self._build_guard_factories()
         ]
-        lifecycles: list[AgentLifecycle] = [GuardLifecycleAdapter(guards)]
-        lifecycles.extend(self._extra_lifecycles)
-        lifecycle = MultiLifecycle(lifecycles)
+        lifecycle = MultiLifecycle([GuardLifecycleAdapter(guards)])
 
         run_ctx = RunContext(
-            run_id=None,  # chat 路径无 run 概念, 此处保持 None
-            mode=ctx.agent_mode,
             user_id=ctx.user_id,
             session_id=ctx.session_id,
             metadata={"trace_id": ctx.trace_id},
@@ -194,7 +184,7 @@ class ReActRunner(AgentRunner):
         return _default_guard_factories()
 
     # ------------------------------------------------------------------
-    # Profile 驱动的工厂方法 (mode 路由的唯一入口)
+    # Profile 驱动的工厂方法
     # ------------------------------------------------------------------
     @classmethod
     def from_profile(
@@ -203,15 +193,12 @@ class ReActRunner(AgentRunner):
         profile: AgentProfile,
         *,
         system_prompt: str,
-        extra_lifecycles: list[AgentLifecycle] | None = None,
         role: str = "local",
     ) -> ReActRunner:
         """按 Profile 装配 Runner.
 
         - tools_allowed → 从 ToolRegistry 过滤实际 Tool 实例
         - max_steps → 兜底上限
-        - extra_lifecycles → 调用方按需追加自定义 lifecycle
-          (阶段 5/6/7 会在 Runner 外部装配, 这里不内置)
         """
         tools = tuple(
             t for t in ToolRegistry.get_all() if t.name in set(profile.tools_allowed)
@@ -226,7 +213,6 @@ class ReActRunner(AgentRunner):
             llm_chain,
             system_prompt=system_prompt,
             max_steps=profile.max_steps,
-            extra_lifecycles=extra_lifecycles,
             role=role,
             tools=tools,
         )

@@ -168,5 +168,4 @@ agent_profiles:
         - time_tool
         - read_message
       max_steps: 999
-      persistence: chat_db
       model_profile: smart

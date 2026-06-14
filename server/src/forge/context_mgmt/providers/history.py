@@ -39,7 +39,7 @@ class HistoryProvider(ContentProvider):
     """历史消息提供者.
 
     Note:
-        MessageStore 持有 DB session, 必须按请求 new (在 build_context_manager 工厂中传入).
+        MessageStore 持有 DB session, 必须按请求 new (在 build_context_builder 工厂中传入).
     """
 
     def __init__(
@@ -83,7 +83,7 @@ class HistoryProvider(ContentProvider):
 
         # 应用 HistoryFilter
         filtered = await self._filter.filter(
-            history_messages, request.current_user_message, request.mode
+            history_messages, request.current_user_message
         )
 
         # 单条 cap 闸: 把超长消息引用化折叠 (filter 之后、构造 Message 之前)。

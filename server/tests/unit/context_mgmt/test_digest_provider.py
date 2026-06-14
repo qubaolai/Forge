@@ -8,11 +8,11 @@ import pytest
 
 from forge.context_mgmt.digest.policy import DigestPolicy
 from forge.context_mgmt.digest.types import DigestRecord, Segment
-from forge.context_mgmt.filters.null import NullFilter
+from forge.context_mgmt.filters.hybrid import HybridFilter
 from forge.context_mgmt.protocols import TokenMeter
 from forge.context_mgmt.providers.history import HistoryProvider
-from forge.context_mgmt.tool_policy.verbatim import VerbatimPolicy
-from forge.context_mgmt.types import ContextMode, ContextRequest
+from forge.context_mgmt.tool_policy.truncating import TruncatingPolicy
+from forge.context_mgmt.types import ContextRequest
 from forge.core.types.message import Message
 
 
@@ -72,7 +72,6 @@ def _request() -> ContextRequest:
         user_id="u1",
         session_id="s1",
         current_user_message="继续",
-        mode=ContextMode.CHAT,
         history_limit=30,
     )
 
@@ -80,8 +79,8 @@ def _request() -> ContextRequest:
 def _provider(rows, digest_store) -> HistoryProvider:
     return HistoryProvider(
         cast(Any, _FakeMessageStore(rows)),
-        NullFilter(),
-        VerbatimPolicy(),
+        HybridFilter(),
+        TruncatingPolicy(),
         _CharMeter(),
         digest_policy=DigestPolicy(),
         digest_cap=50,
@@ -127,8 +126,8 @@ async def test_carried_token_count_avoids_recount():
     meter = _CountingMeter()
     provider = HistoryProvider(
         _FakeMessageStore(rows),
-        NullFilter(),
-        VerbatimPolicy(),
+        HybridFilter(),
+        TruncatingPolicy(),
         meter,
         digest_policy=DigestPolicy(),
         digest_cap=50,

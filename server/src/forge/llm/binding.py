@@ -11,7 +11,7 @@
     所有 Pre/Post middleware (限流 / 预算 / 缓存 / 审计) 自动生效.
 
 调用边界:
-    业务层 (chat orchestrator / adaptive task_runner) 构造 GatewayBinding,
+    业务层 (chat orchestrator) 构造 GatewayBinding,
     然后 ReActAgent(llm=GatewayLLMAdapter(binding)). Agent 层不再感知 gateway.
 
     对于一次性 utility 调用 (摘要 / 标题生成), 直接用

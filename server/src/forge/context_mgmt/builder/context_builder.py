@@ -42,7 +42,6 @@ class DefaultContextBuilder:
         with span(
             "context.build",
             caller=request.caller,
-            mode=request.mode.value,
             session_id=request.session_id,
             user_id=request.user_id,
             context_window=request.context_window,
@@ -74,9 +73,9 @@ class DefaultContextBuilder:
             s.set("degraded", list(snapshot.degraded))
 
             logger.info(
-                "上下文构建完成 session=%s mode=%s messages=%d tokens=%d/%d "
+                "上下文构建完成 session=%s messages=%d tokens=%d/%d "
                 "history=%d (filtered=%d dropped=%d) summary=%s facts=%d degraded=%s",
-                request.session_id, request.mode.value,
+                request.session_id,
                 len(snapshot.messages),
                 snapshot.usage.total_input_tokens, snapshot.budget.context_window,
                 snapshot.history_messages_used,

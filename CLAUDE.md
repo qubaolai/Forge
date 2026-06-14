@@ -48,7 +48,7 @@ Forge/
 ### 3.1 分层结构
 
 - `api/`：FastAPI 路由、依赖注入、中间件、请求/响应 schema、`lifespan` 装配。
-- `agents/`：**Agent 内核与扩展机制**——`ReActAgent`、`AgentLifecycle` 协议与组合器、agent_profiles、角色（子 agent）。
+- `agents/`：**Agent 内核与扩展机制**——`ReActAgent`、`AgentLifecycle` 协议与组合器、agent_profiles。
 - `chat/`：**Chat 回合编排**——准备上下文、上下文压缩、执行 Runner、收尾入库、SSE 事件溯源（`ChatTurnRun` / `Broadcaster` / `ChatEventStore`）、LoopGuard 守护。
 - `llm/`：`LLMGateway`、路由/调度链、Provider 注册与客户端池、中间件流水线。
 - `tools/`：工具基类、注册中心、工具执行与 guardrail。
@@ -105,7 +105,7 @@ Logging/Tracing → PromptRegistry → ToolRegistry + AGENT_ROLES
 
 典型链路：
 
-- **Chat**：`/chat/completions` → `TurnOrchestrator.start_turn` → 建 `ChatTurnRun` + 背景 task（`_execute_new_turn`）→ `ContextAssembler` 组装/压缩 → `ReActRunner.from_profile` 跑 `ReActAgent.stream` → `TurnFinalizer` 落 DB。SSE 由路由订阅 `run.subscribe()`。
+- **Chat**：`/chat/completions` → `TurnOrchestrator.start_turn` → 建 `ChatTurnRun` + 背景 task（`_execute_new_turn`）→ `ContextManager` 组装 + 按需压缩 → `ReActRunner.from_profile` 跑 `ReActAgent.stream` → `TurnFinalizer` 落 DB。SSE 由路由订阅 `run.subscribe()`。
 - **对外 LLM 直连**：`/llm/chat/completions` → `ApiKeyUser` 鉴权 → 构造 `LLMRequest`（model 三形态：空=默认链 / `fast|smart|strong`=档位链 / `provider:model`=显式 pin）→ `LLMGateway.complete*/stream*` → OpenAI 风格 JSON / SSE chunk。
 - **KB 上传**：`/kb/{id}/documents` → `KbService.upload_document` → `KbIngestService.ingest`（Saga：parsing→chunking→embedding→persist→indexed）。
 - **模型治理**：`/models` → `AdminModelService` → Provider/Model Repo → `ModelConfigCache` + EventBus。
@@ -174,26 +174,21 @@ RAG 由 `lifespan` 启动阶段动态装配，具备「软降级」能力：
 
 ### 3.10 上下文管理系统（Context）
 
-「双层上下文架构」：
-
-- **兼容入口层**：`forge.context`（chat 主链实际调用，`chat/assembler.py` 调 `forge.context.factory.build_context_builder()`）。
-- **新一代内核层**：`forge.context_mgmt`（已落地，并通过适配器承接）。
+chat 主链直接调用 `forge.context_mgmt`（`chat/orchestrator.py` 调 `context_mgmt.builder.factory.build_context_builder()`，旧 `forge.context` 兼容层已删除）。
 
 `context_mgmt/types.py` 统一值对象：`ContextRequest` / `WindowBudget` / `ContextSnapshot` / `ContextUsage` / `CompactionResult`。
 
 构建流水线（Fork-Join）：`BudgetPolicy.allocate` → 并行（`PromptRenderer.render` + `ContentGatherer.gather`）→ `MessageAssembler.assemble` → 输出 `ContextSnapshot`（带用量与降级信息）。`ContentGatherer` 用 `asyncio.gather(return_exceptions=True)`：summary/facts 失败进 `degraded`（软降级），history 失败硬抛。
 
-扩展点：`ContentProvider` / `HistoryFilter` / `ToolResultPolicy` / `BudgetPolicy` / `TokenMeter`。compat 适配器为零退化，chat 现状默认仍是 `RecentFilter + VerbatimPolicy` 语义。
+扩展点：`ContentProvider` / `HistoryFilter` / `ToolResultPolicy` / `BudgetPolicy` / `TokenMeter`。服务端仅 chat 一条路径，默认装配 `HybridFilter`（近期锚点 + 语义过滤）+ `TruncatingPolicy` + `DefaultBudgetPolicy`（已移除历史的 ContextMode 多模式分支）。
 
 ### 3.11 上下文压缩子系统（Compaction）
 
-chat 主链由 `chat/assembler.py` `ContextAssembler` 主动压缩（`orchestrator.py` 调用）：
+chat 主链由 `context_mgmt` 的 `ContextManager` + `CompactionController`（Trigger + Strategy 解耦）主动压缩，`TurnOrchestrator.build` 时编排：
 
-- 触发条件（`should_compact`）：`history_messages_dropped > 0` 或 `estimated_input_tokens / context_window > threshold`（默认 0.85）。
-- 触发后：调 `SummaryService.summarize_session()` → 重建 context → 发 SSE `compaction_started` / `compaction_done`。
+- 触发条件（`ThresholdTrigger.should_compact`）：`history_messages_dropped > 0` 或 `total_ratio > threshold`（默认 0.85）。
+- 触发后：`SummaryCompaction` 调 `SummaryService.summarize_session()` → `ContextManager` 重跑 builder 重建 context → 发 SSE `compaction_started` / `compaction_done`。
 - 失败语义：摘要失败不终止主流程，回退到压缩前上下文，写 `degraded=compaction_failed`。
-
-新链路 `context_mgmt` 的 `CompactionController`（Trigger + Strategy 解耦）已具备完整能力，但 chat 主流程当前仍直接调 `ContextAssembler`。
 
 ### 3.12 Memory 记忆系统
 
@@ -272,8 +267,8 @@ mode = lifecycle 组合，由编排层装配（这就是全部 mode 路由逻辑
 
 - 配置模型：`config/domains/agent_profiles.py` `AgentProfile`（pydantic，`extra="forbid"`）。
 - 实际配置：`config/sys_config.dev.yaml` `agent_profiles` 段（当前仅 chat）。
-- 加载校验：`agents/profiles.py` `load_profiles_at_startup`，启动期 5 项强校验（工具注册/角色存在/`spawn_subagent⇔sub_agents`/模板存在/model_profile 定义），任一不过拒绝启动。
-- 关键字段：`tools_allowed`/`sub_agents_allowed`/`max_steps`/`persistence`(chat_db/none)/`model_profile`(fast/smart/strong)。
+- 加载校验：`agents/profiles.py` `load_profiles_at_startup`，启动期 3 项强校验（工具注册/模板存在/model_profile 定义），任一不过拒绝启动。
+- 关键字段：`tools_allowed`/`max_steps`/`model_profile`(fast/smart/strong)。
 
 新增一个 mode 无需写 Python：YAML 加 profile + prompt 模板（+ 如需特殊行为再写一个 lifecycle 并在编排层装配）。
 
@@ -282,10 +277,6 @@ mode = lifecycle 组合，由编排层装配（这就是全部 mode 路由逻辑
 - 基类：`tools/base.py` `Tool(ABC)`，实现 `run`（CPU）或 `arun`（IO）之一；元数据 `parallelism_safe`/`dangerous`/`required_scope`/`allowed_roles`/`path_role_whitelist`。
 - 注册：`tools/registry.py` `@register_tool`，注册期预计算 schema 缓存。
 - 执行：`tools/executor.py` `ToolExecutor`，guardrail 流水线（access→permission→rate_limit→dangerous_op）+ workspace 路径策略。
-
-### 4.7 角色（子 agent）
-
-`agents/roles/factory.py` `AgentRole`，7 个内置角色（triage/developer/architect/reviewer/qa/ra/devops），声明 `allowed_tools`/`model_preference`/`can_write`/`write_path_prefixes`。动态扩展：`register_custom_agent_role`。子 agent 经 `spawn_subagent` 派发，受 profile `sub_agents_allowed` 白名单约束。
 
 ---
 
@@ -297,7 +288,7 @@ mode = lifecycle 组合，由编排层装配（这就是全部 mode 路由逻辑
 
 1. `TurnPreparer`：同步准备 session、用户消息、assistant 占位消息（message_id 是 SSE 协议头）。
 2. 建 `ChatTurnRun` + `supervisor.register` + `attach_task`（背景执行立即启动），路由立即返回 SSE 订阅流。
-3. 背景 task（`_execute_new_turn`）：发 `session_created/message_start` → `ContextAssembler` 组装 + 必要时压缩（`compaction_started/done`）→ `ReActRunner.from_profile` 跑 `ReActAgent.stream` 透传事件 → `TurnFinalizer` 落 DB + 发 `done/error/partial`。
+3. 背景 task（`_execute_new_turn`）：发 `session_created/message_start` → `ContextManager` 组装 + 必要时压缩（`compaction_started/done`）→ `ReActRunner.from_profile` 跑 `ReActAgent.stream` 透传事件 → `TurnFinalizer` 落 DB + 发 `done/error/partial`。
 
 特点：
 
@@ -329,8 +320,7 @@ mode = lifecycle 组合，由编排层装配（这就是全部 mode 路由逻辑
 
 ## 7. 运行时安全边界
 
-- **工具白名单**：每个 mode 由 profile `tools_allowed` 限定，启动期校验工具均已注册。
-- **角色约束**：子 agent 受 `AgentRole.can_write` / `write_path_prefixes` 与 profile `sub_agents_allowed` 双重约束；spawn 层再叠加 `SUBAGENT_DENY_TOOLS` 硬剥离（写类/二级派发）。
+- **工具白名单**：chat profile 的 `tools_allowed` 限定可见工具，启动期校验工具均已注册。
 - **工具 guardrail**：`ToolExecutor` 的 access→permission→rate_limit→dangerous_op 流水线 + workspace 路径策略；危险工具进 `audit.jsonl`。
 - **Chat 侧**：profile 限制为只读/低风险工具。
 - **对外 LLM 端点**：API Key 鉴权（吊销/过期/用户禁用检查）+ user 级配额/预算/入站限流。

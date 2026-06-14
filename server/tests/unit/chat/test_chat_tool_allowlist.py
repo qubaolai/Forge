@@ -17,7 +17,6 @@ from forge.config.domains.agent_profiles import (
     AgentProfile,
 )
 from forge.context_mgmt.types import (
-    ContextMode,
     ContextRequest,
     ContextSnapshot,
     ContextUsage,
@@ -45,7 +44,6 @@ def _install_chat_profile(allowed: list[str]) -> None:
     profiles_mod._profiles["chat"] = AgentProfile(
         system_prompt_template="profiles/chat",
         tools_allowed=allowed,
-        persistence="chat_db",
     )
     profiles_mod._loaded = True
 
@@ -95,7 +93,6 @@ async def test_chat_system_prompt_only_lists_chat_tools() -> None:
         user_id="u1",
         session_id="s1",
         current_user_message="hi",
-        mode=ContextMode.CHAT,
         system_prompt_vars={"user_name": "用户"},
     )
 
@@ -146,7 +143,6 @@ async def test_chat_build_once_uses_fresh_db_session_each_time() -> None:
         user_id="u1",
         session_id="s1",
         current_user_message="hi",
-        mode=ContextMode.CHAT,
     )
 
     with (

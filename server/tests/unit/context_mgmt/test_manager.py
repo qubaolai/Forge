@@ -9,18 +9,27 @@ import pytest
 
 from forge.context_mgmt.builder.factory import build_context_builder
 from forge.context_mgmt.compaction.controller import CompactionController
-from forge.context_mgmt.compaction.strategies.null import NullCompaction
 from forge.context_mgmt.compaction.trigger.explicit import ExplicitTrigger
 from forge.context_mgmt.compaction.trigger.threshold import ThresholdTrigger
 from forge.context_mgmt.manager import ContextManager
 from forge.context_mgmt.meter.token_meter import DefaultTokenMeter
 from forge.context_mgmt.types import (
     CompactionResult,
-    ContextMode,
     ContextRequest,
 )
 from forge.llm.token_counter import HeuristicCounter
 from forge.memory.null import NullMemoryStore
+
+
+class _NoopStrategy:
+    """不压缩的占位策略 (用于不触发压缩的用例)."""
+
+    @property
+    def name(self) -> str:
+        return "noop"
+
+    async def compact(self, session_id, snapshot):
+        return CompactionResult(success=False, strategy_used=self.name)
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +86,6 @@ def _make_request(message="hi", context_window=4096) -> ContextRequest:
         user_id="u1",
         session_id="s1",
         current_user_message=message,
-        mode=ContextMode.CHAT,
         system_prompt_override="你是助手",
         context_window=context_window,
     )
@@ -86,13 +94,12 @@ def _make_request(message="hi", context_window=4096) -> ContextRequest:
 def _make_manager(rows, strategy=None, trigger=None):
     meter = DefaultTokenMeter(HeuristicCounter())
     builder = build_context_builder(
-        mode=ContextMode.CHAT,
         message_store=FakeRepo(rows),
         memory_store=NullMemoryStore(),
         token_meter=meter,
     )
     controller = CompactionController(
-        strategy or NullCompaction(),
+        strategy or _NoopStrategy(),
         trigger or ThresholdTrigger(0.85),
     )
 

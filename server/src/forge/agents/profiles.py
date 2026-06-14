@@ -4,7 +4,6 @@
     - 启动期 (lifespan startup) 调 load_profiles_at_startup() 校验整个配置;
       任一项不通过 -> raise RuntimeError, 阻止应用启动
     - 运行期通过 get_agent_profile(mode) 取冻结后的 Profile 对象
-    - 模式列表通过 list_modes() 暴露给 API (如 GET /v1/agent_modes)
 """
 
 from __future__ import annotations
@@ -95,13 +94,6 @@ def get_agent_profile(mode: str) -> AgentProfile:
     return _profiles[mode]
 
 
-def list_modes() -> list[str]:
-    """列出已加载的所有 mode (按字典序)."""
-    if not _loaded:
-        return []
-    return sorted(_profiles.keys())
-
-
 def reset_profiles() -> None:
     """测试隔离用. 清空已加载的 profiles."""
     global _loaded
@@ -112,7 +104,6 @@ def reset_profiles() -> None:
 
 __all__ = [
     "get_agent_profile",
-    "list_modes",
     "load_profiles_at_startup",
     "reset_profiles",
 ]

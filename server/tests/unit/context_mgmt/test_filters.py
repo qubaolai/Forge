@@ -7,8 +7,7 @@ from typing import Literal
 import pytest
 
 from forge.context_mgmt.filters.hybrid import EmbeddingScorer, HybridFilter
-from forge.context_mgmt.filters.null import NullFilter
-from forge.context_mgmt.types import ContextMode, HistoryMessage
+from forge.context_mgmt.types import HistoryMessage
 from forge.core.types.message import Message
 
 
@@ -24,16 +23,6 @@ def _msg(
         id=message_id or f"m{turn_index}",
         turn_index=turn_index,
     )
-
-
-# ---------------------------------------------------------------------------
-# NullFilter
-# ---------------------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_null_filter_keeps_all():
-    msgs = [_msg(i) for i in range(5)]
-    out = await NullFilter().filter(msgs, "any", ContextMode.CHAT)
-    assert out == msgs
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +80,7 @@ async def test_embedding_scorer_drops_irrelevant_via_hybrid():
         min_score=0.5,
         anchor_turns=3,
     )
-    out = await hf.filter(msgs, "q", ContextMode.CHAT)
+    out = await hf.filter(msgs, "q")
     # m0 相关保留 + m3,m4,m5 锚点; m1/m2 正交剔除
     assert [m.turn_index for m in out] == [0, 3, 4, 5]
 
@@ -104,7 +93,7 @@ async def test_hybrid_keeps_all_when_below_anchor():
     """轮次总数 ≤ anchor_turns -> 全部保留."""
     msgs = [_msg(i) for i in range(3)]
     hf = HybridFilter(anchor_turns=3)
-    out = await hf.filter(msgs, "q", ContextMode.CHAT)
+    out = await hf.filter(msgs, "q")
     assert len(out) == 3
 
 
@@ -112,7 +101,7 @@ async def test_hybrid_keeps_all_when_below_anchor():
 async def test_hybrid_without_scorer_keeps_all_history():
     """未启用语义召回时, HybridFilter 不改变历史."""
     msgs = [_msg(i) for i in range(10)]
-    out = await HybridFilter(anchor_turns=3).filter(msgs, "q", ContextMode.CHAT)
+    out = await HybridFilter(anchor_turns=3).filter(msgs, "q")
     assert out == msgs
 
 
@@ -126,8 +115,7 @@ async def test_hybrid_scorer_failure_keeps_all_history():
 
     msgs = [_msg(i) for i in range(10)]
     out = await HybridFilter(scorer=_BrokenScorer()).filter(
-        msgs, "q", ContextMode.CHAT
-    )
+        msgs, "q"    )
     assert out == msgs
 
 
@@ -145,7 +133,7 @@ async def test_hybrid_keeps_anchor_turns_even_if_irrelevant():
         min_score=0.5,
         anchor_turns=3,
     )
-    out = await hf.filter(msgs, "q", ContextMode.CHAT)
+    out = await hf.filter(msgs, "q")
     # 早期 7 轮全部剔除, 后 3 轮 (turn_index 7,8,9) 保留
     assert [m.turn_index for m in out] == [7, 8, 9]
 
@@ -165,7 +153,7 @@ async def test_hybrid_keeps_relevant_early_turns():
         min_score=0.5,
         anchor_turns=3,
     )
-    out = await hf.filter(msgs, "q", ContextMode.CHAT)
+    out = await hf.filter(msgs, "q")
     # turn_index 2 (相关) + 7,8,9 (锚点)
     assert [m.turn_index for m in out] == [2, 7, 8, 9]
 
@@ -191,7 +179,7 @@ async def test_hybrid_keeps_whole_turn_when_question_is_relevant():
         anchor_turns=3,
     )
 
-    out = await hf.filter(early_turn + anchors, "q", ContextMode.CHAT)
+    out = await hf.filter(early_turn + anchors, "q")
 
     assert [m.id for m in out] == ["u0", "a0", "m1", "m2", "m3"]
 
@@ -215,6 +203,6 @@ async def test_hybrid_drops_whole_turn_when_all_messages_are_irrelevant():
         anchor_turns=3,
     )
 
-    out = await hf.filter(early_turn + anchors, "q", ContextMode.CHAT)
+    out = await hf.filter(early_turn + anchors, "q")
 
     assert [m.id for m in out] == ["m1", "m2", "m3"]

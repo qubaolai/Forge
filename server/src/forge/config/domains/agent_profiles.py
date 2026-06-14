@@ -4,12 +4,10 @@
 校验工具 / 角色 / 模板存在性 - 任一失败直接拒绝启动.
 
 字段语义:
-    description:           人类可读说明 (列模式时展示用)
+    description:           人类可读说明 (展示用)
     system_prompt_template: prompts/{name}.j2 路径 (不含 .j2)
-    tools_allowed:          该模式可见的工具白名单
+    tools_allowed:          可见的工具白名单
     max_steps:              ReAct 兜底上限
-    guards:                 启用的 LoopGuard 名 (默认全开)
-    persistence:            chat_db (chat 走 DB) / none
     model_profile:          fast / smart / strong, 解析到 model_profiles 字典
 """
 
@@ -39,8 +37,6 @@ class AgentProfile(BaseModel):
     system_prompt_template: str
     tools_allowed: list[str] = Field(default_factory=list)
     max_steps: int = Field(default=50, ge=1)
-    guards: list[str] = Field(default_factory=list)
-    persistence: Literal["chat_db", "none"] = "chat_db"
     model_profile: Literal["fast", "smart", "strong"] = "smart"
 
 

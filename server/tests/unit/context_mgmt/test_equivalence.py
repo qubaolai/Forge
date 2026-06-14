@@ -20,7 +20,7 @@ from datetime import datetime
 import pytest
 
 from forge.context_mgmt.builder.factory import build_context_builder
-from forge.context_mgmt.types import ContextMode, ContextRequest
+from forge.context_mgmt.types import ContextRequest
 from forge.llm.token_counter import HeuristicCounter
 from forge.memory.base import Fact, FactRecallRequest, MemoryStoreError, Summary
 from forge.memory.null import NullMemoryStore
@@ -96,7 +96,6 @@ def _make_meter(counter: HeuristicCounter):
 def _new_builder(rows_or_repo, memory_store, counter):
     repo = rows_or_repo if isinstance(rows_or_repo, FakeRepo) else FakeRepo(list(rows_or_repo))
     return build_context_builder(
-        mode=ContextMode.CHAT,
         message_store=repo,
         memory_store=memory_store,
         token_meter=_make_meter(counter),
@@ -116,7 +115,6 @@ def _request(
         user_id="u1",
         session_id="s1",
         current_user_message=user_message,
-        mode=ContextMode.CHAT,
         system_prompt_override="你是助手",
         context_window=context_window,
         history_limit=history_limit,
