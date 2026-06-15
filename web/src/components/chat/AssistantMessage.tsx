@@ -4,18 +4,21 @@ import {
   Brain, ChevronDown, ChevronRight,
   Loader2, CheckCircle2, XCircle, Wrench,
 } from 'lucide-react';
-import { ChatMessage, Citation, ToolCall } from '@/types';
+import { ChatMessage, ChatFileMeta, Citation, ToolCall } from '@/types';
 import { cn } from '@/lib/utils';
+import { filesApi } from '@/api';
 import { MarkdownContent } from './MarkdownContent';
+import { FileCard } from './FileCard';
 
 interface Props {
   message: ChatMessage;
   onRegenerate?: () => void;
   onResume?: () => void;
   onCitationClick?: (citation: Citation) => void;
+  onFilePreview?: (file: ChatFileMeta) => void;
 }
 
-export function AssistantMessage({ message, onRegenerate, onResume, onCitationClick }: Props) {
+export function AssistantMessage({ message, onRegenerate, onResume, onCitationClick, onFilePreview }: Props) {
   const [copied, setCopied] = useState(false);
 
   async function handleCopy() {
@@ -61,6 +64,22 @@ export function AssistantMessage({ message, onRegenerate, onResume, onCitationCl
             )}
           </div>
         ) : null}
+
+        {/* 生成的文件卡片 (write_file 产出) */}
+        {message.files && message.files.some((f) => f.source === 'generated') && (
+          <div className="flex flex-col gap-1.5">
+            {message.files
+              .filter((f) => f.source === 'generated')
+              .map((f) => (
+                <FileCard
+                  key={f.id}
+                  file={f}
+                  onPreview={onFilePreview}
+                  onDownload={(file) => filesApi.download(file.id, file.name)}
+                />
+              ))}
+          </div>
+        )}
 
         {/* 错误状态 */}
         {isError && (

@@ -37,9 +37,9 @@ class ContentSlice:
 
 
 def parse_ref(ref: str) -> tuple[str, str]:
-    """解析统一引用. 返回 (kind, id); kind ∈ {"msg"}。
+    """解析统一引用. 返回 (kind, id); kind ∈ {"msg", "file"}。
 
-    兼容裸 "[ref:msg:xxx]" 包裹形式与 "msg:xxx" 纯形式。
+    兼容裸 "[ref:msg:xxx]" 包裹形式与 "msg:xxx" / "file:xxx" 纯形式。
     无法解析时返回 ("", "")。
     """
     s = (ref or "").strip()
@@ -50,7 +50,7 @@ def parse_ref(ref: str) -> tuple[str, str]:
     kind, _, ident = s.partition(":")
     kind = kind.strip()
     ident = ident.strip()
-    if kind == "msg" and ident:
+    if kind in ("msg", "file") and ident:
         return kind, ident
     return "", ""
 

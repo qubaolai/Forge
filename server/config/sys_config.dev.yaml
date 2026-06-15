@@ -161,11 +161,13 @@ agent_profiles:
 
   profiles:
     chat:
-      description: "Web 端对话模式: 只读工具, 不可派子任务"
+      description: "Web 端对话模式: 含会话沙盒读写工具 (read_file/write_file), 不可派子任务"
       system_prompt_template: profiles/chat
       tools_allowed:
         - knowledge_search
         - time_tool
         - read_message
+        - read_file
+        - write_file
       max_steps: 999
       model_profile: smart

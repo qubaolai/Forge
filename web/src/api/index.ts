@@ -1,6 +1,7 @@
 import { apiClient } from './client';
+import { useAuthStore } from '@/store/auth';
 import {
-  AuthTokens, ChatMessage, ChatSession, LoginPayload, LoginResponse,
+  AuthTokens, ChatFilePreview, ChatMessage, ChatSession, LoginPayload, LoginResponse,
   GroupedModelsResponse, ModelChain, ModelChainEntry, ModelChainScope, ModelType, ModelUpsert,
   PaginatedData, PaginationParams, ProviderAdmin, ProviderKey, ProviderModel,
   RagIndexJob, RagIndexStatus,
@@ -110,4 +111,45 @@ export const providerKeysApi = {
 export const systemApi = {
   models: (params?: { provider?: string; model_type?: ModelType }) =>
     apiClient.get<GroupedModelsResponse>('/models', { params }),
+};
+
+// ---- 会话文件：附件上传 / 预览 / 下载 ----
+export const filesApi = {
+  /** 上传会话附件 (超阈值大段输入 / 文件), 返回文件元数据 */
+  uploadAttachment: (sessionId: string, file: File) => {
+    const form = new FormData();
+    form.append('session_id', sessionId);
+    form.append('file', file);
+    return apiClient.post<{ id: string; name: string; size_bytes: number; mime_type?: string | null }>(
+      '/chat/attachments',
+      form,
+    );
+  },
+  /** 预览文件文本内容 (可按行区间切片) */
+  previewContent: (fileId: string, range?: { start: number; end: number }) =>
+    apiClient.get<ChatFilePreview>(`/files/${fileId}/content`, {
+      params: range ? { start: range.start, end: range.end } : undefined,
+    }),
+  /** 带鉴权下载: fetch blob + 触发浏览器保存 */
+  download: async (fileId: string, filename: string) => {
+    const token = useAuthStore.getState().accessToken;
+    const base = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+    const resp = await fetch(`${base}/files/${fileId}/download`, {
+      headers: {
+        'X-Client-Type': 'web',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      credentials: 'include',
+    });
+    if (!resp.ok) throw new Error('下载失败');
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 };

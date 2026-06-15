@@ -3,6 +3,7 @@
 from forge.infrastructure.database.orm.api_key_orm import UserApiKey
 from forge.infrastructure.database.orm.auth import RefreshTokenBlacklist
 from forge.infrastructure.database.orm.base import Base
+from forge.infrastructure.database.orm.chat_file_orm import ChatFileOrm
 from forge.infrastructure.database.orm.chat_message_orm import ChatMessageOrm
 from forge.infrastructure.database.orm.chat_session_orm import ChatSessionOrm
 from forge.infrastructure.database.orm.fact_extraction_watermark_orm import (
@@ -34,6 +35,7 @@ from forge.infrastructure.database.orm.user_orm import UserOrm
 
 __all__ = [
     "Base",
+    "ChatFileOrm",
     "ChatMessageOrm",
     "ChatSessionOrm",
     "FactExtractionWatermarkOrm",

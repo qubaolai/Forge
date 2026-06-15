@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 class SessionService:
     def __init__(self, db: AsyncSession):
+        self.db = db
         self.session_repo = ChatSessionRepository(db)
         self.message_repo = ChatMessageRepository(db)
 
@@ -73,6 +74,7 @@ class SessionService:
     async def delete(self, session: SessionView) -> None:
         await self.session_repo.delete(session)
         await self._delete_summary(session.id)
+        await self._delete_files(session)
 
     @staticmethod
     async def _delete_summary(session_id: str) -> None:
@@ -88,6 +90,44 @@ class SessionService:
             await SummaryStore(get_session_factory()).delete(session_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("会话摘要级联清理失败 session=%s: %s", session_id, exc)
+
+    @staticmethod
+    async def _delete_files(session: SessionView) -> None:
+        """级联清理会话文件 (元数据 + 物理沙盒目录), best-effort: 失败不阻断删除主流程。"""
+        try:
+            from forge.infrastructure.database.database import session_scope
+            from forge.infrastructure.database.repositories.chat_file_repo import (
+                ChatFileRepository,
+            )
+            from forge.infrastructure.storage.workspace_storage import WorkspaceStorage
+
+            async with session_scope() as db:
+                await ChatFileRepository(db).delete_by_session(session.id)
+            WorkspaceStorage().delete_session(session.user_id, session.id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("会话文件级联清理失败 session=%s: %s", session.id, exc)
+
+    async def files_by_message(self, session_id: str) -> dict[str, list[dict]]:
+        """按 message_id 分组会话文件 (供 MessageOut.files 历史回看填充)。"""
+        from forge.infrastructure.database.repositories.chat_file_repo import (
+            ChatFileRepository,
+        )
+
+        files = await ChatFileRepository(self.db).list_by_session(session_id)
+        grouped: dict[str, list[dict]] = {}
+        for f in files:
+            if not f.message_id:
+                continue
+            grouped.setdefault(f.message_id, []).append(
+                {
+                    "id": f.id,
+                    "name": f.filename,
+                    "source": f.source,
+                    "size_bytes": f.size_bytes,
+                    "mime_type": f.mime_type,
+                }
+            )
+        return grouped
 
     async def list_messages(
         self, session_id: str, page: int, page_size: int

@@ -393,6 +393,26 @@ export interface ContextUsage {
   layers: ContextLayer[];
 }
 
+/** 会话文件 (用户上传附件 source=upload / LLM write_file 生成 source=generated) */
+export interface ChatFileMeta {
+  id: string;
+  name: string;
+  source: 'upload' | 'generated';
+  size_bytes: number;
+  mime_type?: string | null;
+}
+
+/** 文件预览返回 (文本切片) */
+export interface ChatFilePreview {
+  id: string;
+  name: string;
+  text: string;
+  total_lines: number;
+  returned_range: number[];
+  truncated: boolean;
+  mime_type?: string | null;
+}
+
 export interface ChatMessage {
   id: string;
   session_id: string;
@@ -411,6 +431,8 @@ export interface ChatMessage {
   reasoning_duration_ms?: number;
   // 上下文占用快照 (持久化, 仅 assistant 消息有值)
   context_usage?: ContextUsage | null;
+  // 关联会话文件 (user=上传附件 / assistant=write_file 生成); 历史回看 + 流式 file_created 累积
+  files?: ChatFileMeta[];
 }
 
 export interface ChatSession {
@@ -567,6 +589,7 @@ export type SSEEvent =
   | { type: 'tool_call'; tool_call: ToolCall }
   | { type: 'tool_result'; tool_call_id: string; result: unknown; status: 'success' | 'error' }
   | { type: 'citations'; citations: Citation[] }
+  | { type: 'file_created'; id: string; name: string; source: 'generated' | 'upload'; size_bytes: number; mime_type?: string | null }
   | { type: 'compaction_started'; reason: string; estimated_tokens: number; context_window: number }
   | { type: 'compaction_done'; tokens_saved: number; estimated_tokens: number; rebuild_count: number; ok: boolean }
   | ({ type: 'context_usage' } & ContextUsage)

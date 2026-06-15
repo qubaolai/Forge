@@ -8,7 +8,7 @@
     is_alive=False 但 should_prune=False 是合法状态 -- 容忍 grace period,
     召回不返回但行还在 DB, 用户在设置页仍能看到/手动救回.
 
-Stage 2 装 NoForgetting (永远 alive, 永不 prune), 零行为. Stage 3+ 视需求
+默认装 NoForgetting (永远 alive, 永不 prune), 零行为. 后续视需求
 加 TTLForgetting / DecayForgetting / CapacityCapForgetting.
 """
 
@@ -35,7 +35,7 @@ class ForgettingPolicy(ABC):
 
 
 class NoForgetting(ForgettingPolicy):
-    """记忆永久保留, 召回永远可见. Stage 2 默认."""
+    """记忆永久保留, 召回永远可见. 默认."""
 
     def is_alive(self, fact: Fact, now: datetime) -> bool:
         return True

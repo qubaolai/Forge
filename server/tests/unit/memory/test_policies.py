@@ -17,9 +17,7 @@ from forge.memory.base import Fact
 from forge.memory.policies import (
     Insert,
     NoForgetting,
-    NoOpConflictResolver,
 )
-from forge.memory.scope import MemoryScope
 
 
 def _fact(content: str = "用户偏好 Python", **overrides) -> Fact:
@@ -31,30 +29,6 @@ def _fact(content: str = "用户偏好 Python", **overrides) -> Fact:
     }
     base.update(overrides)
     return Fact(**base)
-
-
-# ---------------------------------------------------------------------------
-# NoOpConflictResolver
-# ---------------------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_noop_resolver_returns_insert_with_no_existing() -> None:
-    resolver = NoOpConflictResolver()
-    new = _fact()
-    result = await resolver.resolve(MemoryScope.for_user("user_abc"), new, [])
-    assert isinstance(result, Insert)
-    assert result.content == new.content
-
-
-@pytest.mark.asyncio
-async def test_noop_resolver_ignores_similar_existing() -> None:
-    """即使语义上完全重复, NoOp 也不去重."""
-    resolver = NoOpConflictResolver()
-    new = _fact(content="用户偏好 Python")
-    existing = [_fact(id="fact_old", content="用户偏好 Python", score=0.99)]
-    result = await resolver.resolve(MemoryScope.for_user("user_abc"), new, existing)
-    assert isinstance(result, Insert)
-    assert result.content == "用户偏好 Python"
-
 
 # ---------------------------------------------------------------------------
 # NoForgetting

@@ -69,7 +69,8 @@ def test_resolve_chat_tools_returns_empty_when_profile_missing() -> None:
 @pytest.mark.asyncio
 async def test_chat_system_prompt_only_lists_chat_tools() -> None:
     _install_chat_profile(["knowledge_search"])
-    tools = [_FakeTool("knowledge_search"), _FakeTool("read_file"), _FakeTool("shell")]
+    # 探针工具名需避开 system prompt 模板里的静态文本 (read_file/write_file 已被代码产出指引提及)
+    tools = [_FakeTool("knowledge_search"), _FakeTool("secret_probe_tool"), _FakeTool("shell")]
 
     async def fake_build(request):
         return ContextSnapshot(
@@ -110,7 +111,7 @@ async def test_chat_system_prompt_only_lists_chat_tools() -> None:
 
     prompt = snapshot.rendered_system_prompt
     assert "knowledge_search" in prompt
-    assert "read_file" not in prompt
+    assert "secret_probe_tool" not in prompt
     assert "shell" not in prompt
 
 

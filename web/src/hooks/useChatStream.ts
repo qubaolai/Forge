@@ -164,6 +164,12 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
                 case 'citations':
                   next.citations = mergeCitations(prev.citations || [], e.citations);
                   break;
+                case 'file_created':
+                  next.files = [
+                    ...(prev.files || []),
+                    { id: e.id, name: e.name, source: e.source, size_bytes: e.size_bytes, mime_type: e.mime_type },
+                  ];
+                  break;
                 case 'done':
                   next.status = 'done';
                   next.usage = e.usage;
@@ -309,6 +315,12 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
               }
               case 'citations':
                 next.citations = mergeCitations(prev.citations || [], e.citations);
+                break;
+              case 'file_created':
+                next.files = [
+                  ...(prev.files || []),
+                  { id: e.id, name: e.name, source: e.source, size_bytes: e.size_bytes, mime_type: e.mime_type },
+                ];
                 break;
               case 'done':
                 next.status = 'done';

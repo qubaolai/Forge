@@ -8,7 +8,6 @@ from .conflict import (
     ConflictResolver,
     Insert,
     Merge,
-    NoOpConflictResolver,
     Replace,
     Resolution,
     Skip,
@@ -17,7 +16,6 @@ from .forgetting import ForgettingPolicy, NoForgetting
 
 __all__ = [
     "ConflictResolver",
-    "NoOpConflictResolver",
     "Resolution",
     "Insert",
     "Replace",

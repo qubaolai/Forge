@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowDown, Sparkles } from 'lucide-react';
-import { ChatMessage, Citation } from '@/types';
+import { ChatMessage, ChatFileMeta, Citation } from '@/types';
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 
@@ -9,6 +9,7 @@ interface Props {
   onCitationClick?: (citation: Citation) => void;
   onRegenerate?: (messageId: string) => void;
   onResume?: (messageId: string) => void;
+  onFilePreview?: (file: ChatFileMeta) => void;
 }
 
 /**
@@ -20,7 +21,7 @@ interface Props {
  *  - 用户滚回底部 → 哨兵进视口 → 状态自动恢复 true → 按钮自动隐藏
  *  - sessionId 切换由 ChatPage 通过 key 强制 remount, 内部状态自然重置
  */
-export function MessageList({ messages, onCitationClick, onRegenerate, onResume }: Props) {
+export function MessageList({ messages, onCitationClick, onRegenerate, onResume, onFilePreview }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const firstScrollDoneRef = useRef(false);
@@ -79,13 +80,14 @@ export function MessageList({ messages, onCitationClick, onRegenerate, onResume 
           {messages.map((m) => (
             <div key={m.id}>
               {m.role === 'user' ? (
-                <UserMessage message={m} />
+                <UserMessage message={m} onFilePreview={onFilePreview} />
               ) : (
                 <AssistantMessage
                   message={m}
                   onCitationClick={onCitationClick}
                   onRegenerate={onRegenerate ? () => onRegenerate(m.id) : undefined}
                   onResume={onResume ? () => onResume(m.id) : undefined}
+                  onFilePreview={onFilePreview}
                 />
               )}
             </div>

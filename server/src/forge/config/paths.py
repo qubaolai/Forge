@@ -31,6 +31,9 @@ __all__ = [
     "chat_run_dir",
     "chat_run_state_path",
     "chat_run_events_path",
+    # 会话沙盒 (workspace)
+    "workspace_dir",
+    "session_workspace_dir",
     # 任务 / 日志 / 审计
     "tasks_db_path",
     "cost_log_path",
@@ -115,6 +118,24 @@ def chat_run_state_path(message_id: str) -> Path:
 
 def chat_run_events_path(message_id: str) -> Path:
     return chat_run_dir(message_id) / "events.jsonl"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 会话沙盒 (workspace): 用户隔离 + 会话隔离的可写目录
+#   <workspace>/<user_id>/<session_id>/<relpath>
+#   承载: 用户上传的大段输入附件 + LLM write_file 工具产出的代码文件。
+#   保留策略: 与会话同生命周期, 会话删除时整目录级联清理 (见 SessionService.delete)。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def workspace_dir() -> Path:
+    """所有会话沙盒的根目录。"""
+    return _mkdir(app_data_dir() / "workspace")
+
+
+def session_workspace_dir(user_id: str, session_id: str) -> Path:
+    """某个用户某个会话的沙盒目录。启动时按需创建。"""
+    return _mkdir(workspace_dir() / user_id / session_id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

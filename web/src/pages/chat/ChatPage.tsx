@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { sessionsApi, systemApi } from '@/api';
-import { ChatMessage, Citation, ModelGroup } from '@/types';
+import { filesApi, sessionsApi, systemApi } from '@/api';
+import { ChatMessage, ChatFileMeta, Citation, ModelGroup } from '@/types';
 import { useChatStream } from '@/hooks/useChatStream';
 import { MessageList } from '@/components/chat/MessageList';
 import { ChatInput, ThinkingLevel } from '@/components/chat/ChatInput';
 import { CitationPanel } from '@/components/chat/CitationPanel';
+import { FilePreviewPanel } from '@/components/chat/FilePreviewPanel';
 import { ContextUsageRing } from '@/components/chat/ContextUsageRing';
 import { ChatWelcome } from '@/components/chat/ChatWelcome';
 import { PanelRight } from 'lucide-react';
@@ -22,6 +23,8 @@ export default function ChatPage() {
   const noSession = !sessionId; // /chat 根路由
 
   const skipResetRef = useRef(false);
+  // 新会话上传附件时先建会话, 把真实 id 暂存在此 (供 handleSend 复用, 避免依赖异步 state)
+  const ensuredSessionIdRef = useRef<string | null>(null);
 
   const { data: history, isLoading } = useQuery({
     queryKey: ['session-messages', sessionId],
@@ -38,6 +41,7 @@ export default function ChatPage() {
   const [pendingUser, setPendingUser] = useState<ChatMessage[]>([]);
   const [showPanel, setShowPanel] = useState(true);
   const [selectedCitation, setSelectedCitation] = useState<number | null>(null);
+  const [previewFile, setPreviewFile] = useState<ChatFileMeta | null>(null);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>('medium');
   const [thinkingEnabled, setThinkingEnabled] = useState(true);
   const [prefill, setPrefill] = useState('');
@@ -127,6 +131,8 @@ export default function ChatPage() {
     setSelectedCitation(null);
     setShowPanel(true);
     setPrefill('');
+    setPreviewFile(null);
+    ensuredSessionIdRef.current = null;
     reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
@@ -218,12 +224,15 @@ export default function ChatPage() {
     return opts;
   }
 
-  function handleSend(text: string) {
+  function handleSend(text: string, attachments?: { file_id: string; type: string }[]) {
     if (noSession) return;
+
+    // 优先用「上传附件时已确保的会话 id」, 否则按路由判断 (新会话传 null 让后端建)
+    const targetSid = ensuredSessionIdRef.current ?? (isNew ? null : sessionId!);
 
     const pendingMsg: ChatMessage = {
       id: 'tmp_user_' + Date.now(),
-      session_id: isNew ? '' : sessionId!,
+      session_id: targetSid ?? '',
       role: 'user',
       content: text,
       status: 'done',
@@ -232,11 +241,27 @@ export default function ChatPage() {
     setPendingUser((prev) => [...prev, pendingMsg]);
 
     const modelOptions = buildModelOptions();
-    if (isNew) {
-      send(null, text, undefined, modelOptions);
-    } else {
-      send(sessionId!, text, undefined, modelOptions);
+    send(targetSid, text, attachments, modelOptions);
+  }
+
+  /** 上传会话附件: 新会话先建会话拿真实 id (附件需归属会话沙盒) */
+  async function handleUploadAttachment(file: File): Promise<{ id: string; name: string }> {
+    let sid = ensuredSessionIdRef.current ?? (isNew || noSession ? null : sessionId ?? null);
+    if (!sid) {
+      const s = await sessionsApi.create();
+      sid = s.id;
+      ensuredSessionIdRef.current = sid;
+      skipResetRef.current = true; // 导航到真实会话时跳过 Effect 清场
+      qc.setQueryData(['session', sid], s);
+      qc.invalidateQueries({ queryKey: ['sessions'] });
+      navigate(`/chat/${sid}`, { replace: true });
     }
+    const res = await filesApi.uploadAttachment(sid, file);
+    return { id: res.id, name: res.name };
+  }
+
+  function handleFilePreview(file: ChatFileMeta) {
+    setPreviewFile(file);
   }
 
   function handleCitationClick(c: Citation) {
@@ -311,11 +336,13 @@ export default function ChatPage() {
             messages={messages}
             onCitationClick={handleCitationClick}
             onResume={handleResume}
+            onFilePreview={handleFilePreview}
           />
         )}
 
         <ChatInput
           onSend={handleSend}
+          onUploadAttachment={handleUploadAttachment}
           onAbort={abort}
           streaming={streaming}
           disabled={false}
@@ -335,13 +362,15 @@ export default function ChatPage() {
         />
       </main>
 
-      {!isNew && showPanel && currentCitations.length > 0 && (
+      {previewFile ? (
+        <FilePreviewPanel file={previewFile} onClose={() => setPreviewFile(null)} />
+      ) : !isNew && showPanel && currentCitations.length > 0 ? (
         <CitationPanel
           citations={currentCitations}
           highlightedIndex={selectedCitation}
           onClose={() => setShowPanel(false)}
         />
-      )}
+      ) : null}
     </div>
   );
 }

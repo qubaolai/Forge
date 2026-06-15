@@ -54,6 +54,7 @@ class TurnPreparer:
         message: str,
         trace_id: str,
         model_options: ModelOptionsIn | None = None,
+        attachments: list | None = None,
     ) -> TurnContext:
         """跑完所有 DB 准备工作, 返回 TurnContext.
 
@@ -107,12 +108,15 @@ class TurnPreparer:
                 # 用户消息 token 数落库算一次 (供上下文组装热路径读, 免重复 tiktoken)
                 from forge.context_mgmt.meter.token_meter import get_token_meter
 
+                # 附件占位: 大段输入已被前端转为会话文件, 这里只把 [file:<id>] 引用
+                # 拼到 user 消息尾部 (不内联全文), LLM 需要时用 read_file 按需读取。
+                user_content = _append_file_placeholders(message, attachments)
                 user_msg = await msg_repo.add(
                     session_id=session_id_actual,
                     role="user",
-                    content=message,
+                    content=user_content,
                     status="done",
-                    token_count=get_token_meter().count_text(message),
+                    token_count=get_token_meter().count_text(user_content),
                 )
                 asst_msg = await msg_repo.add(
                     session_id=session_id_actual,
@@ -120,6 +124,10 @@ class TurnPreparer:
                     content="",
                     status="streaming",
                     parent_id=user_msg.id,
+                )
+                # 绑定上传附件到该 user 消息 (校验归属), 供历史回看渲染附件卡片
+                await _bind_attachments(
+                    db, attachments, user_id, session_id_actual, user_msg.id
                 )
                 if new_title:
                     session_in_tx = await sess_repo.get_by_id(session_id_actual)
@@ -149,7 +157,7 @@ class TurnPreparer:
             session_id=session_id_actual,
             assistant_msg_id=assistant_msg_id,
             user_msg_id=user_msg_id,
-            current_user_message=message,
+            current_user_message=user_content,
             agent_mode=_DEFAULT_MODE,
             is_new_session=is_new_session,
             new_title=new_title,
@@ -172,6 +180,42 @@ class TurnPreparer:
             },
         )
         return ctx
+
+
+def _append_file_placeholders(message: str, attachments) -> str:
+    """把附件文件引用拼到 user 消息尾部, 让 LLM 知道可用 read_file 读取 (不内联全文)。"""
+    parts: list[str] = []
+    for a in attachments or []:
+        fid = getattr(a, "id", None) or getattr(a, "file_id", None)
+        if not fid:
+            continue
+        name = getattr(a, "name", None) or ""
+        parts.append(f"[file:{fid}{(' name=' + name) if name else ''}]")
+    if not parts:
+        return message
+    return f"{message}\n\n" + "\n".join(parts)
+
+
+async def _bind_attachments(
+    db, attachments, user_id: str, session_id: str, message_id: str
+) -> None:
+    """把上传附件绑定到产生它的 user 消息 (校验归属: owner + session 一致)。"""
+    fids = [
+        str(getattr(a, "id", None) or getattr(a, "file_id", None))
+        for a in (attachments or [])
+        if (getattr(a, "id", None) or getattr(a, "file_id", None))
+    ]
+    if not fids:
+        return
+    from forge.infrastructure.database.repositories.chat_file_repo import (
+        ChatFileRepository,
+    )
+
+    repo = ChatFileRepository(db)
+    for fid in fids:
+        meta = await repo.get_by_id(fid)
+        if meta and meta.owner_user_id == user_id and meta.session_id == session_id:
+            await repo.bind_message(fid, message_id)
 
 
 def _make_title(text: str, max_len: int = 25) -> str:

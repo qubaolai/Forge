@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from forge.api.schemas.file import FileMeta
+
 
 # ---- 会话 ----
 class SessionOut(BaseModel):
@@ -53,6 +55,8 @@ class MessageOut(BaseModel):
     reasoning_duration_ms: int | None = None  # 思考累计墙钟毫秒, 仅 assistant
     # 上下文占用快照 (分层), 仅 assistant 消息有值; 由 context_meta 派生, 供前端持久化展示
     context_usage: dict | None = None
+    # 该消息关联的会话文件 (user 消息=上传附件; assistant 消息=write_file 生成), 读时按 message_id join
+    files: list[FileMeta] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -84,7 +88,9 @@ class ChatCompletionIn(BaseModel):
     """聊天对话请求 — 纯 Web 对话模式。"""
 
     session_id: str | None = None
-    message: str = Field(min_length=1)
+    # 上限兜底: 超大输入应由前端转「会话附件」(POST /chat/attachments) 走 read_file 按需读取,
+    # 此处仅防绕过前端直接灌超大 body 撑爆上下文。
+    message: str = Field(min_length=1, max_length=100_000)
     attachments: list[ChatAttachment] = Field(default_factory=list)
     model_options: ModelOptionsIn
 

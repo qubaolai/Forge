@@ -7,7 +7,7 @@
     Store 用 isinstance / match 分发到具体 SQL 行为. 比 Enum + 多个可空字段
     干净, 且类型检查器能帮你穷尽分支.
 
-Stage 2 只装 NoOpConflictResolver (永远 Insert, 不去重). Stage 3+ 视需求加
+默认装 NoOpConflictResolver (永远 Insert, 不去重). 视需求加
 LatestWinsConflictResolver / LLMJudgeConflictResolver, 继承同一 ABC 即可,
 Store 调用方零改动.
 """
@@ -90,22 +90,7 @@ class ConflictResolver(ABC):
 
 
 # ---------------------------------------------------------------------------
-# NoOp 实现: Stage 2 默认
-# ---------------------------------------------------------------------------
-class NoOpConflictResolver(ConflictResolver):
-    """永远 Insert, 不去重. 让重复内容靠 DB 唯一约束兜底 (若有)."""
-
-    async def resolve(
-        self,
-        scope: MemoryScope,
-        new_fact: Fact,
-        similar_existing: list[Fact],
-    ) -> Resolution:
-        return Insert(content=new_fact.content)
-
-
-# ---------------------------------------------------------------------------
-# 阈值去重: Stage 3 (事实层) 默认
+# 阈值去重: 事实层 默认
 # ---------------------------------------------------------------------------
 class ThresholdDedupResolver(ConflictResolver):
     """相似度阈值去重: 已有事实里最高相似分 >= 阈值则 Skip, 否则 Insert.

@@ -2,7 +2,6 @@
 
 设计:
     - 镜像 SummaryStore 风格: 注入 async_sessionmaker, 每方法自开 session;
-      但写法用 select-then-write (跨方言, SQLite 集成测试可跑), 不用 MySQL 方言 upsert.
     - 所有 API 强制吃 MemoryScope, 在签名层阻止 "忘了按 user 过滤" 的越权 bug.
     - 向量召回: 按 user_id 拉全量 -> 只取 model 匹配当前 embedder 的行 ->
       暴力余弦 (int8 量化值直接算, 对称量化下 cosine 与 scale 无关) ->

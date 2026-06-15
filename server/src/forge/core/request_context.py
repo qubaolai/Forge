@@ -16,6 +16,9 @@ from typing import Literal, cast
 
 _TRACE_ID: ContextVar[str] = ContextVar("trace_id", default="")
 _USER_ID: ContextVar[str] = ContextVar("user_id", default="")
+# chat turn 内有效: 供 write_file / read_file 等工具定位会话沙盒 + 关联 chat_files。
+_SESSION_ID: ContextVar[str] = ContextVar("session_id", default="")
+_ASSISTANT_MESSAGE_ID: ContextVar[str] = ContextVar("assistant_message_id", default="")
 
 ClientType = Literal["cli", "web"]
 _CLIENT_TYPES: frozenset[str] = frozenset({"cli", "web"})
@@ -50,6 +53,24 @@ def user_id_scope(user_id: str) -> Iterator[None]:
         yield
     finally:
         _USER_ID.reset(token)
+
+
+# ---- session_id (chat turn 内有效, 工具据此定位会话沙盒) ----
+def current_session_id() -> str:
+    return _SESSION_ID.get()
+
+
+def set_session_id(session_id: str):
+    return _SESSION_ID.set(session_id or "")
+
+
+# ---- assistant_message_id (chat turn 内有效, write_file 据此关联 chat_files) ----
+def current_assistant_message_id() -> str:
+    return _ASSISTANT_MESSAGE_ID.get()
+
+
+def set_assistant_message_id(message_id: str):
+    return _ASSISTANT_MESSAGE_ID.set(message_id or "")
 
 
 # ---- client_type ----

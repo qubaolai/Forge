@@ -2,8 +2,7 @@
 
 为什么是值对象不是 IsolationStrategy:
     "要不要隔离" 永远只有一种答案 (要), 变化点只在 "隔离边界是什么".
-    当前 (且可预期的将来) 唯一隔离维度是 user —— server 端不做
-    workspace / 多租户, 若未来需要, 给本值对象添字段 + Store 查询加过滤即可,
+    当前 唯一隔离维度是 user, 若未来需要, 给本值对象添字段 + Store 查询加过滤即可,
     不存在 "换一个隔离策略实现" 这件事.
 
 所有 Store API (SummaryStore / FactStore) 强制吃 MemoryScope, 不再单独传

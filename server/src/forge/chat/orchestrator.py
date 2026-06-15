@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import replace
@@ -55,7 +56,12 @@ from forge.context_mgmt.types import (
     ContextSnapshot,
 )
 from forge.core.content_merge import ResumeStreamDedup
-from forge.core.request_context import set_trace_id, set_user_id
+from forge.core.request_context import (
+    set_assistant_message_id,
+    set_session_id,
+    set_trace_id,
+    set_user_id,
+)
 from forge.core.types.message import Message, ToolCall
 from forge.infrastructure.database.database import session_scope
 from forge.infrastructure.database.repositories.chat_message_repo import ChatMessageRepository
@@ -142,6 +148,7 @@ class TurnOrchestrator:
             message=body.message,
             trace_id=trace_id,
             model_options=body.model_options,
+            attachments=body.attachments,
         )
 
         # 2. 建 run + 注册
@@ -237,6 +244,11 @@ class TurnOrchestrator:
         """新对话的背景执行体. 返回终态字符串."""
         started_at = time.perf_counter()
 
+        # 注入会话上下文 (供 write_file / read_file 工具定位会话沙盒 + 关联 chat_files)
+        set_user_id(ctx.user_id)
+        set_session_id(ctx.session_id)
+        set_assistant_message_id(ctx.assistant_msg_id)
+
         # 1. lifecycle 事件 (session_created / session_renamed / message_start)
         for ev in _lifecycle_events(ctx):
             await run.emit(ev.to_dict())
@@ -297,8 +309,14 @@ class TurnOrchestrator:
             body.model_options.model_dump(),
             user_id=ctx.user_id,
         )
+        tool_names: dict[str, str] = {}
         async for event in runner.run(ctx, snapshot.messages, run.abort_event):
-            await run.emit(event.to_dict())
+            ed = event.to_dict()
+            await run.emit(ed)
+            # write_file 工具结果 → 后端主动下发 file_created (前端不解析工具内容)
+            file_ev = _file_created_event(ed, tool_names)
+            if file_ev is not None:
+                await run.emit(file_ev)
 
         # 4. finalize (写 DB)
         final_event = await self._finalizer.finalize(
@@ -324,6 +342,11 @@ class TurnOrchestrator:
     ) -> str:
         """续写的背景执行体."""
         started_at = time.perf_counter()
+
+        # 注入会话上下文 (供工具定位会话沙盒 + 关联 chat_files)
+        set_user_id(ctx.user_id)
+        set_session_id(ctx.session_id)
+        set_assistant_message_id(ctx.assistant_msg_id)
 
         await run.emit({
             "type": "message_resumed",
@@ -375,6 +398,7 @@ class TurnOrchestrator:
         # SSE delta 原样推前端会出现"前后割裂". 这里在 emit 之前剥掉重叠区,
         # 保证前端实时拼接与 finalizer 落库结果一致 (后者另走 strip_overlap).
         dedup = ResumeStreamDedup(prev_state.prev_content or "")
+        tool_names: dict[str, str] = {}
         async for event in runner.run(ctx, messages, run.abort_event):
             if event.type == "delta":
                 clean = dedup.feed(event.payload.get("content", ""))
@@ -383,7 +407,11 @@ class TurnOrchestrator:
                 clean_payload = {**event.payload, "content": clean}
                 await run.emit({"type": "delta", **clean_payload})
                 continue
-            await run.emit(event.to_dict())
+            ed = event.to_dict()
+            await run.emit(ed)
+            file_ev = _file_created_event(ed, tool_names)
+            if file_ev is not None:
+                await run.emit(file_ev)
 
         # flush: safety_buffer 里剩下的字符是确认非重叠的, 在结束时统一吐完.
         tail = dedup.flush()
@@ -438,6 +466,40 @@ class TurnOrchestrator:
 # ---------------------------------------------------------------------------
 # 模块级辅助
 # ---------------------------------------------------------------------------
+def _file_created_event(ed: dict, tool_names: dict[str, str]) -> dict | None:
+    """识别 write_file 工具结果, 构造 file_created 事件。
+
+    后端主动下发文件元数据 (前端只认 file_created, 不解析 tool_call/tool_result 内容)。
+    tool_names 在一次 turn 内累积 tool_call_id → tool_name 映射。
+    """
+    etype = ed.get("type")
+    if etype == "tool_call":
+        tc = ed.get("tool_call") or {}
+        tcid = tc.get("id")
+        if tcid:
+            tool_names[tcid] = tc.get("tool_name") or tc.get("tool_id") or ""
+        return None
+    if etype != "tool_result" or ed.get("status") != "success":
+        return None
+    if tool_names.get(ed.get("tool_call_id")) != "write_file":
+        return None
+    try:
+        data = json.loads(ed.get("result") or "")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict) or not data.get("ok") or not data.get("id"):
+        return None
+    name = data.get("path") or data.get("filename") or "file"
+    return {
+        "type": "file_created",
+        "id": str(data["id"]),
+        "name": name,
+        "source": "generated",
+        "size_bytes": data.get("size_bytes", 0),
+        "mime_type": data.get("mime_type"),
+    }
+
+
 def _lifecycle_events(ctx: TurnContext):
     """生成 session_created / session_renamed / message_start 事件."""
     if ctx.is_new_session:

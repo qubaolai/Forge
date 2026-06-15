@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState, KeyboardEvent } from 'react';
-import { Send, Square, Brain } from 'lucide-react';
+import { useEffect, useRef, useState, KeyboardEvent, ClipboardEvent, ChangeEvent } from 'react';
+import { Send, Square, Brain, Paperclip, X, Loader2 } from 'lucide-react';
 import type { ModelGroup } from '@/types';
 import { cn } from '@/lib/utils';
 
 export type ThinkingLevel = 'low' | 'medium' | 'high' | 'xhigh';
 
 interface Props {
-  onSend: (text: string) => void;
+  onSend: (text: string, attachments?: { file_id: string; type: string }[]) => void;
+  // 上传会话附件 (超阈值大段输入 / 文件选择), 返回文件元数据; 不传则不显示附件入口
+  onUploadAttachment?: (file: File) => Promise<{ id: string; name: string }>;
   onAbort?: () => void;
   disabled?: boolean;
   streaming?: boolean;
@@ -46,9 +48,47 @@ export function ChatInput({
   onModelChange,
   thinkingEnabled,
   onThinkingChange,
+  onUploadAttachment,
 }: Props) {
   const [value, setValue] = useState('');
+  const [attachments, setAttachments] = useState<{ id: string; name: string }[]>([]);
+  const [uploading, setUploading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // 粘贴文本超过该字符数时自动转为会话附件 (降上下文占用, 后端 read_file 按需读取)
+  const PASTE_THRESHOLD = 4000;
+
+  async function uploadFile(file: File) {
+    if (!onUploadAttachment) return;
+    setUploading(true);
+    try {
+      const res = await onUploadAttachment(file);
+      setAttachments((prev) => [...prev, { id: res.id, name: res.name }]);
+    } catch {
+      // 上传失败: 静默 (保留输入, 用户可重试)
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function handleFilePick(e: ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (files) Array.from(files).forEach((f) => uploadFile(f));
+    e.target.value = '';
+  }
+
+  function handlePaste(e: ClipboardEvent<HTMLTextAreaElement>) {
+    if (!onUploadAttachment) return;
+    const text = e.clipboardData.getData('text');
+    if (text && text.length > PASTE_THRESHOLD) {
+      e.preventDefault();
+      uploadFile(new File([text], `pasted-${Date.now()}.txt`, { type: 'text/plain' }));
+    }
+  }
+
+  function removeAttachment(id: string) {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  }
 
   function autoResize() {
     const ta = textareaRef.current;
@@ -71,9 +111,13 @@ export function ChatInput({
 
   function handleSubmit() {
     const text = value.trim();
-    if (!text || disabled) return;
-    onSend(text);
+    if ((!text && attachments.length === 0) || disabled) return;
+    onSend(
+      text,
+      attachments.length > 0 ? attachments.map((a) => ({ file_id: a.id, type: 'file' })) : undefined,
+    );
     setValue('');
+    setAttachments([]);
     requestAnimationFrame(autoResize);
   }
 
@@ -100,10 +144,54 @@ export function ChatInput({
   return (
     <div className="border-t bg-white px-6 py-4">
       <div className="mx-auto max-w-[760px]">
+        {onUploadAttachment && (attachments.length > 0 || uploading) && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {attachments.map((a) => (
+              <div
+                key={a.id}
+                className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 px-2 py-1 text-[12px] text-gray-600"
+              >
+                <Paperclip size={12} className="text-gray-400" />
+                <span className="max-w-[160px] truncate" title={a.name}>{a.name}</span>
+                <button
+                  onClick={() => removeAttachment(a.id)}
+                  className="text-gray-400 hover:text-gray-700"
+                  title="移除"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+            {uploading && (
+              <div className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 px-2 py-1 text-[12px] text-gray-400">
+                <Loader2 size={12} className="animate-spin" /> 上传中…
+              </div>
+            )}
+          </div>
+        )}
         <div
           className="flex items-end gap-2 rounded-2xl border px-3 py-2.5 transition-colors
             focus-within:border-gray-400 focus-within:shadow-sm"
         >
+          {onUploadAttachment && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={handleFilePick}
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={disabled}
+                title="添加附件"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:opacity-50"
+              >
+                <Paperclip size={16} />
+              </button>
+            </>
+          )}
           <textarea
             ref={textareaRef}
             value={value}
@@ -112,6 +200,7 @@ export function ChatInput({
               autoResize();
             }}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder={placeholder || '输入消息,Shift+Enter 换行'}
             rows={1}
             className="max-h-[200px] flex-1 resize-none bg-transparent py-1 text-[15px] leading-[1.7] outline-none placeholder:text-gray-400"
