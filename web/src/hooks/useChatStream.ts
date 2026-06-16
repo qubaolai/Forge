@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { openSSE } from '@/api/sse';
 import { chatApi } from '@/api';
 import {
+  ChatFileMeta,
   ChatMessage,
   Citation,
   ContextUsage,
@@ -165,10 +166,9 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
                   next.citations = mergeCitations(prev.citations || [], e.citations);
                   break;
                 case 'file_created':
-                  next.files = [
-                    ...(prev.files || []),
-                    { id: e.id, name: e.name, source: e.source, size_bytes: e.size_bytes, mime_type: e.mime_type },
-                  ];
+                  next.files = upsertFile(prev.files || [], {
+                    id: e.id, name: e.name, source: e.source, size_bytes: e.size_bytes, mime_type: e.mime_type,
+                  });
                   break;
                 case 'done':
                   next.status = 'done';
@@ -317,10 +317,9 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
                 next.citations = mergeCitations(prev.citations || [], e.citations);
                 break;
               case 'file_created':
-                next.files = [
-                  ...(prev.files || []),
-                  { id: e.id, name: e.name, source: e.source, size_bytes: e.size_bytes, mime_type: e.mime_type },
-                ];
+                next.files = upsertFile(prev.files || [], {
+                  id: e.id, name: e.name, source: e.source, size_bytes: e.size_bytes, mime_type: e.mime_type,
+                });
                 break;
               case 'done':
                 next.status = 'done';
@@ -402,4 +401,13 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
 function mergeCitations(existing: Citation[], incoming: Citation[]): Citation[] {
   const seen = new Set(existing.map((c) => c.chunk_id));
   return [...existing, ...incoming.filter((c) => !seen.has(c.chunk_id))];
+}
+
+/** 文件列表按 id 去重 upsert: 同 id(同名复用) 替换, 否则追加 */
+function upsertFile(list: ChatFileMeta[], file: ChatFileMeta): ChatFileMeta[] {
+  const idx = list.findIndex((f) => f.id === file.id);
+  if (idx < 0) return [...list, file];
+  const next = [...list];
+  next[idx] = file;
+  return next;
 }

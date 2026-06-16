@@ -77,6 +77,59 @@ class ChatFileRepository:
         await self.db.refresh(row)
         return self._to_view(row)
 
+    async def upsert_generated(
+        self,
+        *,
+        owner_user_id: str,
+        session_id: str,
+        filename: str,
+        storage_path: str,
+        size_bytes: int = 0,
+        content_hash: str | None = None,
+        mime_type: str | None = None,
+        message_id: str | None = None,
+    ) -> ChatFileView:
+        """写入/更新 generated 文件: 同 (session, filename) 已存在则原地更新(复用 id),
+
+        否则新增。保证「LLM 不重命名、同 path 即覆盖」时文件列表不重复。
+        """
+        sid = _to_int(session_id)
+        existing = None
+        if sid is not None:
+            res = await self.db.execute(
+                select(ChatFileOrm)
+                .where(
+                    ChatFileOrm.session_id == sid,
+                    ChatFileOrm.source == "generated",
+                    ChatFileOrm.filename == filename,
+                )
+                .order_by(ChatFileOrm.id.desc())
+                .limit(1)
+            )
+            existing = res.scalar_one_or_none()
+        if existing is not None:
+            existing.storage_path = storage_path
+            existing.size_bytes = size_bytes
+            existing.content_hash = content_hash
+            if mime_type is not None:
+                existing.mime_type = mime_type
+            if message_id is not None:
+                existing.message_id = _to_int(message_id)
+            await self.db.flush()
+            await self.db.refresh(existing)
+            return self._to_view(existing)
+        return await self.add(
+            owner_user_id=owner_user_id,
+            session_id=session_id,
+            source="generated",
+            filename=filename,
+            storage_path=storage_path,
+            size_bytes=size_bytes,
+            mime_type=mime_type,
+            content_hash=content_hash,
+            message_id=message_id,
+        )
+
     async def get_by_id(self, file_id: str) -> ChatFileView | None:
         fid = _to_int(file_id)
         if fid is None:
@@ -97,6 +150,19 @@ class ChatFileRepository:
             stmt = stmt.where(ChatFileOrm.message_id == mid)
         stmt = stmt.order_by(ChatFileOrm.id.asc())
         rows = (await self.db.execute(stmt)).scalars().all()
+        return [self._to_view(r) for r in rows]
+
+    async def list_by_message(self, message_id: str) -> list[ChatFileView]:
+        mid = _to_int(message_id)
+        if mid is None:
+            return []
+        rows = (
+            await self.db.execute(
+                select(ChatFileOrm)
+                .where(ChatFileOrm.message_id == mid)
+                .order_by(ChatFileOrm.id.asc())
+            )
+        ).scalars().all()
         return [self._to_view(r) for r in rows]
 
     async def bind_message(self, file_id: str, message_id: str) -> bool:

@@ -44,7 +44,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from forge.config import paths
+from forge.config.domains import paths
 from forge.infrastructure.jsonl import JsonlLog
 from forge.infrastructure.storage.data_protocols import AuditStore
 

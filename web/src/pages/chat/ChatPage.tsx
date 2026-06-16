@@ -143,11 +143,14 @@ export default function ChatPage() {
     const historyIds = new Set(historyItems.map((m) => m.id));
     const list: ChatMessage[] = [...historyItems];
 
+    // 归一化: 剥离后端给 user 消息追加的 [file:<id>] 附件占位, 避免 pending(纯文本) 与
+    // history(带占位) content 不一致导致去重失败、消息重复/顺序错乱。
+    const normContent = (s: string) => s.replace(/\n*\[file:[^\]]*\]/g, '').trim();
     for (const m of pendingUser) {
       const confirmedByHistory = historyItems.some(
         (h) =>
           h.role === 'user' &&
-          h.content === m.content &&
+          normContent(h.content) === normContent(m.content) &&
           messageTime(h) >= messageTime(m) - 60_000,
       );
       if (!historyIds.has(m.id) && !confirmedByHistory) list.push(m);

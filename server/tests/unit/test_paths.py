@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from forge.config import paths
+from forge.config.domains import paths
 
 
 @pytest.fixture(autouse=True)

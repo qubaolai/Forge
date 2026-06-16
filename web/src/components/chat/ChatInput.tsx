@@ -111,7 +111,8 @@ export function ChatInput({
 
   function handleSubmit() {
     const text = value.trim();
-    if ((!text && attachments.length === 0) || disabled) return;
+    // uploading 时不发送: 附件未就绪会导致会话 id 竞态 / 附件丢失
+    if ((!text && attachments.length === 0) || disabled || uploading) return;
     onSend(
       text,
       attachments.length > 0 ? attachments.map((a) => ({ file_id: a.id, type: 'file' })) : undefined,
@@ -217,7 +218,7 @@ export function ChatInput({
           ) : (
             <button
               onClick={handleSubmit}
-              disabled={!value.trim() || disabled}
+              disabled={(!value.trim() && attachments.length === 0) || disabled || uploading}
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-black text-white transition-colors disabled:bg-gray-300 disabled:text-gray-500"
               title="发送 (Enter)"
             >

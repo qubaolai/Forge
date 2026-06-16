@@ -8,7 +8,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from forge.config.paths import tasks_db_path
+from forge.config.domains.paths import tasks_db_path
 from forge.infrastructure.queue.base import TaskQueue
 from forge.infrastructure.queue.handlers import resolve_task_handler
 from forge.infrastructure.queue.local_store import LocalQueuedTask, LocalTaskStore

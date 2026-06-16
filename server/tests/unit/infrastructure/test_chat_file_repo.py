@@ -114,3 +114,45 @@ async def test_delete_by_session(factory):
         await db.commit()
         assert n == 2
         assert await repo.list_by_session("9") == []
+
+
+async def test_upsert_generated_reuses_same_id_for_same_filename(factory):
+    async with factory() as db:
+        repo = ChatFileRepository(db)
+        first = await repo.upsert_generated(
+            owner_user_id="1", session_id="9", filename="app.py",
+            storage_path="p/app.py", size_bytes=10, content_hash="h1", message_id="100",
+        )
+        second = await repo.upsert_generated(
+            owner_user_id="1", session_id="9", filename="app.py",
+            storage_path="p/app.py", size_bytes=20, content_hash="h2", message_id="200",
+        )
+        await db.commit()
+        # 同名复用同一条记录 (id 不变, 内容更新), 文件列表不重复
+        assert second.id == first.id
+        assert second.size_bytes == 20 and second.content_hash == "h2"
+        assert second.message_id == "200"
+        assert len(await repo.list_by_session("9")) == 1
+
+        # 不同文件名 → 新记录
+        other = await repo.upsert_generated(
+            owner_user_id="1", session_id="9", filename="b.py", storage_path="p/b.py",
+        )
+        assert other.id != first.id
+        assert len(await repo.list_by_session("9")) == 2
+
+
+async def test_list_by_message(factory):
+    async with factory() as db:
+        repo = ChatFileRepository(db)
+        await repo.add(
+            owner_user_id="1", session_id="9", source="generated",
+            filename="a.py", storage_path="p/a.py", message_id="100",
+        )
+        await repo.add(
+            owner_user_id="1", session_id="9", source="generated",
+            filename="b.py", storage_path="p/b.py", message_id="200",
+        )
+        await db.commit()
+        files = await repo.list_by_message("100")
+        assert [f.filename for f in files] == ["a.py"]

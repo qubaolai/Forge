@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from forge.config.paths import tasks_db_path
+from forge.config.domains.paths import tasks_db_path
 from forge.infrastructure.queue import (
     LocalTaskQueue,
     NullTaskQueue,

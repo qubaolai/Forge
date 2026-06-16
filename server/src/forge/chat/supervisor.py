@@ -24,7 +24,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from forge.chat.turn_run import ChatTurnRun
-from forge.config import paths
+from forge.config.domains import paths
 
 logger = logging.getLogger(__name__)
 

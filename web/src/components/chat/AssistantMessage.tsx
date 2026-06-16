@@ -1,14 +1,17 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import {
   Copy, RotateCcw, ThumbsUp, ThumbsDown, AlertCircle, Check, Sparkles,
-  Brain, ChevronDown, ChevronRight,
-  Loader2, CheckCircle2, XCircle, Wrench,
+  ChevronDown, ChevronRight, Package,
 } from 'lucide-react';
 import { ChatMessage, ChatFileMeta, Citation, ToolCall } from '@/types';
 import { cn } from '@/lib/utils';
 import { filesApi } from '@/api';
 import { MarkdownContent } from './MarkdownContent';
 import { FileCard } from './FileCard';
+
+// 仅向用户展示「操作文件 / 查询知识库」类工具; 其他 (read_message / time_tool 等)
+// 是内部辅助调用, 用户不关注, 不展示。
+const VISIBLE_TOOL_NAMES = new Set(['write_file', 'read_file', 'knowledge_search']);
 
 interface Props {
   message: ChatMessage;
@@ -31,8 +34,12 @@ export function AssistantMessage({ message, onRegenerate, onResume, onCitationCl
   const isError = message.status === 'error';
   const isResumable = message.status === 'partial' || message.status === 'aborted';
   const hasContent = !!message.content;
-  const hasTools = !!(message.tool_calls && message.tool_calls.length > 0);
+  // 展示用工具列表: 过滤到白名单 (文件操作 / 知识库)
+  const visibleTools = (message.tool_calls || []).filter((tc) => VISIBLE_TOOL_NAMES.has(tc.tool_name));
+  const hasTools = visibleTools.length > 0;
   const hasReasoning = !!message.reasoning_content;
+  const generatedFiles = (message.files || []).filter((f) => f.source === 'generated');
+
   return (
     <div className="flex gap-3">
       {/* 头像 */}
@@ -41,15 +48,17 @@ export function AssistantMessage({ message, onRegenerate, onResume, onCitationCl
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col gap-2.5">
-        {/* 思考+工具调用框: 流式无内容 / 有推理链 / 有工具调用时显示 */}
-        {((isStreaming && !hasContent) || hasReasoning || hasTools) && (
+        {/* 思考过程 (纯文字 + 扫光; 工具步骤独立展示) */}
+        {(hasReasoning || (isStreaming && !hasContent && !hasTools)) && (
           <ReasoningBlock
             content={message.reasoning_content || ''}
             streaming={isStreaming && !hasContent}
             durationMs={message.reasoning_duration_ms}
-            toolCalls={message.tool_calls}
           />
         )}
+
+        {/* 工具调用步骤 (纯文字 + 扫光, 仅白名单工具) */}
+        {hasTools && <ToolSteps toolCalls={visibleTools} streaming={isStreaming} />}
 
         {/* 主体内容 */}
         {hasContent ? (
@@ -66,18 +75,25 @@ export function AssistantMessage({ message, onRegenerate, onResume, onCitationCl
         ) : null}
 
         {/* 生成的文件卡片 (write_file 产出) */}
-        {message.files && message.files.some((f) => f.source === 'generated') && (
+        {generatedFiles.length > 0 && (
           <div className="flex flex-col gap-1.5">
-            {message.files
-              .filter((f) => f.source === 'generated')
-              .map((f) => (
-                <FileCard
-                  key={f.id}
-                  file={f}
-                  onPreview={onFilePreview}
-                  onDownload={(file) => filesApi.download(file.id, file.name)}
-                />
-              ))}
+            {generatedFiles.length > 1 && message.session_id && (
+              <button
+                onClick={() => filesApi.downloadArchive(message.id)}
+                className="flex items-center gap-1 self-start text-[12px] text-gray-500 transition-colors hover:text-gray-800"
+                title="打包下载本条消息生成的全部文件"
+              >
+                <Package size={13} /> 打包下载 ({generatedFiles.length})
+              </button>
+            )}
+            {generatedFiles.map((f) => (
+              <FileCard
+                key={f.id}
+                file={f}
+                onPreview={onFilePreview}
+                onDownload={(file) => filesApi.download(file.id, file.name)}
+              />
+            ))}
           </div>
         )}
 
@@ -151,191 +167,220 @@ function ActionButton({
   );
 }
 
+/** 折叠头部: 纯文字标题 (进行中扫光) + 极简展开箭头, 无装饰图标 */
+function CollapsibleHeader({
+  title,
+  active,
+  open,
+  canToggle,
+  onToggle,
+}: {
+  title: string;
+  active: boolean; // 进行中 → 扫光
+  open: boolean;
+  canToggle: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      onClick={onToggle}
+      disabled={!canToggle}
+      className="flex items-center gap-1 text-[13px] text-gray-400 transition-colors hover:text-gray-600 disabled:cursor-default"
+    >
+      <span className={active ? 'shimmer-text font-medium' : ''}>{title}</span>
+      {canToggle && (open ? <ChevronDown size={12} /> : <ChevronRight size={12} />)}
+    </button>
+  );
+}
+
+/** 思考过程: 纯文字 + 扫光; 思考中显示"思考中"流光, 完成后"思考 X 秒"可展开原文 */
 function ReasoningBlock({
   content,
   streaming,
   durationMs,
-  toolCalls,
 }: {
   content: string;
   streaming: boolean;
   durationMs?: number;
-  toolCalls?: ToolCall[];
 }) {
   const hasContent = !!content;
-  const hasTools = !!(toolCalls && toolCalls.length > 0);
-  // 有工具调用时默认展开，让用户看到进度
-  const initOpen = hasTools;
-  const [open, setOpen] = useState(initOpen);
+  const [open, setOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // 流式期间随内容增长自动滚到底, 让用户看到最新一行
   useLayoutEffect(() => {
     if (open && streaming && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [content, toolCalls, open, streaming]);
+  }, [content, open, streaming]);
 
-  // 标题文本
+  const thinking = streaming && !hasContent;
   let title: string;
-  if (streaming) {
-    title = hasTools ? '处理中…' : '思考中…';
-  } else if (durationMs && durationMs > 0) {
-    title = `思考用时 ${formatDuration(durationMs)}`;
-  } else if (hasTools && !hasContent) {
-    title = `已调用 ${toolCalls!.length} 个工具`;
-  } else {
-    title = '思考过程';
-  }
+  if (thinking) title = '思考中';
+  else if (durationMs && durationMs > 0) title = `思考 ${formatDuration(durationMs)}`;
+  else title = '思考过程';
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-gray-50/60 text-[13px]">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-gray-500 hover:text-gray-700"
-      >
-        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-        <Brain size={13} />
-        <span>{title}</span>
-        {streaming && (
-          <span className="ml-1 flex gap-1">
-            <span className="h-1 w-1 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.3s]" />
-            <span className="h-1 w-1 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.15s]" />
-            <span className="h-1 w-1 animate-bounce rounded-full bg-gray-400" />
-          </span>
-        )}
-        {/* 工具计数 */}
-        {hasTools && !streaming && (
-          <span className="ml-auto text-[11px] text-gray-400">
-            {toolCalls!.filter(tc => tc.status === 'running').length > 0
-              ? `${toolCalls!.filter(tc => tc.status === 'running').length} 个执行中`
-              : `${toolCalls!.length} 个工具`}
-          </span>
-        )}
-      </button>
-      {open && (
+    <div>
+      <CollapsibleHeader
+        title={title}
+        active={thinking}
+        open={open}
+        canToggle={hasContent}
+        onToggle={() => setOpen((v) => !v)}
+      />
+      {open && hasContent && (
         <div
           ref={scrollRef}
-          className="border-t border-gray-200 px-3 py-2 text-gray-600 max-h-[360px] overflow-y-auto"
+          className="mt-1 max-h-[320px] overflow-y-auto whitespace-pre-wrap border-l-2 border-gray-200 pl-3 text-[13px] leading-[1.7] text-gray-400"
         >
-          {/* 推理文本 */}
-          {hasContent && (
-            <div className="whitespace-pre-wrap leading-[1.7] mb-2">{content}</div>
-          )}
-
-          {/* 工具调用列表 */}
-          {hasTools && (
-            <div className={cn('space-y-1', hasContent && 'border-t border-gray-200 pt-2')}>
-              {toolCalls!.map((tc) => (
-                <InlineToolEntry key={tc.id} toolCall={tc} />
-              ))}
-            </div>
-          )}
+          {content}
         </div>
       )}
     </div>
   );
 }
 
-/** 思考块内部的紧凑工具条目 */
-function InlineToolEntry({ toolCall }: { toolCall: ToolCall }) {
-  const [open, setOpen] = useState(false);
-  const isRunning = toolCall.status === 'running';
-  const isError = toolCall.status === 'error';
-
-  const argsStr =
-    toolCall.arguments && Object.keys(toolCall.arguments).length > 0
-      ? JSON.stringify(toolCall.arguments, null, 2)
-      : '';
-  const resultStr = formatInlineResult(toolCall.result);
+/** 工具调用步骤 (纯文字 + 扫光, 无图标):
+ *  - 生成中: 平铺, 每步一行, 进行中的工具文字扫光;
+ *  - 已完成: 按工具类型分组聚合(如「写入 2 个文件: a.py, b.py」), 工具多时不刷屏。
+ */
+function ToolSteps({ toolCalls, streaming }: { toolCalls: ToolCall[]; streaming: boolean }) {
+  const [open, setOpen] = useState(true);
+  const running = streaming && toolCalls.some((t) => t.status === 'running');
+  const title = running ? '正在执行' : `执行了 ${toolCalls.length} 个操作`;
 
   return (
-    <div className="text-[12px]">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className={cn(
-          'w-full flex items-center gap-1.5 px-2 py-1 rounded text-left hover:bg-black/[0.04] transition-colors',
-          isError ? 'text-red-600' : isRunning ? 'text-blue-600' : 'text-gray-600',
-        )}
-      >
-        <StatusIcon status={toolCall.status} />
-        <code className="text-[11px] px-1 py-0.5 rounded bg-white border border-gray-200 font-medium text-gray-700">
-          {toolCall.tool_name}
-        </code>
-        <span className="text-gray-400 truncate">
-          {isRunning ? '调用中' : isError ? '失败' : '完成'}
-        </span>
-        {!open && argsStr && (
-          <span className="ml-auto text-[10px] text-gray-300 truncate max-w-[40%]">
-            {argsStr.replace(/\s+/g, ' ').slice(0, 50)}
-          </span>
-        )}
-      </button>
-
-      {/* 展开详情 */}
-      {open && (argsStr || resultStr || (isError && toolCall.error_message)) && (
-        <div className="ml-6 px-2 pb-2 space-y-1.5">
-          {argsStr && (
-            <div>
-              <div className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">参数</div>
-              <pre className="text-[11px] font-mono bg-white border border-gray-200 rounded p-1.5 overflow-x-auto leading-relaxed max-h-[120px] overflow-y-auto">
-                {argsStr}
-              </pre>
-            </div>
-          )}
-          {toolCall.status === 'success' && resultStr && (
-            <div>
-              <div className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">结果</div>
-              <pre className="text-[11px] font-mono bg-white border border-gray-200 rounded p-1.5 overflow-x-auto whitespace-pre-wrap max-h-[160px] overflow-y-auto leading-relaxed">
-                {resultStr}
-              </pre>
-            </div>
-          )}
-          {isError && (toolCall.error_message || resultStr) && (
-            <div>
-              <div className="text-[10px] text-red-400 uppercase tracking-wider mb-0.5">错误</div>
-              <pre className="text-[11px] font-mono bg-white border border-red-200 text-red-600 rounded p-1.5 overflow-x-auto whitespace-pre-wrap max-h-[160px] overflow-y-auto leading-relaxed">
-                {toolCall.error_message || resultStr}
-              </pre>
-            </div>
-          )}
+    <div>
+      <CollapsibleHeader
+        title={title}
+        active={running}
+        open={open}
+        canToggle
+        onToggle={() => setOpen((v) => !v)}
+      />
+      {open && (
+        <div className="mt-1 flex flex-col gap-1 border-l-2 border-gray-200 pl-3 text-[13px]">
+          {streaming
+            ? toolCalls.map((tc) => <ToolStepLine key={tc.id} tc={tc} />)
+            : groupTools(toolCalls).map((g) => <ToolGroupRow key={g.kind} group={g} />)}
         </div>
       )}
     </div>
   );
 }
 
-function StatusIcon({ status }: { status: ToolCall['status'] }) {
-  if (status === 'running') {
-    return <Loader2 size={12} className="text-blue-500 animate-spin shrink-0" />;
-  }
-  if (status === 'error') {
-    return <XCircle size={12} className="text-red-500 shrink-0" />;
-  }
-  if (status === 'success') {
-    return <CheckCircle2 size={12} className="text-emerald-500 shrink-0" />;
-  }
-  return <Wrench size={12} className="text-gray-400 shrink-0" />;
+/** 生成中的单步: 进行中扫光, 失败红色, 完成灰色 */
+function ToolStepLine({ tc }: { tc: ToolCall }) {
+  const running = tc.status === 'running';
+  const error = tc.status === 'error';
+  return (
+    <div className={cn('truncate', running ? 'shimmer-text font-medium' : error ? 'text-red-500' : 'text-gray-500')}>
+      {toolActionLabel(tc)}
+      {error ? '（失败）' : ''}
+    </div>
+  );
 }
 
-function formatInlineResult(result: unknown): string {
-  if (result == null) return '';
-  if (typeof result === 'string') {
-    const t = result.trim();
-    if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
-      try {
-        return JSON.stringify(JSON.parse(t), null, 2);
-      } catch {
-        /* not valid json, fall through */
-      }
+/** 完成后: 单个工具分组一行 (纯文字, 失败红色) */
+function ToolGroupRow({ group }: { group: { kind: string; items: ToolCall[] } }) {
+  const anyError = group.items.some((t) => t.status === 'error');
+  const { label, detail } = groupSummary(group.kind, group.items);
+  return (
+    <div className={cn('min-w-0', anyError ? 'text-red-500' : 'text-gray-500')}>
+      <span>{label}</span>
+      {detail && <span className="ml-1.5 text-gray-400">{detail}</span>}
+    </div>
+  );
+}
+
+/** 按 tool_name 分组, 保持首次出现顺序 */
+function groupTools(toolCalls: ToolCall[]): { kind: string; items: ToolCall[] }[] {
+  const order: string[] = [];
+  const map = new Map<string, ToolCall[]>();
+  for (const tc of toolCalls) {
+    if (!map.has(tc.tool_name)) {
+      map.set(tc.tool_name, []);
+      order.push(tc.tool_name);
     }
-    return result;
+    map.get(tc.tool_name)!.push(tc);
   }
-  try {
-    return JSON.stringify(result, null, 2);
-  } catch {
-    return String(result);
+  return order.map((kind) => ({ kind, items: map.get(kind)! }));
+}
+
+/** 工具组 → 聚合标签 + 详情 (单个时直接显示对象, 多个时显示计数 + 列表) */
+function groupSummary(kind: string, items: ToolCall[]): { label: string; detail: string } {
+  const n = items.length;
+  if (kind === 'write_file') {
+    const names = items.map(filePathOf).filter(Boolean);
+    return n === 1
+      ? { label: `写入 ${names[0] || '文件'}`, detail: '' }
+      : { label: `写入 ${n} 个文件`, detail: names.join('  ·  ') };
   }
+  if (kind === 'read_file') {
+    const names = items.map(readFileName).filter(Boolean);
+    return n === 1
+      ? { label: `读取 ${names[0] || '文件'}`, detail: '' }
+      : { label: `读取 ${n} 个文件`, detail: names.join('  ·  ') };
+  }
+  if (kind === 'knowledge_search') {
+    const qs = items.map(queryOf).filter(Boolean);
+    return n === 1
+      ? { label: `检索知识库${qs[0] ? `：${qs[0]}` : ''}`, detail: '' }
+      : { label: `检索知识库 ${n} 次`, detail: qs.join('  ·  ') };
+  }
+  return { label: `调用 ${kind} ${n} 次`, detail: '' };
+}
+
+/** 生成中: 单个工具 → 友好中文动作 (read_file 显示读取的文件名) */
+function toolActionLabel(tc: ToolCall): string {
+  switch (tc.tool_name) {
+    case 'write_file':
+      return `写入 ${filePathOf(tc) || '文件'}`;
+    case 'read_file': {
+      const name = readFileName(tc);
+      return name ? `读取 ${name}` : '读取文件';
+    }
+    case 'knowledge_search': {
+      const q = queryOf(tc);
+      return q ? `检索知识库：${q}` : '检索知识库';
+    }
+    default:
+      return `调用 ${tc.tool_name}`;
+  }
+}
+
+/** 工具结果可能是 JSON 字符串(后端序列化)或对象, 统一解析成对象 */
+function parseToolResult(result: unknown): Record<string, unknown> | null {
+  if (!result) return null;
+  if (typeof result === 'object') return result as Record<string, unknown>;
+  if (typeof result === 'string') {
+    try {
+      const o = JSON.parse(result);
+      return o && typeof o === 'object' ? (o as Record<string, unknown>) : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function filePathOf(tc: ToolCall): string {
+  const args = (tc.arguments || {}) as Record<string, unknown>;
+  if (typeof args.path === 'string') return args.path;
+  const r = parseToolResult(tc.result);
+  return r && typeof r.path === 'string' ? r.path : '';
+}
+
+/** read_file 读取的文件名: 优先工具结果里的 filename (running 时可能还没有) */
+function readFileName(tc: ToolCall): string {
+  const r = parseToolResult(tc.result);
+  return r && typeof r.filename === 'string' ? r.filename : '';
+}
+
+function queryOf(tc: ToolCall): string {
+  const args = (tc.arguments || {}) as Record<string, unknown>;
+  const q = typeof args.query === 'string' ? args.query : '';
+  return q.length > 24 ? q.slice(0, 24) + '…' : q;
 }
 
 function formatDuration(ms: number): string {

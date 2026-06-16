@@ -71,7 +71,7 @@ class DBSettings(BaseSettings):
             p = Path(raw).expanduser()
             p.parent.mkdir(parents=True, exist_ok=True)
             return str(p)
-        from forge.config.paths import kb_db_path
+        from forge.config.domains.paths import kb_db_path
 
         return str(kb_db_path())
 

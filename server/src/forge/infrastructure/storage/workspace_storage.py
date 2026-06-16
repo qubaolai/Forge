@@ -24,7 +24,7 @@ import logging
 import shutil
 from pathlib import Path
 
-from forge.config import paths
+from forge.config.domains import paths
 from forge.infrastructure.storage.base import StoredFile
 
 logger = logging.getLogger(__name__)

@@ -89,10 +89,10 @@ class WriteFile(Tool):
         message_id = current_assistant_message_id() or None
 
         async with session_scope() as db:
-            meta = await ChatFileRepository(db).add(
+            # 同名复用同一条记录 (不重命名, 同 path 即覆盖), 避免文件列表重复
+            meta = await ChatFileRepository(db).upsert_generated(
                 owner_user_id=user_id,
                 session_id=session_id,
-                source="generated",
                 filename=path,
                 storage_path=stored.storage_path,
                 size_bytes=stored.size_bytes,

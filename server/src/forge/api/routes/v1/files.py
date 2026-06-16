@@ -9,8 +9,10 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import os
+import zipfile
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, Query, UploadFile
@@ -135,3 +137,30 @@ async def download_file(file_id: str, user: AuthenticatedUser):
         "Content-Disposition": f"attachment; filename*=UTF-8''{quote(download_name)}",
     }
     return Response(content=data, media_type=media_type, headers=headers)
+
+
+@router.get("/files/message/{message_id}/archive")
+async def download_message_archive(message_id: str, user: AuthenticatedUser):
+    """打包下载某条 assistant 消息生成的全部文件 (zip)。"""
+    async with session_scope() as db:
+        files = await ChatFileRepository(db).list_by_message(message_id)
+    owned = [
+        f for f in files
+        if f.owner_user_id == str(user.user_id) and f.source == "generated"
+    ]
+    if not owned:
+        raise NotFound("无可打包的生成文件", code=40412)
+
+    ws = WorkspaceStorage()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in owned:
+            try:
+                zf.writestr(f.filename, ws.read(f.storage_path))
+            except (FileNotFoundError, ValueError, OSError):
+                continue  # 物理文件缺失则跳过, 不阻断整包
+
+    headers = {
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote('files-' + message_id + '.zip')}",
+    }
+    return Response(content=buf.getvalue(), media_type="application/zip", headers=headers)
