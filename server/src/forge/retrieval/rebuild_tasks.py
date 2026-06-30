@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -22,9 +21,11 @@ except ImportError:  # pragma: no cover
 
 async def run_rag_rebuild_task(job_id: str) -> None:
     from forge.api.services.kb_ingest_service import KbIngestService
+    from forge.config.domains.paths import uploads_dir
     from forge.config.settings import get_settings
     from forge.infrastructure.database.database import get_session_factory, init_engine
     from forge.infrastructure.database.orm.kb_document_orm import KbDocumentOrm
+    from forge.infrastructure.database.orm.knowledge_base_orm import KnowledgeBaseOrm
     from forge.infrastructure.database.orm.rag_index_rebuild_job_orm import RagIndexRebuildJobOrm
     from forge.infrastructure.database.orm.system_model_binding_orm import SystemModelBindingOrm
     from forge.retrieval.chunkers import ChunkConfig
@@ -96,6 +97,13 @@ async def run_rag_rebuild_task(job_id: str) -> None:
             current = await db.get(KbDocumentOrm, doc.id)
             if current is None:
                 continue
+            kb = await db.get(KnowledgeBaseOrm, current.kb_id)
+            if kb is None:
+                current.vector_index_status = "failed"
+                current.vector_index_error = "所属知识库不存在，无法重建向量索引"
+                job.failed_documents += 1
+                await db.commit()
+                continue
             if not current.storage_path:
                 current.vector_index_status = "failed"
                 current.vector_index_error = "文档缺少 storage_path，无法重建向量索引"
@@ -124,8 +132,10 @@ async def run_rag_rebuild_task(job_id: str) -> None:
                     raise RuntimeError("RAG Embedding 绑定已变化")
 
             try:
-                path = Path(settings.ingest.documents_path) / "uploads" / current.storage_path
+                path = uploads_dir() / current.storage_path
                 await ingest.rebuild_vector_index(
+                    session=db,
+                    kb=kb,
                     document=current,
                     file_path=path,
                     before_vector_write=ensure_binding_current,

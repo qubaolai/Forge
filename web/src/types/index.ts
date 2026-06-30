@@ -125,6 +125,19 @@ export interface KnowledgeDocument {
   indexed_at?: ISODateString;
 }
 
+/** KB 检索测试单条命中片段 (对齐后端 KbSearchHit) */
+export interface KbSearchHit {
+  chunk_id: string;
+  document_id: string;
+  document_name: string;
+  kb_name: string;
+  content: string;
+  score: number;
+  page?: number | null;
+  header_path?: string;
+  source_url?: string | null;
+}
+
 export interface DocumentChunk {
   id: string;
   document_id: string;

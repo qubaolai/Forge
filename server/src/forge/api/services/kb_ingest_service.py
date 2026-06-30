@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
@@ -140,7 +141,7 @@ class KbIngestService:
 
         # 2. chunking
         await doc_repo.update_status(doc_id, "chunking", progress=30)
-        chunker = select_chunker(elements, self.chunk_config)
+        chunker = select_chunker(elements, self._chunk_config_for_kb(kb))
         chunks = chunker.chunk(elements, doc_id=doc_id, doc_version="v1")
         # 注入 kb_id (chunker 不感知 KB)
         for ch in chunks:
@@ -215,6 +216,8 @@ class KbIngestService:
     async def rebuild_vector_index(
         self,
         *,
+        session: AsyncSession,
+        kb: KnowledgeBaseOrm,
         document: KbDocumentOrm,
         file_path: Path,
         before_vector_write: Callable[[], Awaitable[None]] | None = None,
@@ -235,12 +238,18 @@ class KbIngestService:
         if not elements:
             raise KbIngestError(f"文件 {file_path} 解析结果为空")
 
-        chunker = select_chunker(elements, self.chunk_config)
+        chunker = select_chunker(elements, self._chunk_config_for_kb(kb))
         doc_id = str(document.id)
         chunks = chunker.chunk(elements, doc_id=doc_id, doc_version="v1")
+        parents = [c for c in chunks if c.chunk_type == ChunkType.PARENT]
         children = [c for c in chunks if c.chunk_type == ChunkType.CHILD]
-        for child in children:
-            child.kb_id = str(document.kb_id)
+        for ch in chunks:
+            ch.kb_id = str(document.kb_id)
+        await self._assert_parent_manifest_unchanged(
+            session=session,
+            document=document,
+            parents=parents,
+        )
         try:
             embeddings = embedder.embed_documents(
                 [self._build_embed_text(child) for child in children]
@@ -324,8 +333,38 @@ class KbIngestService:
             self.bm25_store.add_children(children)
 
         # 4.4 写 MySQL 父块 (commit 由外层控制)
-        parent_dicts = [self._chunk_to_parent_dict(p, str(document.kb_id)) for p in parents]
+        parent_dicts = [
+            self._chunk_to_parent_dict(p, str(document.kb_id), seq=i)
+            for i, p in enumerate(parents)
+        ]
         await chunk_repo.save_many(parent_dicts)
+
+    async def _assert_parent_manifest_unchanged(
+        self,
+        *,
+        session: AsyncSession,
+        document: KbDocumentOrm,
+        parents: list[Chunk],
+    ) -> None:
+        """vector-only rebuild 前确认父块 ID/hash 与已入库数据一致。"""
+        stored = await KbDocumentChunkRepository(session).list_manifest_by_document(
+            document.id
+        )
+        current = sorted(
+            (
+                {
+                    "id": p.chunk_id,
+                    "chunk_hash": p.chunk_hash or "",
+                }
+                for p in parents
+            ),
+            key=lambda item: item["id"],
+        )
+        if stored != current:
+            raise KbIngestError(
+                "当前解析/分块结果与已入库父块不一致，已拒绝仅重建向量索引；"
+                "请重新入库该文档以同步父块、BM25 和向量索引"
+            )
 
     def _compensate(self, document_id: str, child_store: ChildVectorStore | None) -> None:
         """异常发生后清掉库外存储 (best-effort, 每步独立 try)."""
@@ -347,7 +386,7 @@ class KbIngestService:
         return chunk.content
 
     @staticmethod
-    def _chunk_to_parent_dict(chunk: Chunk, kb_id: str) -> dict:
+    def _chunk_to_parent_dict(chunk: Chunk, kb_id: str, *, seq: int) -> dict:
         """Chunk → kb_document_chunks.save_many 入参."""
         from dataclasses import asdict, is_dataclass
 
@@ -381,5 +420,37 @@ class KbIngestService:
             "chunk_hash": chunk.chunk_hash or "",
             "source_type": chunk.source_type or "text",
             "extra": extra,
-            "seq": 0,
+            "seq": seq,
+            "token_count": KbIngestService._estimate_token_count(chunk.content),
         }
+
+    def _chunk_config_for_kb(self, kb: KnowledgeBaseOrm) -> ChunkConfig:
+        """在全局默认分块配置上叠加 KB 级子块参数。"""
+        size = int(
+            kb.chunk_size
+            if kb.chunk_size is not None
+            else self.chunk_config.child_target_chars
+        )
+        overlap = int(
+            kb.chunk_overlap
+            if kb.chunk_overlap is not None
+            else self.chunk_config.child_overlap_chars
+        )
+        if overlap >= size:
+            raise KbIngestError("知识库分块配置无效: chunk_overlap 必须小于 chunk_size")
+        return replace(
+            self.chunk_config,
+            child_target_chars=size,
+            child_overlap_chars=overlap,
+        )
+
+    @staticmethod
+    def _estimate_token_count(text: str) -> int:
+        if not text:
+            return 0
+        try:
+            from forge.context_mgmt.meter.token_meter import get_token_meter
+
+            return int(get_token_meter().count_text(text))
+        except Exception:  # noqa: BLE001
+            return max(1, len(text) // 4)

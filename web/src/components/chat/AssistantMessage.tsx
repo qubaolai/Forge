@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   Copy, RotateCcw, ThumbsUp, ThumbsDown, AlertCircle, Check, Sparkles,
   ChevronDown, ChevronRight, Package,
@@ -23,6 +23,15 @@ interface Props {
 
 export function AssistantMessage({ message, onRegenerate, onResume, onCitationClick, onFilePreview }: Props) {
   const [copied, setCopied] = useState(false);
+  const [citationsOpen, setCitationsOpen] = useState(false);
+  const [activeCitation, setActiveCitation] = useState<number | null>(null);
+
+  // 正文 [N] 角标点击: 展开来源卡片区 + 高亮对应来源, 再透传上层
+  function handleCitationClick(c: Citation) {
+    setCitationsOpen(true);
+    setActiveCitation(c.index);
+    onCitationClick?.(c);
+  }
 
   async function handleCopy() {
     await navigator.clipboard.writeText(message.content);
@@ -66,13 +75,24 @@ export function AssistantMessage({ message, onRegenerate, onResume, onCitationCl
             <MarkdownContent
               content={message.content}
               citations={message.citations}
-              onCitationClick={onCitationClick}
+              onCitationClick={handleCitationClick}
             />
             {isStreaming && (
               <span className="inline-block w-[3px] h-4 ml-0.5 bg-gray-700 align-middle animate-pulse rounded-sm" />
             )}
           </div>
         ) : null}
+
+        {/* 引用来源卡片 (knowledge_search 命中, 点击高亮 / 跳转原文) */}
+        {message.citations && message.citations.length > 0 && (
+          <CitationsBlock
+            citations={message.citations}
+            open={citationsOpen}
+            onToggle={() => setCitationsOpen((v) => !v)}
+            activeIndex={activeCitation}
+            onCitationClick={onCitationClick}
+          />
+        )}
 
         {/* 生成的文件卡片 (write_file 产出) */}
         {generatedFiles.length > 0 && (
@@ -123,9 +143,12 @@ export function AssistantMessage({ message, onRegenerate, onResume, onCitationCl
               <ThumbsDown size={13} />
             </ActionButton>
             {message.citations && message.citations.length > 0 && (
-              <span className="ml-2 text-[11px] text-gray-400">
+              <button
+                onClick={() => setCitationsOpen((v) => !v)}
+                className="ml-2 text-[11px] text-gray-400 transition-colors hover:text-gray-600"
+              >
                 {message.citations.length} 条引用
-              </span>
+              </button>
             )}
             {message.usage?.total_tokens ? (
               <span className="text-[11px] text-gray-300">
@@ -390,4 +413,98 @@ function formatDuration(ms: number): string {
   const m = Math.floor(s / 60);
   const rem = Math.round(s - m * 60);
   return rem === 0 ? `${m} 分钟` : `${m} 分 ${rem} 秒`;
+}
+
+// ---------------------------------------------------------------------------
+// 引用来源
+// ---------------------------------------------------------------------------
+function citationPage(c: Citation): number | null {
+  const p = (c.metadata as Record<string, unknown> | undefined)?.page;
+  return typeof p === 'number' ? p : null;
+}
+
+function citationMeta(c: Citation, key: string): string {
+  const v = (c.metadata as Record<string, unknown> | undefined)?.[key];
+  return typeof v === 'string' ? v : '';
+}
+
+/** 引用来源卡片区: 列出 knowledge_search 命中的来源, 点击高亮 / 跳转原文 */
+function CitationsBlock({
+  citations,
+  open,
+  onToggle,
+  activeIndex,
+  onCitationClick,
+}: {
+  citations: Citation[];
+  open: boolean;
+  onToggle: () => void;
+  activeIndex: number | null;
+  onCitationClick?: (c: Citation) => void;
+}) {
+  return (
+    <div>
+      <CollapsibleHeader
+        title={`${citations.length} 条引用来源`}
+        active={false}
+        open={open}
+        canToggle
+        onToggle={onToggle}
+      />
+      {open && (
+        <div className="mt-1 flex flex-col gap-1.5 border-l-2 border-gray-200 pl-3">
+          {citations.map((c) => (
+            <CitationCard
+              key={`${c.chunk_id}-${c.index}`}
+              citation={c}
+              active={activeIndex === c.index}
+              onClick={() => {
+                const url = citationMeta(c, 'source_url');
+                if (url) window.open(url, '_blank', 'noopener');
+                onCitationClick?.(c);
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CitationCard({
+  citation,
+  active,
+  onClick,
+}: {
+  citation: Citation;
+  active: boolean;
+  onClick: () => void;
+}) {
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (active && ref.current) {
+      ref.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [active]);
+  const page = citationPage(citation);
+  const kbName = citationMeta(citation, 'kb_name');
+  return (
+    <button
+      ref={ref}
+      onClick={onClick}
+      className={cn(
+        'rounded-md border px-2.5 py-1.5 text-left text-[12px] transition-colors',
+        active ? 'border-orange-300 bg-orange-50' : 'border-gray-200 hover:bg-gray-50',
+      )}
+    >
+      <div className="flex items-center gap-1.5">
+        <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-500">[{citation.index}]</span>
+        <span className="truncate font-medium text-gray-700">{citation.document_name || '未命名文档'}</span>
+        {page != null && <span className="shrink-0 text-gray-400">第 {page} 页</span>}
+        <span className="ml-auto shrink-0 text-gray-300">{citation.score.toFixed(3)}</span>
+      </div>
+      {kbName && <div className="mt-0.5 text-[11px] text-gray-400">{kbName}</div>}
+      <p className="mt-0.5 line-clamp-2 leading-5 text-gray-500">{citation.content}</p>
+    </button>
+  );
 }

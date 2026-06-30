@@ -8,6 +8,15 @@ import {
   SystemModelBinding, User,
 } from '@/types';
 
+export { kbApi } from './kb';
+export type {
+  KbListData,
+  KbDocumentListData,
+  KbSearchData,
+  KbCreatePayload,
+  KbUpdatePayload,
+} from './kb';
+
 export const authApi = {
   login: (payload: LoginPayload) => apiClient.post<LoginResponse>('/auth/login', payload),
   logout: () => apiClient.post<void>('/auth/logout'),

@@ -20,6 +20,7 @@ async def fetch_kb_list(user_id: str) -> list[dict]:
             kbs = await kb_repo.list_for_user(user_id)
             return [
                 {
+                    "id": str(kb.id),
                     "name": kb.name,
                     "description": (kb.description or "").strip(),
                     "document_count": kb.document_count or 0,

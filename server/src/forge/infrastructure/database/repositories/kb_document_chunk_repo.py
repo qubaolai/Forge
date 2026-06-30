@@ -153,6 +153,25 @@ class KbDocumentChunkRepository(BaseRepository):
         res = await self.session.execute(stmt)
         return int(res.scalar_one())
 
+    async def list_manifest_by_document(self, document_id: str | int) -> list[dict]:
+        """返回文档已落库父块 manifest，用于 vector-only rebuild 一致性校验。"""
+        stmt = (
+            select(
+                KbDocumentChunkOrm.id,
+                KbDocumentChunkOrm.chunk_hash,
+            )
+            .where(KbDocumentChunkOrm.document_id == _to_int(document_id))
+            .order_by(KbDocumentChunkOrm.id.asc())
+        )
+        result = await self.session.execute(stmt)
+        return [
+            {
+                "id": row.id,
+                "chunk_hash": row.chunk_hash or "",
+            }
+            for row in result.all()
+        ]
+
     async def get_many_enriched(self, chunk_ids: list[str]) -> dict[str, dict]:
         """按 chunk_id 批量查父块, 一次性 JOIN kb_documents + knowledge_bases
         把引用元信息 (document_name / kb_name / source_url) 也带回来.

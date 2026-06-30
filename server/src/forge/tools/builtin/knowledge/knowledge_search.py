@@ -4,31 +4,28 @@
     ReActAgent.stream → ToolExecutor.aexecute → KnowledgeSearchTool.arun
       → 复用全局 DB session (跑在主 event loop, 共享 lifespan engine)
       → KnowledgeBaseRepository.find_accessible_by_names (权限过滤)
-      → KbDocumentRepository.list_indexed_doc_ids
-      → ParentChildRetriever.retrieve (内部走 embedder/reranker 网关)
-      → 拼成纯文本返回给 LLM
+      → retrieval.search.search_chunks (与 /kb/{id}/search 检索测试共用核心)
+      → 拼成带 [N] 角标的文本返回给 LLM, 同时把结构化 citations 写入回合收集器
 
 设计要点:
-    - 权限: kb_names 由 LLM 给出, 但所有 KB 必须通过 user_id 鉴权.
+    - 权限: kb_ids / kb_names 由 LLM 给出, 但所有 KB 必须通过 user_id 鉴权.
       工具内部读 current_user_id() ContextVar, ReActAgent.stream 调
       aexecute 时跑在同一个 task 里, ContextVar 自然继承.
+    - 引用: 命中片段编号 [1][2]..., 文本里提示 LLM 在回答处用 [编号] 标注;
+      同时把结构化来源 append 到 citation 收集器, 由 chat 回合发 SSE + 落库.
     - 计费: embedder/reranker 内部自带 check_budget + record. 超额抛
       LLMBudgetExceeded → 这里 catch 后转友好文本.
     - 实现 arun 而非 run: DB 走全局 async engine, 必须在创建它的 event loop
-      上使用, 否则会出 "Future attached to a different loop". 异步原生入口
-      天然在主 loop 上跑, 不需要起临时 loop.
+      上使用. 异步原生入口天然在主 loop 上跑.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, cast
+from typing import Any
 
-from forge.core.request_context import current_user_id
+from forge.core.request_context import add_citations, current_user_id
 from forge.infrastructure.database.database import session_scope
-from forge.infrastructure.database.repositories.kb_document_repo import (
-    KbDocumentRepository,
-)
 from forge.infrastructure.database.repositories.knowledge_base_repo import (
     KnowledgeBaseRepository,
 )
@@ -40,6 +37,8 @@ logger = logging.getLogger(__name__)
 
 # 单条片段返回给 LLM 时的内容截断 (字符数). 超长会浪费 LLM 上下文.
 _MAX_SNIPPET_CHARS = 1200
+# 落 citation 的片段摘要长度 (前端来源卡片展示用, 比给 LLM 的更短).
+_CITATION_CONTENT_CHARS = 500
 
 
 @register_tool
@@ -50,9 +49,9 @@ class KnowledgeSearchTool(Tool):
     description = (
         "在用户可访问的知识库 (KB) 中检索与问题相关的文档片段. "
         "当用户告知需要查询知识库时调用. "
-        "kb_names 必填, 取值范围限定在系统提示中已列出的可用 KB 列表里, "
-        "禁止臆造. 返回最相关的若干段落原文 + 来源标识, "
-        "由模型基于片段回答并标注来源."
+        "优先使用系统提示中列出的 kb_id 作为 kb_ids; kb_names 仅为兼容字段, "
+        "禁止臆造. 返回最相关的若干段落原文 + 来源标识 (每段带 [编号]), "
+        "回答时请基于片段内容作答, 并在引用处用 [编号] 标注来源."
     )
     parameters = {
         "type": "object",
@@ -64,7 +63,12 @@ class KnowledgeSearchTool(Tool):
             "kb_names": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "知识库名称列表 (取自系统提示的可用 KB 列表), 必填",
+                "description": "兼容字段: 知识库名称列表。优先使用 kb_ids",
+            },
+            "kb_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "知识库 ID 列表，取自系统提示里的 kb_id",
             },
             "top_n": {
                 "type": "integer",
@@ -72,20 +76,29 @@ class KnowledgeSearchTool(Tool):
                 "default": 5,
             },
         },
-        "required": ["query", "kb_names"],
+        "required": ["query"],
     }
     parallelism_safe = True
 
     async def arun(self, args: dict[str, Any]) -> str:
         query = (args.get("query") or "").strip()
-        kb_names = args.get("kb_names") or []
+        kb_names = [
+            str(item).strip()
+            for item in (args.get("kb_names") or [])
+            if str(item).strip()
+        ]
+        kb_ids = [
+            str(item).strip()
+            for item in (args.get("kb_ids") or [])
+            if str(item).strip()
+        ]
         top_n = int(args.get("top_n") or 5)
         top_n = max(1, min(top_n, 10))
 
         if not query:
             return "错误: query 不能为空"
-        if not kb_names:
-            return "错误: kb_names 不能为空, 必须明确指定要搜哪些知识库"
+        if not kb_ids and not kb_names:
+            return "错误: kb_ids 不能为空, 必须明确指定要搜哪些知识库"
 
         user_id = current_user_id() or ""
         if not user_id:
@@ -93,7 +106,7 @@ class KnowledgeSearchTool(Tool):
             return "错误: 未识别到当前用户身份, 无法搜索知识库"
 
         try:
-            return await self._do_search(query, kb_names, top_n, user_id)
+            return await self._do_search(query, kb_ids, kb_names, top_n, user_id)
         except LLMBudgetExceeded as e:
             logger.warning("knowledge_search 预算超额: %s", e)
             return f"错误: 当前用户的调用额度已耗尽, 无法继续检索 ({e})"
@@ -104,65 +117,58 @@ class KnowledgeSearchTool(Tool):
     async def _do_search(
         self,
         query: str,
+        kb_ids: list[str],
         kb_names: list[str],
         top_n: int,
         user_id: str,
     ) -> str:
+        from forge.retrieval.search import search_chunks
+
         async with session_scope() as db:
             kb_repo = KnowledgeBaseRepository(db)
-            kbs = await kb_repo.find_accessible_by_names(kb_names, user_id)
+            kbs_by_id = await kb_repo.find_accessible_by_ids(kb_ids, user_id)
+            kbs_by_name = await kb_repo.find_accessible_by_names(kb_names, user_id)
+            by_id = {str(kb.id): kb for kb in [*kbs_by_id, *kbs_by_name]}
+            kbs = list(by_id.values())
 
-            found_names = {kb.name for kb in kbs}
-            missing = [n for n in kb_names if n not in found_names]
-            if missing:
+            found_ids = {str(kb.id) for kb in kbs_by_id}
+            missing_ids = [i for i in kb_ids if i not in found_ids]
+            found_names = {kb.name for kb in kbs_by_name}
+            missing_names = [n for n in kb_names if n not in found_names]
+            if missing_ids or missing_names:
                 # 出于安全性, 不区分"不存在"与"无权限", 一律返回访问不到
                 return (
-                    f"知识库无法访问或不存在: {missing}. 已访问列表: {sorted(found_names) or '无'}"
+                    f"知识库无法访问或不存在: "
+                    f"ids={missing_ids or []}, names={missing_names or []}. "
+                    f"已访问 ID: {sorted(by_id) or '无'}"
                 )
 
             kb_ids = [str(kb.id) for kb in kbs]
-            doc_repo = KbDocumentRepository(db)
-            doc_ids = await doc_repo.list_indexed_doc_ids(kb_ids)
-            if not doc_ids:
-                return f"所选知识库 {sorted(found_names)} 中没有已索引的文档, 无可检索内容"
-
-            from forge.retrieval.rag_runtime import get_rag_runtime
-
-            runtime = get_rag_runtime()
-            embedder = await runtime.resolve_embedding()
-            vector_doc_ids = (
-                await doc_repo.list_vector_ready_doc_ids(
-                    kb_ids, str(cast(Any, embedder)._forge_model_id)
-                )
-                if embedder is not None else []
-            )
-            retriever = await runtime.build_retriever()
-            results = await retriever.retrieve(
-                query=query,
-                session=db,
-                doc_id_filter=doc_ids,
-                vector_doc_id_filter=vector_doc_ids,
-                top_n=top_n,
-            )
-
+            results = await search_chunks(db, kb_ids=kb_ids, query=query, top_n=top_n)
             if not results:
-                return f"在知识库 {sorted(found_names)} 中未找到与 '{query}' 相关的内容"
+                names = sorted(kb.name for kb in kbs)
+                return f"在知识库 {names} 中未找到与 '{query}' 相关的内容"
 
-            return self._format_results(results, kbs_by_id={kb.id: kb for kb in kbs})
+            return self._format_results(results)
 
     @staticmethod
-    def _format_results(results, kbs_by_id: dict) -> str:
-        """格式化结果给 LLM. 输出引用信息 (文档名 / KB / 页码) 便于 LLM
-        在最终答复里说"根据 X.pdf 第 N 页 …".
+    def _format_results(results) -> str:
+        """格式化结果给 LLM, 并把结构化 citations 写入回合收集器.
+
+        每段以 [N] 起头并携带引用信息 (文档名 / KB / 章节 / 页码), 便于 LLM
+        在最终答复里用 [N] 标注来源; citations 走 SSE 渲染为前端来源卡片.
         """
-        lines: list[str] = [f"共检索到 {len(results)} 条相关片段:\n"]
+        citations: list[dict] = []
+        lines: list[str] = [
+            f"共检索到 {len(results)} 条相关片段. 回答时请在引用处用 [编号] 标注来源:\n"
+        ]
         for i, r in enumerate(results, 1):
             content = (r.content or "").strip()
-            if len(content) > _MAX_SNIPPET_CHARS:
-                content = content[:_MAX_SNIPPET_CHARS] + "...(已截断)"
+            snippet = content
+            if len(snippet) > _MAX_SNIPPET_CHARS:
+                snippet = snippet[:_MAX_SNIPPET_CHARS] + "...(已截断)"
 
-            lines.append(f"[片段 {i}] 相关度={r.final_score:.4f}")
-            # 引用信息: 优先用人类可读字段, 没有再回退到 ID
+            # 引用信息: 优先人类可读字段, 没有再回退
             citation_parts: list[str] = []
             if r.document_name:
                 citation_parts.append(f"文档《{r.document_name}》")
@@ -172,12 +178,30 @@ class KnowledgeSearchTool(Tool):
                 citation_parts.append(f"章节: {r.header_path}")
             if r.page is not None:
                 citation_parts.append(f"第 {r.page} 页")
-            if citation_parts:
-                lines.append(" | ".join(citation_parts))
+            head = " | ".join(citation_parts) if citation_parts else "片段"
+            lines.append(f"[{i}] {head} (相关度={r.final_score:.4f})")
             if r.source_url:
                 lines.append(f"来源: {r.source_url}")
-            # 机器 ID 放最后, 给可能需要溯源的工具链路用
             lines.append(f"(document_id={r.document_id} chunk_id={r.chunk_id})")
-            lines.append(f"内容:\n{content}")
+            lines.append(f"内容:\n{snippet}")
             lines.append("")
+
+            citations.append(
+                {
+                    "index": i,
+                    "chunk_id": str(r.chunk_id),
+                    "document_id": str(r.document_id),
+                    "document_name": r.document_name or "",
+                    "content": content[:_CITATION_CONTENT_CHARS],
+                    "score": round(float(r.final_score), 4),
+                    "metadata": {
+                        "kb_name": r.kb_name or "",
+                        "page": r.page,
+                        "header_path": r.header_path or "",
+                        "source_url": r.source_url,
+                    },
+                }
+            )
+
+        add_citations(citations)
         return "\n".join(lines).rstrip()

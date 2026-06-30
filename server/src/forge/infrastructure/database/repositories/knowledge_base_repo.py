@@ -36,6 +36,34 @@ def _to_int(value: str | int | None) -> int | None:
         return None
 
 
+def _collaborator_user_ids(kb: KnowledgeBaseOrm) -> set[str]:
+    """从 collaborators JSON 提取协作者 user_id 集合 (统一成 str).
+
+    兼容两种历史形态: [{"user_id": ...}, ...] 或裸 ["uid", ...].
+    """
+    out: set[str] = set()
+    for c in kb.collaborators or []:
+        if isinstance(c, dict) and c.get("user_id") is not None:
+            out.add(str(c["user_id"]))
+        elif isinstance(c, str | int):
+            out.add(str(c))
+    return out
+
+
+def _can_read(kb: KnowledgeBaseOrm, user_id: str) -> bool:
+    """KB 可读判定: public 任何人可读; private/workspace 需 owner;
+    workspace 额外允许 collaborators 命中. 空 user_id 视为匿名, 仅 public.
+    """
+    if kb.visibility == "public":
+        return True
+    uid = (user_id or "").strip()
+    if not uid:
+        return False
+    if str(kb.owner_id) == uid:
+        return True
+    return kb.visibility == "workspace" and uid in _collaborator_user_ids(kb)
+
+
 class KnowledgeBaseRepository(BaseRepository, KnowledgeBaseStore):
     """知识库 CRUD + 按名/权限查询."""
 
@@ -55,16 +83,30 @@ class KnowledgeBaseRepository(BaseRepository, KnowledgeBaseStore):
         return await self.session.get(KnowledgeBaseOrm, _to_int(kb_id))
 
     async def get_owned(self, kb_id: str, user_id: str) -> KnowledgeBaseOrm | None:
-        """单机模式: 仅校验是否存在."""
-        _ = user_id
-        return await self.session.get(KnowledgeBaseOrm, _to_int(kb_id))
+        """写操作鉴权: 仅 owner 可得. 越权 / 不存在统一返回 None,
+        由路由折成 404 (不泄露存在性)."""
+        kb = await self.session.get(KnowledgeBaseOrm, _to_int(kb_id))
+        if kb is None or str(kb.owner_id) != (user_id or "").strip():
+            return None
+        return kb
+
+    async def get_readable(self, kb_id: str, user_id: str) -> KnowledgeBaseOrm | None:
+        """读操作鉴权: owner / collaborator / public 任一可读, 否则 None."""
+        kb = await self.session.get(KnowledgeBaseOrm, _to_int(kb_id))
+        if kb is None or not _can_read(kb, user_id):
+            return None
+        return kb
 
     async def list_for_user(self, user_id: str) -> list[KnowledgeBaseOrm]:
-        """单机模式: 列出全部 KB."""
-        _ = user_id
+        """列出当前用户可读的 KB: public + 自己拥有 + 协作参与的 workspace.
+
+        单机量级直接全量拉取后应用层按 _can_read 过滤 (collaborators 是 JSON,
+        避开 MySQL/SQLite JSON 方言差异); 数据量增大后可改 SQL 收窄.
+        """
+        uid = (user_id or "").strip()
         stmt = select(KnowledgeBaseOrm).order_by(KnowledgeBaseOrm.created_at.desc())
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        return [kb for kb in result.scalars().all() if _can_read(kb, uid)]
 
     async def delete(self, kb: KnowledgeBaseOrm) -> None:
         """删除 KB (硬删除, CASCADE 会带走 kb_documents 与 kb_document_chunks)."""
@@ -102,8 +144,8 @@ class KnowledgeBaseRepository(BaseRepository, KnowledgeBaseStore):
             - workspace / private 中 owner_id == user_id → 可读
             - workspace 中 user_id 在 collaborators 里     → 可读 (TODO: 暂未实现)
 
-        TODO: collaborators 是 JSON 列表, 真实工作区协作模型上线后再补
-              MySQL JSON_CONTAINS 路径过滤. 当前 workspace 仅 owner 可读.
+        collaborators 以应用层 _can_read 判定 (避开 JSON 方言); workspace 中
+        命中 collaborators 的用户也可读.
 
         Args:
             names:    KB 显示名列表; 空列表返回 []
@@ -115,8 +157,19 @@ class KnowledgeBaseRepository(BaseRepository, KnowledgeBaseStore):
         if not names:
             return []
 
-        _ = user_id
-
         stmt = select(KnowledgeBaseOrm).where(KnowledgeBaseOrm.name.in_(names))
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        return [kb for kb in result.scalars().all() if _can_read(kb, user_id)]
+
+    async def find_accessible_by_ids(
+        self,
+        kb_ids: list[str],
+        user_id: str,
+    ) -> list[KnowledgeBaseOrm]:
+        """按稳定 KB ID 查可访问的 KB。供工具调用优先使用。"""
+        ids = [i for i in (_to_int(k) for k in kb_ids) if i is not None]
+        if not ids:
+            return []
+        stmt = select(KnowledgeBaseOrm).where(KnowledgeBaseOrm.id.in_(ids))
+        result = await self.session.execute(stmt)
+        return [kb for kb in result.scalars().all() if _can_read(kb, user_id)]

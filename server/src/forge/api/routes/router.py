@@ -13,6 +13,7 @@ from forge.api.routes.v1 import (
     auth,
     chat,
     files,
+    kb,
     llm,
     models,
     providers,
@@ -29,6 +30,7 @@ v1.include_router(auth.router, prefix="/auth", tags=["auth"])
 v1.include_router(sessions.router)
 v1.include_router(chat.router, prefix="/chat", tags=["chat"])
 v1.include_router(files.router, tags=["files"])
+v1.include_router(kb.router)
 v1.include_router(llm.router)
 v1.include_router(users.router)
 v1.include_router(api_keys.router)

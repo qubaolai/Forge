@@ -21,7 +21,7 @@
 {% if kb_list is defined and kb_list %}
 ## 可用知识库
 {% for kb in kb_list %}
-- {{ kb.name }}{% if kb.description %}: {{ kb.description }}{% endif %}
+- {{ kb.name }} (kb_id={{ kb.id }}){% if kb.description %}: {{ kb.description }}{% endif %}
 {% endfor %}
 {% endif %}
 

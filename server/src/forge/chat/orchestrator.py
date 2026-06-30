@@ -57,10 +57,12 @@ from forge.context_mgmt.types import (
 )
 from forge.core.content_merge import ResumeStreamDedup
 from forge.core.request_context import (
+    collected_citations,
     set_assistant_message_id,
     set_session_id,
     set_trace_id,
     set_user_id,
+    start_citation_collection,
 )
 from forge.core.types.message import Message, ToolCall
 from forge.infrastructure.database.database import session_scope
@@ -248,6 +250,8 @@ class TurnOrchestrator:
         set_user_id(ctx.user_id)
         set_session_id(ctx.session_id)
         set_assistant_message_id(ctx.assistant_msg_id)
+        # 本回合检索来源收集 (knowledge_search append, 回合末统一发 SSE + 落库)
+        start_citation_collection()
 
         # 1. lifecycle 事件 (session_created / session_renamed / message_start)
         for ev in _lifecycle_events(ctx):
@@ -318,9 +322,14 @@ class TurnOrchestrator:
             if file_ev is not None:
                 await run.emit(file_ev)
 
-        # 4. finalize (写 DB)
+        # 4. citations: 本回合 knowledge_search 命中的来源, 发 SSE + 落库
+        citations = collected_citations()
+        if citations:
+            await run.emit({"type": "citations", "citations": citations})
+
+        # 5. finalize (写 DB)
         final_event = await self._finalizer.finalize(
-            ctx, runner.result, snapshot,
+            ctx, runner.result, snapshot, citations=citations or None,
         )
         if final_event is not None:
             await run.emit(final_event.to_dict())
@@ -347,6 +356,7 @@ class TurnOrchestrator:
         set_user_id(ctx.user_id)
         set_session_id(ctx.session_id)
         set_assistant_message_id(ctx.assistant_msg_id)
+        start_citation_collection()
 
         await run.emit({
             "type": "message_resumed",
@@ -418,8 +428,13 @@ class TurnOrchestrator:
         if tail:
             await run.emit({"type": "delta", "content": tail})
 
+        citations = collected_citations()
+        if citations:
+            await run.emit({"type": "citations", "citations": citations})
+
         final_event = await self._finalizer.finalize(
             ctx, runner.result, snapshot, prev_state=prev_state,
+            citations=citations or None,
         )
         if final_event is not None:
             await run.emit(final_event.to_dict())

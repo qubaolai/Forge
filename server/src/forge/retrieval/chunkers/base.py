@@ -241,7 +241,7 @@ class BaseChunker(ABC):
         return Chunk(
             chunk_id=chunk_id,
             chunk_type=ChunkType.CHILD,
-            content=parent.header_path + "->" + content,
+            content=content,
             source_type=parent.source_type,
             header_path=parent.header_path,
             parent_id=parent.chunk_id,

@@ -113,4 +113,6 @@ class CelerySettings(BaseSettings):
         "forge.observability.cost.tasks",
         "forge.context_mgmt.digest.tasks",
         "forge.context_mgmt.recall.tasks",
+        "forge.retrieval.rebuild_tasks",
+        "forge.retrieval.ingest_tasks",
     ]

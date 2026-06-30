@@ -10,6 +10,7 @@ async def test_vector_rebuild_does_not_touch_bm25_or_document_status(monkeypatch
     from forge.api.services.kb_ingest_service import KbIngestService
     from forge.core.types import Chunk, ChunkType
     from forge.infrastructure.database.orm.kb_document_orm import KbDocumentOrm
+    from forge.infrastructure.database.orm.knowledge_base_orm import KnowledgeBaseOrm
 
     class Embedder:
         _forge_model_id = "9001"
@@ -55,6 +56,15 @@ async def test_vector_rebuild_does_not_touch_bm25_or_document_status(monkeypatch
             _ = elements, doc_version
             return [
                 Chunk(
+                    chunk_id="p1",
+                    chunk_type=ChunkType.PARENT,
+                    content="content",
+                    source_type="text",
+                    header_path="title",
+                    doc_id=str(doc_id),
+                    chunk_hash="hash",
+                ),
+                Chunk(
                     chunk_id="c1",
                     chunk_type=ChunkType.CHILD,
                     content="content",
@@ -79,6 +89,20 @@ async def test_vector_rebuild_does_not_touch_bm25_or_document_status(monkeypatch
         rag_runtime=runtime,
         parser_dispatcher=Dispatcher(),
     )
+    manifest_checked = False
+
+    async def assert_manifest_unchanged(**kwargs) -> None:
+        nonlocal manifest_checked
+        assert kwargs["session"] is fake_session
+        assert kwargs["document"].id == 1001
+        assert [p.chunk_id for p in kwargs["parents"]] == ["p1"]
+        manifest_checked = True
+
+    monkeypatch.setattr(
+        service,
+        "_assert_parent_manifest_unchanged",
+        assert_manifest_unchanged,
+    )
     document = KbDocumentOrm(
         id=1001,
         kb_id=2001,
@@ -88,6 +112,15 @@ async def test_vector_rebuild_does_not_touch_bm25_or_document_status(monkeypatch
         status="indexed",
         vector_index_status="stale",
     )
+    kb = KnowledgeBaseOrm(
+        id=2001,
+        name="kb",
+        visibility="private",
+        owner_id=1,
+        chunk_size=512,
+        chunk_overlap=64,
+    )
+    fake_session = object()
     guard_called = False
 
     async def guard() -> None:
@@ -95,11 +128,14 @@ async def test_vector_rebuild_does_not_touch_bm25_or_document_status(monkeypatch
         guard_called = True
 
     result = await service.rebuild_vector_index(
+        session=fake_session,
+        kb=kb,
         document=document,
         file_path=Path("doc.txt"),
         before_vector_write=guard,
     )
 
+    assert manifest_checked is True
     assert guard_called is True
     assert result["status"] == "ready"
     assert document.status == "indexed"

@@ -73,6 +73,37 @@ def set_assistant_message_id(message_id: str):
     return _ASSISTANT_MESSAGE_ID.set(message_id or "")
 
 
+# ---- citations (chat turn 内有效) ----
+# 检索类工具 (knowledge_search) 产出引用来源时往这里 append, 回合结束由
+# orchestrator 收集发 citations SSE + 落 chat_messages.citations。
+# 非 chat 场景 (如 /kb/{id}/search 检索测试) 不开启收集, add 静默忽略。
+_CITATIONS: ContextVar[list[dict] | None] = ContextVar("citations", default=None)
+
+
+def start_citation_collection() -> None:
+    """开启本回合 citation 收集 (chat 回合开始调一次)。"""
+    _CITATIONS.set([])
+
+
+def add_citations(items: list[dict]) -> None:
+    """追加引用来源。未开启收集时静默忽略 (工具在非 chat 场景也能跑)。"""
+    bucket = _CITATIONS.get()
+    if bucket is None:
+        return
+    bucket.extend(items)
+
+
+def collected_citations() -> list[dict]:
+    """读取本回合累计的 citations (orchestrator 回合结束调)。"""
+    bucket = _CITATIONS.get()
+    return list(bucket) if bucket else []
+
+
+def reset_citation_collection() -> None:
+    """关闭收集 (回合结束清理, 避免跨回合串味)。"""
+    _CITATIONS.set(None)
+
+
 # ---- client_type ----
 def current_client_type() -> ClientType:
     return _CLIENT_TYPE.get()

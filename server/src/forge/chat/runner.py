@@ -26,6 +26,7 @@ from forge.chat.guards import (
     TokenBudgetGuard,
     WallClockGuard,
 )
+from forge.chat.knowledge_gate import KnowledgeSearchToolGate
 from forge.chat.types import RunResult, TurnContext
 from forge.config.domains.agent_profiles import AgentProfile
 from forge.core.types.message import Message
@@ -122,7 +123,13 @@ class ReActRunner(AgentRunner):
         guards: list[LoopGuard] = [
             factory(self._max_steps) for factory in self._build_guard_factories()
         ]
-        lifecycle = MultiLifecycle([GuardLifecycleAdapter(guards)])
+        lifecycle = MultiLifecycle([
+            KnowledgeSearchToolGate(
+                tools=self._tools,
+                user_message=ctx.current_user_message,
+            ),
+            GuardLifecycleAdapter(guards),
+        ])
 
         run_ctx = RunContext(
             user_id=ctx.user_id,
