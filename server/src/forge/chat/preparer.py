@@ -199,7 +199,10 @@ def _append_file_placeholders(message: str, attachments) -> str:
 async def _bind_attachments(
     db, attachments, user_id: str, session_id: str, message_id: str
 ) -> None:
-    """把上传附件绑定到产生它的 user 消息 (校验归属: owner + session 一致)。"""
+    """把上传文件回填到会话与产生它的 user 消息 (校验 owner 归属)。
+
+    上传文件在上传时与会话解耦 (session_id 为空), 这里发消息时才回填关系。
+    """
     fids = [
         str(getattr(a, "id", None) or getattr(a, "file_id", None))
         for a in (attachments or [])
@@ -207,15 +210,15 @@ async def _bind_attachments(
     ]
     if not fids:
         return
-    from forge.infrastructure.database.repositories.chat_file_repo import (
-        ChatFileRepository,
+    from forge.infrastructure.database.repositories.user_file_repo import (
+        UserFileRepository,
     )
 
-    repo = ChatFileRepository(db)
+    repo = UserFileRepository(db)
     for fid in fids:
-        meta = await repo.get_by_id(fid)
-        if meta and meta.owner_user_id == user_id and meta.session_id == session_id:
-            await repo.bind_message(fid, message_id)
+        await repo.bind_session_and_message(
+            fid, session_id, message_id, owner_user_id=user_id
+        )
 
 
 def _make_title(text: str, max_len: int = 25) -> str:
@@ -261,7 +264,7 @@ async def _make_title_with_utility_llm(text: str, model_options, max_len: int = 
                     ),
                     ChatMessage(role="user", content=text),
                 ],
-                temperature=0.2,
+                temperature=0.1,
                 max_tokens=32,
                 task_type="utility",
                 model_profile="fast",

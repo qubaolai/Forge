@@ -89,12 +89,15 @@ async def list_messages(
 ):
     await svc.get_owned(session_id, user.user_id)  # 校验归属
     items, total = await svc.list_messages(session_id, page, page_size)
-    files_map = await svc.files_by_message(session_id)
+    # 两类文件分离: 生成文件挂 assistant 消息, 上传文件挂 user 消息, 按角色分流不合并。
+    generated_map = await svc.files_by_message(session_id)
+    uploads_map = await svc.uploads_by_message(session_id)
     items_out = []
     for i in items:
         d = MessageOut.model_validate(i).model_dump(mode="json")
         d["context_usage"] = _derive_context_usage(getattr(i, "context_meta", None))
-        d["files"] = files_map.get(d["id"], [])
+        role_map = uploads_map if d.get("role") == "user" else generated_map
+        d["files"] = role_map.get(d["id"], [])
         items_out.append(d)
     return success(
         {

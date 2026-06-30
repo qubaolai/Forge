@@ -115,10 +115,9 @@ export const systemApi = {
 
 // ---- 会话文件：附件上传 / 预览 / 下载 ----
 export const filesApi = {
-  /** 上传会话附件 (超阈值大段输入 / 文件), 返回文件元数据 */
-  uploadAttachment: (sessionId: string, file: File) => {
+  /** 上传用户文件 (与会话解耦, 发消息时再回填会话关系), 返回文件元数据 */
+  uploadAttachment: (file: File) => {
     const form = new FormData();
-    form.append('session_id', sessionId);
     form.append('file', file);
     return apiClient.post<{ id: string; name: string; size_bytes: number; mime_type?: string | null }>(
       '/chat/attachments',

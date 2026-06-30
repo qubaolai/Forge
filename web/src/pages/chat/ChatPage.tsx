@@ -247,19 +247,9 @@ export default function ChatPage() {
     send(targetSid, text, attachments, modelOptions);
   }
 
-  /** 上传会话附件: 新会话先建会话拿真实 id (附件需归属会话沙盒) */
+  /** 上传用户文件: 与会话解耦, 上传时不建会话 (发消息时后端再回填会话关系) */
   async function handleUploadAttachment(file: File): Promise<{ id: string; name: string }> {
-    let sid = ensuredSessionIdRef.current ?? (isNew || noSession ? null : sessionId ?? null);
-    if (!sid) {
-      const s = await sessionsApi.create();
-      sid = s.id;
-      ensuredSessionIdRef.current = sid;
-      skipResetRef.current = true; // 导航到真实会话时跳过 Effect 清场
-      qc.setQueryData(['session', sid], s);
-      qc.invalidateQueries({ queryKey: ['sessions'] });
-      navigate(`/chat/${sid}`, { replace: true });
-    }
-    const res = await filesApi.uploadAttachment(sid, file);
+    const res = await filesApi.uploadAttachment(file);
     return { id: res.id, name: res.name };
   }
 

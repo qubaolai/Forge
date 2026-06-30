@@ -151,9 +151,18 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
                     next.reasoning_duration_ms = e.reasoning_duration_ms;
                   }
                   break;
-                case 'tool_call':
-                  next.tool_calls = [...(prev.tool_calls || []), e.tool_call];
+                case 'tool_call': {
+                  // 按 id upsert: 工具「起手」时先来一条 running 占位 (arguments 空),
+                  // 参数生成完后再来一条补全 arguments, 合并到同一张卡片而非新增。
+                  const incoming = e.tool_call;
+                  const list = prev.tool_calls || [];
+                  const idx = list.findIndex((tc) => tc.id === incoming.id);
+                  next.tool_calls =
+                    idx >= 0
+                      ? list.map((tc, i) => (i === idx ? { ...tc, ...incoming } : tc))
+                      : [...list, incoming];
                   break;
+                }
                 case 'tool_result': {
                   next.tool_calls = (prev.tool_calls || []).map((tc): ToolCall =>
                     tc.id === e.tool_call_id
@@ -302,9 +311,17 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
                 next.reasoning_content = (prev.reasoning_content || '') + e.content;
                 next.status = 'streaming';
                 break;
-              case 'tool_call':
-                next.tool_calls = [...(prev.tool_calls || []), e.tool_call];
+              case 'tool_call': {
+                // 同上: 按 id upsert, 兼容提前 running 占位 + 后续补全, 回放亦幂等。
+                const incoming = e.tool_call;
+                const list = prev.tool_calls || [];
+                const idx = list.findIndex((tc) => tc.id === incoming.id);
+                next.tool_calls =
+                  idx >= 0
+                    ? list.map((tc, i) => (i === idx ? { ...tc, ...incoming } : tc))
+                    : [...list, incoming];
                 break;
+              }
               case 'tool_result': {
                 next.tool_calls = (prev.tool_calls || []).map((tc): ToolCall =>
                   tc.id === e.tool_call_id

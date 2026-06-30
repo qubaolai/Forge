@@ -34,6 +34,8 @@ __all__ = [
     # 会话沙盒 (workspace)
     "workspace_dir",
     "session_workspace_dir",
+    # 用户上传文件 (与会话/沙盒解耦)
+    "user_uploads_dir",
     # 任务 / 日志 / 审计
     "tasks_db_path",
     "cost_log_path",
@@ -136,6 +138,19 @@ def workspace_dir() -> Path:
 def session_workspace_dir(user_id: str, session_id: str) -> Path:
     """某个用户某个会话的沙盒目录。启动时按需创建。"""
     return _mkdir(workspace_dir() / user_id / session_id)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 用户上传文件: 与会话/沙盒解耦, 按「用户/日期/文件名」组织
+#   <user_uploads>/<user_id>/<YYYY-MM-DD>/<filename>
+#   承载: 用户主动上传的附件 (txt/md/word/excel/pdf/源码), 区别于 LLM 生成沙盒。
+#   生命周期: 上传时不绑会话, 发消息时回填会话关系; 长期未关联的孤儿文件定期清理。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def user_uploads_dir() -> Path:
+    """所有用户上传文件的根目录 (区别于 KB 的 kb/uploads)。"""
+    return _mkdir(app_data_dir() / "user_uploads")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

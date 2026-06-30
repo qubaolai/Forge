@@ -481,7 +481,7 @@ def _file_created_event(ed: dict, tool_names: dict[str, str]) -> dict | None:
         return None
     if etype != "tool_result" or ed.get("status") != "success":
         return None
-    if tool_names.get(ed.get("tool_call_id")) != "write_file":
+    if tool_names.get(ed.get("tool_call_id", "")) != "write_file":
         return None
     try:
         data = json.loads(ed.get("result") or "")

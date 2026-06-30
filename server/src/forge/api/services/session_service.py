@@ -93,27 +93,70 @@ class SessionService:
 
     @staticmethod
     async def _delete_files(session: SessionView) -> None:
-        """级联清理会话文件 (元数据 + 物理沙盒目录), best-effort: 失败不阻断删除主流程。"""
+        """级联清理会话文件, best-effort: 失败不阻断删除主流程。
+
+        两类文件分别清理:
+            - 生成沙盒 (chat_files + WorkspaceStorage): 删元数据 + 整会话目录。
+            - 用户上传 (user_files + UserUploadStorage): 删元数据 + 逐文件物理删。
+        """
         try:
             from forge.infrastructure.database.database import session_scope
             from forge.infrastructure.database.repositories.chat_file_repo import (
                 ChatFileRepository,
             )
+            from forge.infrastructure.database.repositories.user_file_repo import (
+                UserFileRepository,
+            )
+            from forge.infrastructure.storage.user_upload_storage import (
+                UserUploadStorage,
+            )
             from forge.infrastructure.storage.workspace_storage import WorkspaceStorage
 
             async with session_scope() as db:
                 await ChatFileRepository(db).delete_by_session(session.id)
+                upload_paths = await UserFileRepository(db).delete_by_session(session.id)
             WorkspaceStorage().delete_session(session.user_id, session.id)
+            ups = UserUploadStorage()
+            for sp in upload_paths:
+                ups.delete(sp)
         except Exception as exc:  # noqa: BLE001
             logger.warning("会话文件级联清理失败 session=%s: %s", session.id, exc)
 
     async def files_by_message(self, session_id: str) -> dict[str, list[dict]]:
-        """按 message_id 分组会话文件 (供 MessageOut.files 历史回看填充)。"""
+        """按 message_id 分组 LLM 生成文件 (chat_files / source=generated)。
+
+        生成文件挂在 assistant 消息。与用户上传文件分离, 不合并 (见 uploads_by_message)。
+        """
         from forge.infrastructure.database.repositories.chat_file_repo import (
             ChatFileRepository,
         )
 
         files = await ChatFileRepository(self.db).list_by_session(session_id)
+        grouped: dict[str, list[dict]] = {}
+        for f in files:
+            if not f.message_id:
+                continue
+            grouped.setdefault(f.message_id, []).append(
+                {
+                    "id": f.id,
+                    "name": f.filename,
+                    "source": f.source,
+                    "size_bytes": f.size_bytes,
+                    "mime_type": f.mime_type,
+                }
+            )
+        return grouped
+
+    async def uploads_by_message(self, session_id: str) -> dict[str, list[dict]]:
+        """按 message_id 分组用户上传文件 (user_files / source=upload)。
+
+        上传文件挂在 user 消息。与 LLM 生成文件分离, 单独显示, 不合并。
+        """
+        from forge.infrastructure.database.repositories.user_file_repo import (
+            UserFileRepository,
+        )
+
+        files = await UserFileRepository(self.db).list_by_session(session_id)
         grouped: dict[str, list[dict]] = {}
         for f in files:
             if not f.message_id:

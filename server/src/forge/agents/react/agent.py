@@ -174,7 +174,9 @@ class ReActAgent(BaseAgent):
         """ReAct 真流式执行.
 
         底层走 chat_with_tools_stream: content token 边生成边吐 delta,
-        tool_calls 在 finish_reason='tool_calls' 时一次性产出.
+        tool_calls 在 finish_reason='tool_calls' 时一次性产出 (完整 arguments);
+        provider 另会在工具「起手」时吐 tool_call_started 信号, 据此提前下发
+        tool_call(running) 占位, 填补「干等参数流式生成完」的空白窗口。
 
         Args:
             lifecycle: 生命周期扩展点 (守护 / 持久化 / 动态工具集等都通过它接入).
@@ -270,6 +272,9 @@ class ReActAgent(BaseAgent):
                     step_reasoning = ""
                     step_reasoning_start: float | None = None
                     reasoning_phase_open = False
+                    # 本步已提前下发过 running 占位的 tool_call id (流式 started 信号),
+                    # 阶段 1 据此只补全 arguments 而非重复创建。
+                    announced_call_ids: set[str] = set()
 
                     # ---- 流式 LLM 调用（span 只覆盖推理阶段，不含工具执行）----
                     with span(
@@ -334,6 +339,40 @@ class ReActAgent(BaseAgent):
                                     yield AgentEvent(
                                         "reasoning_delta",
                                         {"content": reasoning_delta},
+                                    )
+
+                                # 工具调用「起手」信号: 模型刚决定调某工具 (name 已定,
+                                # arguments 可能还在流式生成)。立刻下发 running 占位,
+                                # 填补「干等参数生成完」那段空白, 改善读写文件体验。
+                                for started in chunk.get("tool_call_started") or []:
+                                    s_id = str(started.get("id") or "")
+                                    s_name = str(started.get("name") or "")
+                                    if not s_id or s_id in announced_call_ids:
+                                        continue
+                                    # 起手前先收尾 reasoning 阶段, 保证 reasoning_end
+                                    # 始终早于 tool_call (与收到 content delta 时一致)。
+                                    if step_reasoning_start is not None:
+                                        accumulated_reasoning_ms += int(
+                                            (time.perf_counter() - step_reasoning_start) * 1000
+                                        )
+                                        step_reasoning_start = None
+                                    if reasoning_phase_open:
+                                        yield AgentEvent(
+                                            "reasoning_end",
+                                            {"reasoning_duration_ms": accumulated_reasoning_ms},
+                                        )
+                                        reasoning_phase_open = False
+                                    announced_call_ids.add(s_id)
+                                    started_record = {
+                                        "id": s_id,
+                                        "tool_id": s_name,
+                                        "tool_name": s_name,
+                                        "arguments": {},
+                                        "status": "running",
+                                    }
+                                    accumulated_tool_calls.append(started_record)
+                                    yield AgentEvent(
+                                        "tool_call", {"tool_call": started_record}
                                     )
 
                                 if chunk.get("tool_calls"):
@@ -402,6 +441,19 @@ class ReActAgent(BaseAgent):
 
                     if abort_event and abort_event.is_set():
                         finish_reason = "aborted"
+                        # 流式中途被中断: 之前提前 announce 过 running 的工具尚未执行,
+                        # 补 aborted 收尾, 防前端 tool 卡片一直转圈。
+                        for rec in accumulated_tool_calls:
+                            if rec["id"] in announced_call_ids and rec["status"] == "running":
+                                rec["status"] = "aborted"
+                                yield AgentEvent(
+                                    "tool_result",
+                                    {
+                                        "tool_call_id": rec["id"],
+                                        "result": "用户中断, 工具未执行",
+                                        "status": "aborted",
+                                    },
+                                )
                         break
 
                     # ---- 没有 tool_calls: 终态, 已经流完所有 delta ----
@@ -424,8 +476,20 @@ class ReActAgent(BaseAgent):
                         )
                     )
 
-                    # 阶段 1: 先把所有 tool_call 事件按 LLM 给的顺序 yield 出去
+                    # 阶段 1: 按 LLM 给的顺序下发 tool_call 事件。已在流式阶段提前
+                    # announce 过 running 占位的, 这里只补全 arguments 再 upsert
+                    # (前端按 id 合并); 未 announce 的 (如非 OpenAI 兼容 provider)
+                    # 照旧首次创建并下发。
                     for tc in step_tool_calls:
+                        if tc.id in announced_call_ids:
+                            for rec in accumulated_tool_calls:
+                                if rec["id"] == tc.id:
+                                    rec["arguments"] = tc.arguments
+                                    rec["tool_id"] = tc.name
+                                    rec["tool_name"] = tc.name
+                                    yield AgentEvent("tool_call", {"tool_call": rec})
+                                    break
+                            continue
                         tc_record = {
                             "id": tc.id,
                             "tool_id": tc.name,

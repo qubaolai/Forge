@@ -59,7 +59,11 @@ class ReadFile(Tool):
         from forge.infrastructure.database.repositories.chat_file_repo import (
             ChatFileRepository,
         )
+        from forge.infrastructure.database.repositories.user_file_repo import (
+            UserFileRepository,
+        )
         from forge.infrastructure.storage.content_store import slice_text
+        from forge.infrastructure.storage.user_upload_storage import UserUploadStorage
         from forge.infrastructure.storage.workspace_storage import WorkspaceStorage
 
         file_id = str(args.get("file_id") or "").strip()
@@ -71,15 +75,29 @@ class ReadFile(Tool):
         if not user_id:
             return {"ok": False, "error": "缺少用户上下文, 拒绝执行"}
 
+        # 读文件不限来源: 先查用户上传 (user_files), 未命中再查生成沙盒 (chat_files)。
+        filename: str | None = None
+        storage: UserUploadStorage | WorkspaceStorage | None = None
+        storage_path: str | None = None
         factory = get_session_factory()
         async with factory() as db:
-            meta = await ChatFileRepository(db).get_by_id(file_id)
+            uf = await UserFileRepository(db).get_by_id(file_id)
+            if uf is not None and uf.owner_user_id == user_id:
+                filename, storage, storage_path = (
+                    uf.filename, UserUploadStorage(), uf.storage_path,
+                )
+            else:
+                cf = await ChatFileRepository(db).get_by_id(file_id)
+                if cf is not None and cf.owner_user_id == user_id:
+                    filename, storage, storage_path = (
+                        cf.filename, WorkspaceStorage(), cf.storage_path,
+                    )
         # 越权一律当作「未找到」(不泄露存在性)
-        if meta is None or meta.owner_user_id != user_id:
+        if storage is None or storage_path is None:
             return {"ok": False, "error": f"文件未找到或无权访问: {file_id}"}
 
         try:
-            content = WorkspaceStorage().read_text(meta.storage_path)
+            content = storage.read_text(storage_path)
         except (FileNotFoundError, ValueError, OSError):
             return {"ok": False, "error": f"文件内容读取失败: {file_id}"}
 
@@ -88,7 +106,7 @@ class ReadFile(Tool):
         return {
             "ok": True,
             "file_id": file_id,
-            "filename": meta.filename,
+            "filename": filename,
             "text": sl.text,
             "total_lines": sl.total_lines,
             "returned_range": list(sl.returned_range),

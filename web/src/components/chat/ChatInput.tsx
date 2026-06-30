@@ -33,6 +33,30 @@ const THINKING_LEVEL_LABELS: Record<ThinkingLevel, string> = {
   xhigh: '超高',
 };
 
+// 允许上传的扩展名 (与后端 file_validation 白名单对齐): 文档 / office / pdf / 源码。
+// 不含可执行程序与脚本 (.exe/.sh/.bat/.ps1 等), 防木马由后端 magic-byte 二次把关。
+const ALLOWED_UPLOAD_EXTS = [
+  '.txt', '.md', '.markdown', '.rtf', '.csv', '.log',
+  '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.pdf',
+  '.py', '.pyi', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue',
+  '.java', '.kt', '.scala', '.go', '.rs', '.c', '.h', '.cpp', '.hpp',
+  '.cc', '.cxx', '.cs', '.rb', '.php', '.swift', '.m', '.mm', '.lua',
+  '.pl', '.r', '.dart', '.sql', '.json', '.yaml', '.yml', '.toml',
+  '.ini', '.cfg', '.xml', '.html', '.htm', '.css', '.scss', '.less',
+  '.tex', '.gradle', '.proto', '.graphql', '.tsv', '.env',
+];
+// input accept 属性: 扩展名列表 (浏览器只做提示, 真正限制在 JS 校验 + 后端)。
+const UPLOAD_ACCEPT = ALLOWED_UPLOAD_EXTS.join(',');
+
+function fileExt(name: string): string {
+  const i = name.lastIndexOf('.');
+  return i >= 0 ? name.slice(i).toLowerCase() : '';
+}
+
+function isAllowedUpload(file: File): boolean {
+  return ALLOWED_UPLOAD_EXTS.includes(fileExt(file.name));
+}
+
 export function ChatInput({
   onSend,
   onAbort,
@@ -53,6 +77,7 @@ export function ChatInput({
   const [value, setValue] = useState('');
   const [attachments, setAttachments] = useState<{ id: string; name: string }[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // 粘贴文本超过该字符数时自动转为会话附件 (降上下文占用, 后端 read_file 按需读取)
@@ -60,12 +85,18 @@ export function ChatInput({
 
   async function uploadFile(file: File) {
     if (!onUploadAttachment) return;
+    // 前置类型校验: 不允许可执行程序/脚本等非白名单类型 (后端还会二次把关)
+    if (!isAllowedUpload(file)) {
+      setUploadError(`不支持的文件类型: ${file.name}; 仅支持文档/表格/PDF 及源代码文件`);
+      return;
+    }
+    setUploadError('');
     setUploading(true);
     try {
       const res = await onUploadAttachment(file);
       setAttachments((prev) => [...prev, { id: res.id, name: res.name }]);
     } catch {
-      // 上传失败: 静默 (保留输入, 用户可重试)
+      setUploadError(`上传失败: ${file.name}`);
     } finally {
       setUploading(false);
     }
@@ -170,6 +201,15 @@ export function ChatInput({
             )}
           </div>
         )}
+        {uploadError && (
+          <div className="mb-2 flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-[12px] text-red-600">
+            <X size={12} className="shrink-0 text-red-400" />
+            <span className="flex-1">{uploadError}</span>
+            <button onClick={() => setUploadError('')} className="text-red-400 hover:text-red-700" title="关闭">
+              <X size={12} />
+            </button>
+          </div>
+        )}
         <div
           className="flex items-end gap-2 rounded-2xl border px-3 py-2.5 transition-colors
             focus-within:border-gray-400 focus-within:shadow-sm"
@@ -180,6 +220,7 @@ export function ChatInput({
                 ref={fileInputRef}
                 type="file"
                 multiple
+                accept={UPLOAD_ACCEPT}
                 className="hidden"
                 onChange={handleFilePick}
               />
