@@ -104,6 +104,7 @@ ingest:
     strategy: hierarchical
     chunk_size: 500
     chunk_overlap: 50
+    excel_child_rows: 1  # Excel 行级子块行数 (1=行级检索最精准, 增大可降成本)
 
 vector_store:
   provider: chroma
@@ -125,6 +126,9 @@ bm25_store:
 retrieval:
   top_n_parent: 5
   top_m_for_rerank: 20
+  # 回灌给 LLM 的 token 预算 (父块回灌框架)
+  recall_context_max_tokens: 6000
+  snippet_min_tokens: 400
   recall:
     vector:
       enabled: true
@@ -141,6 +145,10 @@ retrieval:
     score_agg: max
   rerank:
     enabled: true
+  hyde:
+    enabled: false
+    max_tokens: 200
+    concat_original: true
 
 observability:
   tracing:

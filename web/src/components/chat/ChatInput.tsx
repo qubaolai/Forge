@@ -102,8 +102,8 @@ export function ChatInput({
     try {
       const res = await onUploadAttachment(file);
       setAttachments((prev) => [...prev, { id: res.id, name: res.name }]);
-    } catch {
-      setUploadError(`上传失败: ${file.name}`);
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : `上传失败: ${file.name}`);
     } finally {
       setUploading(false);
     }

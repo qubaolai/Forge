@@ -35,14 +35,16 @@ from forge.infrastructure.database.repositories.knowledge_base_repo import (
 )
 from forge.llm.cost_tracker import LLMBudgetExceeded
 from forge.retrieval.common.excerpt import build_query_focused_excerpt
+from forge.retrieval.rendering import render_parent_snippet
 from forge.tools.base import Tool
 from forge.tools.registry import register_tool
 
 logger = logging.getLogger(__name__)
 
-# 单条片段返回给 LLM 时的内容截断 (字符数). 超长会浪费 LLM 上下文.
-_MAX_SNIPPET_CHARS = 1200
-# 落 citation 的片段摘要长度 (前端来源卡片展示用, 比给 LLM 的更短).
+# 回灌预算兜底 (读不到 settings 时用). 实际值以 settings.retrieval 为准.
+_DEFAULT_RECALL_CONTEXT_MAX_TOKENS = 6000
+_DEFAULT_SNIPPET_MIN_TOKENS = 400
+# 落 citation 的片段摘要长度 (前端来源卡片展示用, 比给 LLM 的更短, 字符数即可).
 _CITATION_CONTENT_CHARS = 500
 
 
@@ -188,26 +190,60 @@ class KnowledgeSearchTool(Tool):
                 names = sorted(kb.name for kb in kbs)
                 return f"在知识库 {names} 中未找到与 '{query}' 相关的内容"
 
-            return self._format_results(results, query=query)
+            total_budget, min_budget = self._resolve_snippet_budget()
+            return self._format_results(
+                results,
+                query=query,
+                total_budget_tokens=total_budget,
+                min_snippet_tokens=min_budget,
+            )
 
     @staticmethod
-    def _format_results(results, query: str = "") -> str:
+    def _resolve_snippet_budget() -> tuple[int, int]:
+        """读取回灌 token 预算, settings 不可用时用兜底默认."""
+        try:
+            from forge.config.settings import get_settings
+
+            rcfg = get_settings().retrieval
+            return int(rcfg.recall_context_max_tokens), int(rcfg.snippet_min_tokens)
+        except Exception:  # noqa: BLE001
+            return _DEFAULT_RECALL_CONTEXT_MAX_TOKENS, _DEFAULT_SNIPPET_MIN_TOKENS
+
+    @staticmethod
+    def _format_results(
+        results,
+        query: str = "",
+        *,
+        total_budget_tokens: int = _DEFAULT_RECALL_CONTEXT_MAX_TOKENS,
+        min_snippet_tokens: int = _DEFAULT_SNIPPET_MIN_TOKENS,
+    ) -> str:
         """格式化结果给 LLM, 并把结构化 citations 写入回合收集器.
 
         每段以 [N] 起头并携带引用信息 (文档名 / KB / 章节 / 页码), 便于 LLM
         在最终答复里用 [N] 标注来源; citations 走 SSE 渲染为前端来源卡片.
+
+        回灌预算: 总预算 total_budget_tokens 均分到各片段 (每条不低于
+        min_snippet_tokens); 片段数超出预算可容纳数时, 按 final_score 保留
+        前若干条 (results 已按分数降序), 丢弃的条数在开头提示.
         """
+        # 预算分配: 尽量给每条 min 预算, 不够则按分数只保留能装下的前 K 条
+        max_snippets = max(1, total_budget_tokens // max(1, min_snippet_tokens))
+        kept = list(results[:max_snippets])
+        dropped = len(results) - len(kept)
+        per_budget = (
+            max(min_snippet_tokens, total_budget_tokens // len(kept))
+            if kept
+            else min_snippet_tokens
+        )
+
+        header = f"共检索到 {len(results)} 条相关片段"
+        if dropped > 0:
+            header += f"（因篇幅仅展示相关度最高的 {len(kept)} 条，省略 {dropped} 条）"
         citations: list[dict] = []
-        lines: list[str] = [
-            f"共检索到 {len(results)} 条相关片段. 回答时请在引用处用 [编号] 标注来源:\n"
-        ]
-        for i, r in enumerate(results, 1):
+        lines: list[str] = [header + ". 回答时请在引用处用 [编号] 标注来源:\n"]
+        for i, r in enumerate(kept, 1):
             content = (r.content or "").strip()
-            snippet = build_query_focused_excerpt(
-                content,
-                query,
-                max_chars=_MAX_SNIPPET_CHARS,
-            )
+            snippet = render_parent_snippet(r, query, budget_tokens=per_budget)
 
             # 引用信息: 优先人类可读字段, 没有再回退
             citation_parts: list[str] = []

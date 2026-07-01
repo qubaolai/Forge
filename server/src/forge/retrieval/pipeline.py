@@ -39,6 +39,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import time
@@ -50,6 +51,7 @@ from forge.infrastructure.database.repositories.kb_document_chunk_repo import (
 )
 
 from .base import RetrievalConfig, RetrievedParent
+from .common.query import normalize_query
 from .fusion.base import (
     AggregatedParent,
     Aggregator,
@@ -60,6 +62,16 @@ from .recall.base import ChildHit, Recall
 from .rerankers.base import Reranker, RerankError, RerankResult
 
 logger = logging.getLogger(__name__)
+
+
+def empty_trace() -> dict:
+    """检索调试 trace 的空骨架. pipeline 与 search 共用, 避免两处漂移."""
+    return {
+        "recall": {"vector": [], "bm25": []},
+        "fusion": [],
+        "aggregation": [],
+        "rerank": [],
+    }
 
 
 class ParentChildRetriever:
@@ -73,6 +85,7 @@ class ParentChildRetriever:
         aggregator: Aggregator,
         reranker: Reranker | None,
         config: RetrievalConfig,
+        hyde=None,
     ):
         if vector_recall is None and bm25_recall is None:
             raise ValueError(
@@ -85,16 +98,18 @@ class ParentChildRetriever:
         self._aggregator = aggregator
         self._reranker = reranker
         self._config = config
+        self._hyde = hyde
 
         logger.info(
             "ParentChildRetriever 就绪: vector=%s bm25=%s fusion=%s aggregator=%s "
-            "reranker=%s rerank_enabled=%s",
+            "reranker=%s rerank_enabled=%s hyde=%s",
             "on" if vector_recall else "off",
             "on" if bm25_recall else "off",
             fusion.name,
             aggregator.name,
             reranker.model_name if reranker else "none",
             config.rerank_enabled,
+            "on" if hyde is not None else "off",
         )
 
     # ==================================================================
@@ -158,7 +173,9 @@ class ParentChildRetriever:
         top_n: int | None = None,
         collect_trace: bool = False,
     ) -> tuple[list[RetrievedParent], dict | None]:
-        trace = self._empty_trace() if collect_trace else None
+        trace = empty_trace() if collect_trace else None
+        # 查询归一化 (全角→半角 / 繁→简 / 折叠空白), 两路 recall + rerank 共用
+        query = normalize_query(query)
         if not query:
             logger.debug("retrieve: 空 query, 直接返回 []")
             return [], trace
@@ -172,10 +189,15 @@ class ParentChildRetriever:
         if effective_top_n <= 0:
             return [], trace
 
+        # HyDE (可选): 仅扩展向量召回用的 query; bm25 与 rerank 仍用原始 query
+        vector_query = await self._hyde.expand(query) if self._hyde is not None else query
+
         t0 = time.perf_counter()
 
         # 1. 多路召回
-        hits_per_source = self._run_recalls(query, doc_id_filter, vector_doc_id_filter)
+        hits_per_source = await self._run_recalls(
+            query, doc_id_filter, vector_doc_id_filter, vector_query=vector_query
+        )
         if trace is not None:
             trace["recall"] = self._trace_recall(hits_per_source)
         if not any(hits_per_source.values()):
@@ -262,15 +284,6 @@ class ParentChildRetriever:
         return final, trace
 
     @staticmethod
-    def _empty_trace() -> dict:
-        return {
-            "recall": {"vector": [], "bm25": []},
-            "fusion": [],
-            "aggregation": [],
-            "rerank": [],
-        }
-
-    @staticmethod
     def _trace_recall(hits_per_source: dict[str, list[ChildHit]]) -> dict[str, list[dict]]:
         trace = {"vector": [], "bm25": []}
         for source, hits in hits_per_source.items():
@@ -334,34 +347,50 @@ class ParentChildRetriever:
     # ==================================================================
     # 内部: 多路召回
     # ==================================================================
-    def _run_recalls(
+    async def _run_recalls(
         self,
         query: str,
         doc_id_filter: list[str] | None,
         vector_doc_id_filter: list[str] | None = None,
+        vector_query: str | None = None,
     ) -> dict[str, list[ChildHit]]:
-        """串行调两路 recall, 单路失败 ERROR 日志 + 该路返回空.
+        """两路 recall 并发执行, 单路失败降级为空 (由 _safe_recall 兜底).
 
-        TODO: 后续可改为 ThreadPoolExecutor 并行, 接口不变.
-              并行需要确认 Chroma client 与 SQLite connection 的线程安全.
+        向量库 (Chroma) 与 BM25 (SQLite, 内部自带连接锁) 各持独立连接,
+        用 asyncio.to_thread 并发把两路阻塞 IO 卸载出事件循环, 削尾延迟;
+        _safe_recall 已吞掉单路异常, 因此 gather 不会因单路失败中断.
+
+        vector_query: 向量召回专用 query (HyDE 扩展后的文本); None 时用原 query.
+        BM25 一律用原始 query.
         """
-        result: dict[str, list[ChildHit]] = {}
+        names: list[str] = []
+        coros = []
 
         if self._vector_recall is not None:
-            result[self._vector_recall.name] = self._safe_recall(
-                self._vector_recall,
-                query,
-                self._config.vector_top_k,
-                vector_doc_id_filter if vector_doc_id_filter is not None else doc_id_filter,
+            names.append(self._vector_recall.name)
+            coros.append(
+                asyncio.to_thread(
+                    self._safe_recall,
+                    self._vector_recall,
+                    vector_query if vector_query is not None else query,
+                    self._config.vector_top_k,
+                    vector_doc_id_filter if vector_doc_id_filter is not None else doc_id_filter,
+                )
             )
         if self._bm25_recall is not None:
-            result[self._bm25_recall.name] = self._safe_recall(
-                self._bm25_recall,
-                query,
-                self._config.bm25_top_k,
-                doc_id_filter,
+            names.append(self._bm25_recall.name)
+            coros.append(
+                asyncio.to_thread(
+                    self._safe_recall,
+                    self._bm25_recall,
+                    query,
+                    self._config.bm25_top_k,
+                    doc_id_filter,
+                )
             )
-        return result
+
+        results = await asyncio.gather(*coros)
+        return dict(zip(names, results, strict=True))
 
     @staticmethod
     def _safe_recall(

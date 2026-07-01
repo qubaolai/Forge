@@ -26,6 +26,11 @@ from forge.api.schemas.knowledge_base import (
     KbUpdateIn,
 )
 from forge.api.services.kb_service import KbService, to_doc_info, to_kb_info
+from forge.api.upload_limits import (
+    MAX_KB_DOCUMENT_BYTES,
+    format_upload_limit,
+    read_upload_file_limited,
+)
 from forge.core.exceptions import BadRequest, Conflict
 from forge.core.response import success
 from forge.infrastructure.database.repositories.kb_document_chunk_repo import (
@@ -37,9 +42,6 @@ from forge.infrastructure.storage.file_validation import validate_upload
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/kb", tags=["kb"])
-
-# KB 文档上限 (字节). 比会话附件宽松, 但仍兜底防超大文件撑爆解析。
-_MAX_DOC_BYTES = 50 * 1024 * 1024
 
 # 入库未到终态的状态: 删除会与后台入库任务并发改同一 KB 统计行, 拒绝避免死锁。
 _DOC_ACTIVE_STATUSES = {"pending", "parsing", "chunking", "embedding"}
@@ -116,11 +118,11 @@ async def upload_document(
     svc = KbService(db)
     kb = await svc.get_owned(kb_id, user.user_id)
 
-    data = await file.read()
-    if not data:
-        raise BadRequest("空文件", code=40013)
-    if len(data) > _MAX_DOC_BYTES:
-        raise BadRequest("文件过大", code=40014)
+    data = await read_upload_file_limited(
+        file,
+        max_bytes=MAX_KB_DOCUMENT_BYTES,
+        too_large_message=f"文件过大, 最大支持 {format_upload_limit(MAX_KB_DOCUMENT_BYTES)}",
+    )
 
     filename = file.filename or "document"
     validate_upload(filename, data)  # 类型白名单 + magic-byte 防木马

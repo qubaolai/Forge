@@ -23,6 +23,7 @@ class ChunkStrategy(str, Enum):
 
     HIERARCHICAL = "hierarchical"
     SLIDING_WINDOW = "sliding_window"
+    ROW_BASED = "row_based"
 
 
 @dataclass
@@ -33,6 +34,7 @@ class ChunkMetadata:
         - 层级父块:    strategy=hierarchical, element_count, has_table
         - 滑窗文本父块: strategy=sliding_window, element_count
         - 滑窗表格父块: strategy=sliding_window, has_context, context_chars
+        - 行级表格父块: strategy=row_based, has_table, extra.row_start/row_end
         - 子块:        parent_source
 
     Attributes:

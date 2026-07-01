@@ -9,12 +9,14 @@
 from .base import BaseChunker, ChunkConfig, compute_text_hash
 from .selector import select_chunker
 from .strategies.hierarchical import HierarchicalChunker
+from .strategies.row_based import RowBasedChunker
 from .strategies.sliding_window import SlidingWindowChunker
 
 __all__ = [
     "BaseChunker",
     "ChunkConfig",
     "HierarchicalChunker",
+    "RowBasedChunker",
     "SlidingWindowChunker",
     "compute_text_hash",
     "select_chunker",

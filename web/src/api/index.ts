@@ -1,4 +1,5 @@
 import { apiClient } from './client';
+import { assertFileWithinLimit, CHAT_ATTACHMENT_MAX_BYTES } from '@/lib/uploadLimits';
 import { useAuthStore } from '@/store/auth';
 import {
   AuthTokens, ChatFilePreview, ChatMessage, ChatSession, LoginPayload, LoginResponse,
@@ -126,6 +127,7 @@ export const systemApi = {
 export const filesApi = {
   /** 上传用户文件 (与会话解耦, 发消息时再回填会话关系), 返回文件元数据 */
   uploadAttachment: (file: File) => {
+    assertFileWithinLimit(file, CHAT_ATTACHMENT_MAX_BYTES, '附件');
     const form = new FormData();
     form.append('file', file);
     return apiClient.post<{ id: string; name: string; size_bytes: number; mime_type?: string | null }>(

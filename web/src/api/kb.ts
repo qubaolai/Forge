@@ -1,4 +1,5 @@
 import { apiClient } from './client';
+import { assertFileWithinLimit, KB_DOCUMENT_MAX_BYTES } from '@/lib/uploadLimits';
 import type {
   KnowledgeBase,
   KnowledgeChunkFullText,
@@ -68,6 +69,7 @@ export const kbApi = {
   getChunkFullText: (chunkId: string) =>
     apiClient.get<KnowledgeChunkFullText>(`/kb/chunks/${encodeURIComponent(chunkId)}`),
   uploadDocument: (kbId: string, file: File) => {
+    assertFileWithinLimit(file, KB_DOCUMENT_MAX_BYTES, '文件');
     const form = new FormData();
     form.append('file', file);
     return apiClient.post<{ id: string; name: string; status: string }>(

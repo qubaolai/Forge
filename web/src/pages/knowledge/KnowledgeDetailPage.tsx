@@ -14,6 +14,7 @@ import {
   Settings,
   Trash2,
   Upload,
+  X,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type {
@@ -26,6 +27,7 @@ import type {
 import { ApiError } from '@/types';
 import { kbApi } from '@/api';
 import { cn } from '@/lib/utils';
+import { formatUploadLimit, KB_DOCUMENT_MAX_BYTES } from '@/lib/uploadLimits';
 import { confirm } from '@/components/common/ConfirmDialog';
 import { toast } from '@/components/common/Toast';
 import { formatBytes, VisibilityBadge } from './KnowledgeListPage';
@@ -229,6 +231,7 @@ export default function KnowledgeDetailPage() {
               <h2 className="mb-3 text-sm font-medium">上传文档</h2>
               <div className="space-y-3 rounded-lg border border-gray-200 p-4 text-sm leading-6 text-gray-600">
                 <p>支持 PDF / Word / Markdown / 文本等格式。</p>
+                <p>单个文件最大 {formatUploadLimit(KB_DOCUMENT_MAX_BYTES)}，超出后请先拆分文件再上传。</p>
                 <p>上传后自动进入解析 → 分块 → 向量化流水线，下方列表实时展示入库状态。</p>
                 <p>入库失败会标红并给出原因；模型切换后可对单篇文档重建向量索引。</p>
               </div>
@@ -424,50 +427,72 @@ function DocumentChunksPanel({
   const chunks = chunksQuery.data?.items ?? [];
   const total = chunksQuery.data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const selectedFullText =
+    fullTextQuery.data?.chunk_id === selectedChunkId ? fullTextQuery.data.content : '';
+
+  function setPageAndReset(nextPage: number) {
+    setSelectedChunkId(null);
+    setPage(nextPage);
+  }
 
   return (
-    <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
-      <div className="mb-3 flex items-center justify-between gap-3">
+    <aside className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[560px] flex-col border-l border-gray-200 bg-white shadow-2xl sm:w-[560px]">
+      <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
         <div className="min-w-0">
           <h3 className="truncate text-sm font-medium">分块预览：{doc.name}</h3>
           <p className="mt-0.5 text-xs text-gray-400">仅展示 parent chunk；全文通过“查看全文”读取。</p>
         </div>
-        <button onClick={onClose} className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-white">
-          关闭
+        <button
+          onClick={onClose}
+          title="关闭"
+          className="shrink-0 rounded p-1 text-gray-400 hover:bg-gray-50 hover:text-gray-700"
+        >
+          <X size={16} />
         </button>
       </div>
 
-      {chunksQuery.isLoading ? (
-        <p className="py-6 text-center text-sm text-gray-400">加载分块中…</p>
-      ) : chunks.length === 0 ? (
-        <p className="py-6 text-center text-sm text-gray-500">暂无可查看的分块。</p>
-      ) : (
-        <div className="space-y-3">
-          {chunks.map((chunk) => (
-            <ChunkDebugCard
-              key={chunk.chunk_id}
-              chunk={chunk}
-              selected={selectedChunkId === chunk.chunk_id}
-              onViewFullText={() => setSelectedChunkId(chunk.chunk_id)}
-            />
-          ))}
-        </div>
-      )}
+      <div className="flex-1 overflow-y-auto bg-gray-50 p-4">
+        {chunksQuery.isLoading ? (
+          <p className="py-10 text-center text-sm text-gray-400">加载分块中…</p>
+        ) : chunks.length === 0 ? (
+          <p className="py-10 text-center text-sm text-gray-500">暂无可查看的分块。</p>
+        ) : (
+          <div className="space-y-3">
+            {chunks.map((chunk) => {
+              const selected = selectedChunkId === chunk.chunk_id;
+              return (
+                <ChunkDebugCard
+                  key={chunk.chunk_id}
+                  chunk={chunk}
+                  selected={selected}
+                  fullText={selected ? selectedFullText : ''}
+                  fullTextLoading={selected && fullTextQuery.isLoading}
+                  onViewFullText={() =>
+                    setSelectedChunkId((current) =>
+                      current === chunk.chunk_id ? null : chunk.chunk_id,
+                    )
+                  }
+                />
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {total > pageSize && (
-        <div className="mt-3 flex items-center justify-end gap-2 text-xs text-gray-500">
+        <div className="flex items-center justify-end gap-2 border-t bg-white px-4 py-3 text-xs text-gray-500">
           <span>
             第 {page} / {totalPages} 页
           </span>
           <button
-            onClick={() => setPage((value) => Math.max(1, value - 1))}
+            onClick={() => setPageAndReset(Math.max(1, page - 1))}
             disabled={page <= 1}
             className="rounded border bg-white px-2 py-1 disabled:opacity-40"
           >
             上一页
           </button>
           <button
-            onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+            onClick={() => setPageAndReset(Math.min(totalPages, page + 1))}
             disabled={page >= totalPages}
             className="rounded border bg-white px-2 py-1 disabled:opacity-40"
           >
@@ -475,38 +500,21 @@ function DocumentChunksPanel({
           </button>
         </div>
       )}
-
-      {selectedChunkId && (
-        <div className="mt-4 rounded-md border border-gray-200 bg-white p-3">
-          <div className="mb-2 flex items-center justify-between">
-            <h4 className="text-xs font-medium text-gray-700">Parent 原始全文</h4>
-            <button
-              onClick={() => setSelectedChunkId(null)}
-              className="rounded px-2 py-0.5 text-xs text-gray-400 hover:bg-gray-50"
-            >
-              收起
-            </button>
-          </div>
-          {fullTextQuery.isLoading ? (
-            <p className="text-sm text-gray-400">加载全文中…</p>
-          ) : (
-            <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-3 text-xs leading-5 text-gray-700">
-              {fullTextQuery.data?.content || '未读取到内容'}
-            </pre>
-          )}
-        </div>
-      )}
-    </div>
+    </aside>
   );
 }
 
 function ChunkDebugCard({
   chunk,
   selected,
+  fullText,
+  fullTextLoading,
   onViewFullText,
 }: {
   chunk: KbDocumentChunkInfo;
   selected: boolean;
+  fullText: string;
+  fullTextLoading: boolean;
   onViewFullText: () => void;
 }) {
   const pageLabel = formatHitPageRange(chunk);
@@ -531,12 +539,24 @@ function ChunkDebugCard({
           )}
         >
           <Eye size={12} />
-          查看全文
+          {selected ? '收起全文' : '查看全文'}
         </button>
       </div>
       <p className="whitespace-pre-wrap rounded bg-gray-50 p-2 text-xs leading-5 text-gray-700">
         {chunk.content_preview}
       </p>
+      {selected && (
+        <div className="mt-3 rounded-md border border-gray-200 bg-white p-3">
+          <h4 className="mb-2 text-xs font-medium text-gray-700">Parent 原始全文</h4>
+          {fullTextLoading ? (
+            <p className="text-sm text-gray-400">加载全文中…</p>
+          ) : (
+            <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-3 text-xs leading-5 text-gray-700">
+              {fullText || '未读取到内容'}
+            </pre>
+          )}
+        </div>
+      )}
       <div className="mt-3">
         <div className="mb-1 flex items-center justify-between">
           <span className="text-xs font-medium text-gray-600">Child 分块摘要</span>

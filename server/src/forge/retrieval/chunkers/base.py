@@ -114,6 +114,19 @@ class ChunkConfig:
     child_target_chars: int = 400
     child_overlap_chars: int = 80
 
+    # === Excel 行级子块 ===
+    # 每个 Excel 子块包含的表格行数: 1 = 行级 (每行一条记录, 按值检索最精准),
+    # >1 则按该行数分组. 子块内容用"列名: 值"键值化渲染, 提升语义命中.
+    excel_child_rows: int = 1
+    excel_child_max_chars: int = 4_000  # 单个行级子块字符软上限 (分组过宽时提前切)
+
+    # === Excel 父块粒度 (整 sheet 一块 vs 拆行组) ===
+    excel_small_sheet_max_rows: int = 200  # <= 此行数标记为 small_sheet (仅影响 mode 标签)
+    excel_sheet_parent_max_rows: int = 2_000  # <= 此行数整 sheet 作单父块, 超过拆行组
+    excel_sheet_parent_max_chars: int = 200_000  # 整 sheet 单父块字符上限
+    excel_large_parent_rows: int = 300  # 大表拆分时每个父块的行数
+    excel_large_parent_max_chars: int = 200_000  # 大表拆分时每个父块字符上限
+
     # === 滑窗策略专用 ===
     sliding_parent_chars: int = 1500  # 滑窗父块软目标
     table_context_max_chars: int = 300  # 表格前置上下文字符上限
@@ -411,13 +424,22 @@ class BaseChunker(ABC):
         *,
         base_extra: dict | None = None,
         target_chars: int | None = None,
+        max_rows: int | None = None,
+        splitter_label: str = "table_rows",
     ) -> list[_ChildSlice]:
-        """表格 child: 保留完整表头和完整数据行, 不按字符切断行."""
+        """表格 child: 保留完整表头和完整数据行, 不按字符切断行.
+
+        Args:
+            target_chars: 单个行组的字符软上限; None 用 child_target_chars.
+            max_rows:     单个行组的行数硬上限; None 表示不限行数 (仅按字符).
+            splitter_label: 写入子块 extra.splitter 的标签, 便于区分来源
+                            (普通表格 table_rows / Excel excel_table_rows).
+        """
         size = target_chars or self.config.child_target_chars
         lines = text.strip().splitlines()
         table_start = self._find_table_start(lines)
         if table_start is None:
-            return self._split_text_content(text)
+            return self._split_text_content(text, base_extra=base_extra)
 
         table_end = table_start
         while table_end < len(lines) and self._is_table_line(lines[table_end]):
@@ -467,7 +489,7 @@ class BaseChunker(ABC):
                     extra=self._merge_extra(
                         base_extra,
                         {
-                            "splitter": "table_rows",
+                            "splitter": splitter_label,
                             "row_start": row_start,
                             "row_end": row_end,
                             "row_count": len(row_buffer),
@@ -479,6 +501,10 @@ class BaseChunker(ABC):
             row_start = row_end + 1
 
         for row_index, row in enumerate(data_rows, start=1):
+            # 行数硬上限 (Excel 用): 先按行数 flush, 再走字符软上限判断
+            if max_rows is not None and row_buffer and len(row_buffer) >= max_rows:
+                flush_rows()
+                row_start = row_index
             candidate_rows = [*row_buffer, row]
             candidate = self._render_table_child(context, header_lines, candidate_rows, "")
             if row_buffer and len(candidate) > size:

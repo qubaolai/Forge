@@ -28,6 +28,11 @@ from fastapi.responses import Response
 
 from forge.api.dependencies import AuthenticatedUser
 from forge.api.schemas.file import AttachmentUploadOut, FilePreviewOut
+from forge.api.upload_limits import (
+    MAX_CHAT_ATTACHMENT_BYTES,
+    format_upload_limit,
+    read_upload_file_limited,
+)
 from forge.core.exceptions import BadRequest, NotFound
 from forge.core.response import success
 from forge.infrastructure.database.database import session_scope
@@ -42,9 +47,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# 上传体量上限 (字节). 超大输入应走知识库, 这里只承载会话级附件。
-_MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
-
 
 @router.post("/chat/attachments")
 async def upload_attachment(
@@ -56,11 +58,14 @@ async def upload_attachment(
     上传时不绑会话; 发消息时由 TurnPreparer 回填 session_id/message_id。
     长期未关联会话的孤儿文件由后台定期清理。
     """
-    data = await file.read()
-    if not data:
-        raise BadRequest("空文件", code=40013)
-    if len(data) > _MAX_ATTACHMENT_BYTES:
-        raise BadRequest("附件过大, 请改用知识库", code=40014)
+    data = await read_upload_file_limited(
+        file,
+        max_bytes=MAX_CHAT_ATTACHMENT_BYTES,
+        too_large_message=(
+            f"附件过大, 最大支持 {format_upload_limit(MAX_CHAT_ATTACHMENT_BYTES)}, "
+            "请改用知识库"
+        ),
+    )
 
     filename = file.filename or "attachment.txt"
     # 类型校验 (白/黑名单 + magic-byte 防木马); 不通过抛 BadRequest。

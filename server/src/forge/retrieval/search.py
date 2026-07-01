@@ -20,15 +20,7 @@ from forge.infrastructure.database.repositories.kb_document_repo import (
     KbDocumentRepository,
 )
 from forge.retrieval.base import RetrievedParent
-
-
-def _empty_trace() -> dict:
-    return {
-        "recall": {"vector": [], "bm25": []},
-        "fusion": [],
-        "aggregation": [],
-        "rerank": [],
-    }
+from forge.retrieval.pipeline import empty_trace
 
 
 async def search_chunks(
@@ -80,11 +72,11 @@ async def search_chunks_with_trace(
 ) -> tuple[list[RetrievedParent], dict]:
     """在指定 KB 集合内检索, 同时返回召回 / 融合 / 重排 trace."""
     if not kb_ids:
-        return [], _empty_trace()
+        return [], empty_trace()
     doc_repo = KbDocumentRepository(db)
     doc_ids = await doc_repo.list_indexed_doc_ids(kb_ids)
     if not doc_ids:
-        return [], _empty_trace()
+        return [], empty_trace()
 
     from forge.retrieval.rag_runtime import get_rag_runtime
 

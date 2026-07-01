@@ -64,27 +64,48 @@ async def test_knowledge_search_rejects_kb_outside_selected_scope() -> None:
     assert result == "错误: 请求的知识库不在本轮允许范围内: ['kb-2']"
 
 
-def test_knowledge_search_formats_query_focused_snippet() -> None:
+def test_knowledge_search_returns_whole_parent_within_budget() -> None:
+    """父块 token 数在预算内时整块回灌 (small-to-big), 不再截断."""
+    content = "开头说明。" * 20 + "付款条款为验收后 30 天内支付。" + "补充说明。" * 20
+    result = KnowledgeSearchTool._format_results(
+        [_snippet_parent(content)],
+        query="付款条款是什么",
+        total_budget_tokens=6000,
+        min_snippet_tokens=400,
+    )
+
+    assert content in result  # 完整父块原样出现
+    assert "省略" not in result and "截断" not in result
+
+
+def test_knowledge_search_anchors_snippet_when_over_budget() -> None:
+    """父块超预算时退化为 query 命中锚窗, 保留命中句 + 省略标记."""
     content = "开头说明。" * 160 + "付款条款为验收后 30 天内支付。" + "补充说明。" * 160
     result = KnowledgeSearchTool._format_results(
-        [
-            SimpleNamespace(
-                content=content,
-                document_name="合同.docx",
-                kb_name="合同库",
-                header_path="付款",
-                page=3,
-                page_start=3,
-                page_end=3,
-                final_score=0.9,
-                source_url=None,
-                document_id="d1",
-                chunk_id="p1",
-            )
-        ],
+        [_snippet_parent(content)],
         query="付款条款是什么",
+        total_budget_tokens=300,
+        min_snippet_tokens=300,
     )
 
     assert "付款条款为验收后 30 天内支付" in result
-    assert "...(前文已省略)" in result
-    assert "...(后文已截断)" in result
+    assert ("省略" in result) or ("截断" in result)
+
+
+def _snippet_parent(content: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        content=content,
+        source_type="text",
+        hit_chunk_ids=[],
+        metadata={},
+        document_name="合同.docx",
+        kb_name="合同库",
+        header_path="付款",
+        page=3,
+        page_start=3,
+        page_end=3,
+        final_score=0.9,
+        source_url=None,
+        document_id="d1",
+        chunk_id="p1",
+    )

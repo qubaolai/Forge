@@ -100,6 +100,25 @@ class RetrieverFactory:
             bm25_enabled=bm25_recall is not None,
         )
 
+        # ----- 6. HyDE (可选, 仅向量召回存在时有意义) -----
+        hyde = None
+        hyde_cfg = getattr(rcfg, "hyde", None)
+        if hyde_cfg is not None and hyde_cfg.enabled and vector_recall is not None:
+            try:
+                from forge.llm import get_llm_gateway
+
+                from .query_expansion import HydeGenerator
+
+                hyde = HydeGenerator(
+                    get_llm_gateway(settings),
+                    max_tokens=hyde_cfg.max_tokens,
+                    concat_original=hyde_cfg.concat_original,
+                )
+                logger.info("HyDE 查询扩展已启用 (max_tokens=%d)", hyde_cfg.max_tokens)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("HyDE 初始化失败, 已禁用: %s", e)
+                hyde = None
+
         return ParentChildRetriever(
             vector_recall=vector_recall,
             bm25_recall=bm25_recall,
@@ -107,4 +126,5 @@ class RetrieverFactory:
             aggregator=aggregator,
             reranker=reranker,
             config=config,
+            hyde=hyde,
         )
