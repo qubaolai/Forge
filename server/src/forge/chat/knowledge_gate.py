@@ -18,35 +18,64 @@ from forge.tools.registry import ToolRegistry
 
 _KNOWLEDGE_TOOL = "knowledge_search"
 
-_KB_INTENT_MARKERS = (
-    "知识库",
-    "资料库",
-    "查资料",
-    "查询资料",
+_KB_ACTION_MARKERS = (
+    "查",
+    "查询",
     "检索",
+    "搜索",
     "召回",
     "引用",
-    "来源",
+    "根据",
+    "基于",
+    "找",
+)
+
+_KB_RESOURCE_MARKERS = (
+    "知识库",
+    "资料库",
+    "文档",
+    "资料",
+    "文件",
+    "kb",
+    "rag",
+)
+
+_KB_DIRECT_INTENT_MARKERS = (
+    "查资料",
+    "查询资料",
     "根据资料",
     "根据文档",
     "上传的文档",
     "上传文件",
-    "kb",
-    "rag",
+    "知识库里",
+    "资料库里",
+    "文档里",
+    "资料里",
+    "引用来源",
 )
 
 
 class KnowledgeSearchToolGate(NoopLifecycle):
     """没有明确知识库意图时, 从本轮工具 schema 中移除 knowledge_search。"""
 
-    def __init__(self, *, tools: Iterable[Tool] | None, user_message: str) -> None:
+    def __init__(
+        self,
+        *,
+        tools: Iterable[Tool] | None,
+        user_message: str,
+        knowledge_search_enabled: bool | None = None,
+    ) -> None:
         tool_list = list(tools) if tools is not None else list(ToolRegistry.get_all())
         self._schemas_without_knowledge = [
             tool.openai_schema()
             for tool in tool_list
             if tool.name != _KNOWLEDGE_TOOL
         ]
-        self._allow_knowledge_search = _looks_like_kb_request(user_message)
+        self._allow_knowledge_search = (
+            knowledge_search_enabled
+            if knowledge_search_enabled is not None
+            else should_allow_knowledge_search(user_message)
+        )
 
     async def resolve_tools(self, step: StepContext) -> list[dict] | None:
         if self._allow_knowledge_search:
@@ -75,5 +104,37 @@ class KnowledgeSearchToolGate(NoopLifecycle):
 
 def _looks_like_kb_request(text: str) -> bool:
     lowered = (text or "").lower()
-    return any(marker.lower() in lowered for marker in _KB_INTENT_MARKERS)
+    if any(marker.lower() in lowered for marker in _KB_DIRECT_INTENT_MARKERS):
+        return True
+    has_resource = any(marker.lower() in lowered for marker in _KB_RESOURCE_MARKERS)
+    has_action = any(marker.lower() in lowered for marker in _KB_ACTION_MARKERS)
+    return has_resource and has_action
 
+
+def should_allow_knowledge_search(
+    user_message: str,
+    *,
+    has_accessible_kbs: bool = True,
+) -> bool:
+    return has_accessible_kbs and _looks_like_kb_request(user_message)
+
+
+def filter_knowledge_search_for_prompt(
+    tools: Iterable[Tool],
+    *,
+    user_message: str,
+    has_accessible_kbs: bool = True,
+    force_allow: bool | None = None,
+) -> tuple[Tool, ...]:
+    """按本轮用户意图过滤 system prompt 里展示的知识库工具."""
+    tool_list = tuple(tools)
+    if force_allow is not None:
+        if force_allow:
+            return tool_list
+        return tuple(tool for tool in tool_list if tool.name != _KNOWLEDGE_TOOL)
+    if should_allow_knowledge_search(
+        user_message,
+        has_accessible_kbs=has_accessible_kbs,
+    ):
+        return tool_list
+    return tuple(tool for tool in tool_list if tool.name != _KNOWLEDGE_TOOL)

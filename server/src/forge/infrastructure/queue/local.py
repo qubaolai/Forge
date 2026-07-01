@@ -40,19 +40,38 @@ class LocalTaskQueue(TaskQueue):
         self._drain_lock = asyncio.Lock()
         self._drain_requested = False
         self._wakeup_task: asyncio.Task[None] | None = None
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self._bootstrap_and_drain())
+            asyncio.get_running_loop()
+            self._create_background_task(self._bootstrap_and_drain())
         except RuntimeError:
             # 非异步上下文初始化, 等首次 submit 再补 bootstrap
             pass
 
     def submit(self, task_name: str, **kwargs: Any) -> None:
         try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self._enqueue(task_name, kwargs))
+            asyncio.get_running_loop()
+            self._create_background_task(self._enqueue(task_name, kwargs))
         except RuntimeError:
             asyncio.run(self._enqueue(task_name, kwargs))
+
+    def _create_background_task(self, coro: Any) -> asyncio.Task[Any]:
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        task.add_done_callback(self._log_background_task_exception)
+        return task
+
+    @staticmethod
+    def _log_background_task_exception(task: asyncio.Task[Any]) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.exception(
+                "LocalTaskQueue 后台任务异常",
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
 
     async def _bootstrap_and_drain(self) -> None:
         await self._ensure_bootstrapped()
@@ -110,9 +129,12 @@ class LocalTaskQueue(TaskQueue):
             )
             return
         try:
-            result = handler(**task.payload)
-            if inspect.isawaitable(result):
-                await result
+            if inspect.iscoroutinefunction(handler):
+                await handler(**task.payload)
+            else:
+                result = await asyncio.to_thread(handler, **task.payload)
+                if inspect.isawaitable(result):
+                    await result
             await self._store.mark_succeeded(task.id)
             logger.debug("LocalTaskQueue 任务完成 task_id=%s task=%s", task.id, task.task_name)
         except Exception as exc:  # noqa: BLE001
@@ -147,7 +169,7 @@ class LocalTaskQueue(TaskQueue):
             return
         if self._wakeup_task and not self._wakeup_task.done():
             return
-        self._wakeup_task = asyncio.create_task(self._wakeup_after(delay))
+        self._wakeup_task = self._create_background_task(self._wakeup_after(delay))
 
     async def _wakeup_after(self, delay: float) -> None:
         await asyncio.sleep(delay)

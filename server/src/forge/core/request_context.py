@@ -19,6 +19,10 @@ _USER_ID: ContextVar[str] = ContextVar("user_id", default="")
 # chat turn 内有效: 供 write_file / read_file 等工具定位会话沙盒 + 关联 chat_files。
 _SESSION_ID: ContextVar[str] = ContextVar("session_id", default="")
 _ASSISTANT_MESSAGE_ID: ContextVar[str] = ContextVar("assistant_message_id", default="")
+_ALLOWED_KNOWLEDGE_KB_IDS: ContextVar[tuple[str, ...]] = ContextVar(
+    "allowed_knowledge_kb_ids",
+    default=(),
+)
 
 ClientType = Literal["cli", "web"]
 _CLIENT_TYPES: frozenset[str] = frozenset({"cli", "web"})
@@ -71,6 +75,16 @@ def current_assistant_message_id() -> str:
 
 def set_assistant_message_id(message_id: str):
     return _ASSISTANT_MESSAGE_ID.set(message_id or "")
+
+
+# ---- allowed knowledge KB ids (chat turn 内有效) ----
+def current_allowed_knowledge_kb_ids() -> tuple[str, ...]:
+    return _ALLOWED_KNOWLEDGE_KB_IDS.get()
+
+
+def set_allowed_knowledge_kb_ids(kb_ids: list[str] | tuple[str, ...] | None):
+    cleaned = tuple(str(kb_id).strip() for kb_id in (kb_ids or []) if str(kb_id).strip())
+    return _ALLOWED_KNOWLEDGE_KB_IDS.set(cleaned)
 
 
 # ---- citations (chat turn 内有效) ----

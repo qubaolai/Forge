@@ -25,10 +25,14 @@
 4. 看到「早期对话摘要」时，须告知用户上下文已被压缩；引用早期细节前先确认是否仍准确。
 
 {% if kb_list is defined and kb_list %}
-## 可用知识库
+## 本轮用户选择的知识库
 {% for kb in kb_list %}
 - {{ kb.name }} (kb_id={{ kb.id }}){% if kb.description %}: {{ kb.description }}{% endif %}
 {% endfor %}
+知识库工具使用规则:
+- 只有需要基于上方知识库内容作答时, 才调用 knowledge_search.
+- 调用 knowledge_search 时必须把上方对应的 kb_id 填入 kb_ids; 不要只传 kb_names, 不要臆造 kb_id.
+- 不要查询上方列表之外的任何知识库; 如果列表为空, 不得调用 knowledge_search.
 {% endif %}
 
 {% if tools is defined and tools %}

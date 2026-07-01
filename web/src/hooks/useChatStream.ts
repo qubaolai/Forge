@@ -57,6 +57,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
       message: string,
       attachments?: { file_id: string; type: string }[],
       modelOptions?: ModelOptions,
+      kbIds?: string[],
     ) => {
       // 占位的 assistant 消息(stream 期间逐步填充)
       const draft: ChatMessage = {
@@ -74,6 +75,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
 
       const body: Record<string, unknown> = { message, attachments };
       if (sessionId) body.session_id = sessionId;
+      if (kbIds && kbIds.length > 0) body.kb_ids = kbIds;
       if (modelOptions && Object.keys(modelOptions).length > 0) {
         body.model_options = modelOptions;
       }

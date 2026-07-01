@@ -92,6 +92,7 @@ class ChatCompletionIn(BaseModel):
     # 此处仅防绕过前端直接灌超大 body 撑爆上下文。
     message: str = Field(min_length=1, max_length=100_000)
     attachments: list[ChatAttachment] = Field(default_factory=list)
+    kb_ids: list[str] = Field(default_factory=list, description="本轮允许查询的知识库 ID 列表")
     model_options: ModelOptionsIn
 
 

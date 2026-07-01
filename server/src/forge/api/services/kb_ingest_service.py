@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
@@ -57,6 +58,7 @@ from forge.retrieval.stores.bm25.base import BM25Store
 from forge.retrieval.stores.vector.base import ChildVectorStore
 
 logger = logging.getLogger(__name__)
+_CHILD_DEBUG_PREVIEW_CHARS = 240
 
 
 class KbIngestError(Exception):
@@ -114,6 +116,7 @@ class KbIngestService:
         child_store = await self.rag_runtime.vector_store_for(embedder)
         doc_id = str(document.id)
         kb_id = str(kb.id)
+        previous_chunk_count = int(document.chunk_count or 0)
 
         # 1. parsing
         await doc_repo.update_status(doc_id, "parsing", progress=10)
@@ -130,7 +133,7 @@ class KbIngestService:
             )
 
         try:
-            elements = parser.parse(file_path)
+            elements = await asyncio.to_thread(parser.parse, file_path)
         except Exception as e:
             await doc_repo.update_status(doc_id, "failed", message=f"解析失败: {e}")
             raise KbIngestError(f"解析 {file_path} 失败: {e}") from e
@@ -142,7 +145,12 @@ class KbIngestService:
         # 2. chunking
         await doc_repo.update_status(doc_id, "chunking", progress=30)
         chunker = select_chunker(elements, self._chunk_config_for_kb(kb))
-        chunks = chunker.chunk(elements, doc_id=doc_id, doc_version="v1")
+        chunks = await asyncio.to_thread(
+            chunker.chunk,
+            elements,
+            doc_id=doc_id,
+            doc_version="v1",
+        )
         # 注入 kb_id (chunker 不感知 KB)
         for ch in chunks:
             ch.kb_id = kb_id
@@ -158,7 +166,11 @@ class KbIngestService:
         if embedder is not None:
             try:
                 embed_texts = [self._build_embed_text(c) for c in children]
-                embeddings = embedder.embed_documents(embed_texts) if children else []
+                embeddings = (
+                    await asyncio.to_thread(embedder.embed_documents, embed_texts)
+                    if children
+                    else []
+                )
             except Exception as e:
                 await doc_repo.update_status(doc_id, "failed", message=f"向量化失败: {e}")
                 raise KbIngestError(f"embed 失败: {e}") from e
@@ -196,7 +208,7 @@ class KbIngestService:
         if update_kb_stats:
             await kb_repo.update_stats(
                 kb_id,
-                chunk_count_delta=len(parents),
+                chunk_count_delta=len(parents) - previous_chunk_count,
             )
 
         logger.info(
@@ -232,7 +244,7 @@ class KbIngestService:
         if parser is None:
             raise KbIngestError(f"未支持的文件格式: {file_path.suffix}")
         try:
-            elements = parser.parse(file_path)
+            elements = await asyncio.to_thread(parser.parse, file_path)
         except Exception as exc:
             raise KbIngestError(f"解析 {file_path} 失败: {exc}") from exc
         if not elements:
@@ -240,7 +252,12 @@ class KbIngestService:
 
         chunker = select_chunker(elements, self._chunk_config_for_kb(kb))
         doc_id = str(document.id)
-        chunks = chunker.chunk(elements, doc_id=doc_id, doc_version="v1")
+        chunks = await asyncio.to_thread(
+            chunker.chunk,
+            elements,
+            doc_id=doc_id,
+            doc_version="v1",
+        )
         parents = [c for c in chunks if c.chunk_type == ChunkType.PARENT]
         children = [c for c in chunks if c.chunk_type == ChunkType.CHILD]
         for ch in chunks:
@@ -249,19 +266,25 @@ class KbIngestService:
             session=session,
             document=document,
             parents=parents,
+            children=children,
         )
         try:
-            embeddings = embedder.embed_documents(
-                [self._build_embed_text(child) for child in children]
-            ) if children else []
+            embeddings = (
+                await asyncio.to_thread(
+                    embedder.embed_documents,
+                    [self._build_embed_text(child) for child in children],
+                )
+                if children
+                else []
+            )
         except Exception as exc:
             raise KbIngestError(f"embed 失败: {exc}") from exc
 
         if before_vector_write is not None:
             await before_vector_write()
-        child_store.delete_by_doc(doc_id)
+        await asyncio.to_thread(child_store.delete_by_doc, doc_id)
         if children:
-            child_store.add_children(children, embeddings)
+            await asyncio.to_thread(child_store.add_children, children, embeddings)
 
         document.embedding_model_id = int(cast(Any, embedder)._forge_model_id)
         document.vector_index_status = "ready"
@@ -284,8 +307,17 @@ class KbIngestService:
         """
         # 先清库外 (顺序无关, 失败也尽量继续)
         try:
-            embedder = await self.rag_runtime.resolve_embedding()
-            child_store = await self.rag_runtime.vector_store_for(embedder)
+            child_store = None
+            if document.embedding_model_id is not None and hasattr(
+                self.rag_runtime,
+                "vector_store_for_model_id",
+            ):
+                child_store = await self.rag_runtime.vector_store_for_model_id(
+                    document.embedding_model_id
+                )
+            else:
+                embedder = await self.rag_runtime.resolve_embedding()
+                child_store = await self.rag_runtime.vector_store_for(embedder)
             if child_store is not None:
                 child_store.delete_by_doc(str(document.id))
         except Exception:  # noqa: BLE001
@@ -321,20 +353,28 @@ class KbIngestService:
         # 4.1 清理库外 (重入时兜底)
         doc_id = str(document.id)
         if child_store is not None:
-            child_store.delete_by_doc(doc_id)
-        self.bm25_store.delete_by_doc(doc_id)
+            await asyncio.to_thread(child_store.delete_by_doc, doc_id)
+        await asyncio.to_thread(self.bm25_store.delete_by_doc, doc_id)
         # 4.2 清父块 (重入时兜底)
         await chunk_repo.delete_by_document(document.id)
 
         # 4.3 写库外
         if children:
             if child_store is not None:
-                child_store.add_children(children, embeddings)
-            self.bm25_store.add_children(children)
+                await asyncio.to_thread(child_store.add_children, children, embeddings)
+            await asyncio.to_thread(self.bm25_store.add_children, children)
 
         # 4.4 写 MySQL 父块 (commit 由外层控制)
+        child_manifest_by_parent = self._child_manifest_by_parent(children)
+        child_debug_by_parent = self._child_debug_manifest_by_parent(children)
         parent_dicts = [
-            self._chunk_to_parent_dict(p, str(document.kb_id), seq=i)
+            self._chunk_to_parent_dict(
+                p,
+                str(document.kb_id),
+                seq=i,
+                child_manifest=child_manifest_by_parent.get(p.chunk_id, []),
+                child_debug_manifest=child_debug_by_parent.get(p.chunk_id, []),
+            )
             for i, p in enumerate(parents)
         ]
         await chunk_repo.save_many(parent_dicts)
@@ -345,24 +385,16 @@ class KbIngestService:
         session: AsyncSession,
         document: KbDocumentOrm,
         parents: list[Chunk],
+        children: list[Chunk],
     ) -> None:
-        """vector-only rebuild 前确认父块 ID/hash 与已入库数据一致。"""
+        """vector-only rebuild 前确认父块与子块 manifest 均未变化。"""
         stored = await KbDocumentChunkRepository(session).list_manifest_by_document(
             document.id
         )
-        current = sorted(
-            (
-                {
-                    "id": p.chunk_id,
-                    "chunk_hash": p.chunk_hash or "",
-                }
-                for p in parents
-            ),
-            key=lambda item: item["id"],
-        )
+        current = self._parent_manifest(parents, children)
         if stored != current:
             raise KbIngestError(
-                "当前解析/分块结果与已入库父块不一致，已拒绝仅重建向量索引；"
+                "当前解析/分块结果与已入库父子块 manifest 不一致，已拒绝仅重建向量索引；"
                 "请重新入库该文档以同步父块、BM25 和向量索引"
             )
 
@@ -386,7 +418,14 @@ class KbIngestService:
         return chunk.content
 
     @staticmethod
-    def _chunk_to_parent_dict(chunk: Chunk, kb_id: str, *, seq: int) -> dict:
+    def _chunk_to_parent_dict(
+        chunk: Chunk,
+        kb_id: str,
+        *,
+        seq: int,
+        child_manifest: list[dict] | None = None,
+        child_debug_manifest: list[dict] | None = None,
+    ) -> dict:
         """Chunk → kb_document_chunks.save_many 入参."""
         from dataclasses import asdict, is_dataclass
 
@@ -410,6 +449,8 @@ class KbIngestService:
             if v is None:
                 continue
             extra.setdefault(k, v)
+        extra["child_manifest"] = list(child_manifest or [])
+        extra["child_debug_manifest"] = list(child_debug_manifest or [])
 
         return {
             "id": chunk.chunk_id,
@@ -454,3 +495,66 @@ class KbIngestService:
             return int(get_token_meter().count_text(text))
         except Exception:  # noqa: BLE001
             return max(1, len(text) // 4)
+
+    @staticmethod
+    def _child_manifest_by_parent(children: list[Chunk]) -> dict[str, list[dict]]:
+        grouped: dict[str, list[dict]] = {}
+        for child in children:
+            if not child.parent_id:
+                continue
+            grouped.setdefault(child.parent_id, []).append(
+                {
+                    "id": child.chunk_id,
+                    "chunk_hash": child.chunk_hash or "",
+                }
+            )
+        for items in grouped.values():
+            items.sort(key=lambda item: item["id"])
+        return grouped
+
+    @staticmethod
+    def _parent_manifest(parents: list[Chunk], children: list[Chunk]) -> list[dict]:
+        child_manifest_by_parent = KbIngestService._child_manifest_by_parent(children)
+        return sorted(
+            (
+                {
+                    "id": parent.chunk_id,
+                    "chunk_hash": parent.chunk_hash or "",
+                    "child_manifest": child_manifest_by_parent.get(parent.chunk_id, []),
+                }
+                for parent in parents
+            ),
+            key=lambda item: item["id"],
+        )
+
+    @staticmethod
+    def _child_debug_manifest_by_parent(children: list[Chunk]) -> dict[str, list[dict]]:
+        grouped: dict[str, list[dict]] = {}
+        for child in children:
+            if not child.parent_id:
+                continue
+            extra = child.metadata.extra if child.metadata is not None else {}
+            grouped.setdefault(child.parent_id, []).append(
+                {
+                    "id": child.chunk_id,
+                    "source_type": child.source_type or "text",
+                    "chars": len(child.content or ""),
+                    "content_preview": KbIngestService._preview_child_content(
+                        child.content or ""
+                    ),
+                    "splitter": extra.get("splitter"),
+                    "row_start": extra.get("row_start"),
+                    "row_end": extra.get("row_end"),
+                    "table_index": extra.get("table_index"),
+                }
+            )
+        for items in grouped.values():
+            items.sort(key=lambda item: item["id"])
+        return grouped
+
+    @staticmethod
+    def _preview_child_content(text: str) -> str:
+        text = (text or "").strip()
+        if len(text) <= _CHILD_DEBUG_PREVIEW_CHARS:
+            return text
+        return f"{text[:_CHILD_DEBUG_PREVIEW_CHARS].rstrip()}\n...(已截断)"

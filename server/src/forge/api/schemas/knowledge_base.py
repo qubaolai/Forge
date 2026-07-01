@@ -104,12 +104,47 @@ class KbDocumentUploadOut(BaseModel):
     status: str
 
 
+class KbChildChunkDebugInfo(BaseModel):
+    id: str
+    source_type: str = "text"
+    chars: int = 0
+    content_preview: str = ""
+    splitter: str | None = None
+    row_start: int | None = None
+    row_end: int | None = None
+    table_index: int | None = None
+
+
+class KbDocumentChunkInfo(BaseModel):
+    chunk_id: str
+    seq: int
+    header_path: str = ""
+    source_type: str = "text"
+    page: int | None = None
+    page_start: int | None = None
+    page_end: int | None = None
+    token_count: int = 0
+    content_chars: int = 0
+    content_preview: str = ""
+    metadata: dict = Field(default_factory=dict)
+    child_count: int = 0
+    child_debug_manifest: list[KbChildChunkDebugInfo] = Field(default_factory=list)
+
+
+class KbDocumentChunkListResponse(BaseModel):
+    items: list[KbDocumentChunkInfo]
+    total: int
+    page: int
+    page_size: int
+
+
 # ----------------------------------------------------------------------
 # 检索测试
 # ----------------------------------------------------------------------
 class KbSearchIn(BaseModel):
     query: str = Field(min_length=1, max_length=2048)
     top_n: int = Field(default=5, ge=1, le=20)
+    debug: bool = False
 
 
 class KbSearchHit(BaseModel):
@@ -122,14 +157,74 @@ class KbSearchHit(BaseModel):
     content: str
     score: float
     page: int | None = None
+    page_start: int | None = None
+    page_end: int | None = None
     header_path: str = ""
     source_url: str | None = None
+
+
+class KbRetrievalRecallHit(BaseModel):
+    rank: int
+    chunk_id: str
+    parent_id: str
+    document_id: str
+    score: float
+
+
+class KbRetrievalFusionHit(BaseModel):
+    chunk_id: str
+    parent_id: str
+    document_id: str
+    fusion_score: float
+    sources: list[str] = Field(default_factory=list)
+    rank_per_source: dict[str, int] = Field(default_factory=dict)
+
+
+class KbRetrievalAggregationHit(BaseModel):
+    parent_id: str
+    document_id: str
+    fusion_score: float
+    hit_child_count: int
+    hit_chunk_ids: list[str] = Field(default_factory=list)
+
+
+class KbRetrievalRerankHit(BaseModel):
+    parent_id: str
+    before_rank: int
+    after_rank: int
+    fusion_score: float
+    rerank_score: float | None = None
+    final_score: float
+
+
+class KbRetrievalTrace(BaseModel):
+    recall: dict[str, list[KbRetrievalRecallHit]] = Field(default_factory=dict)
+    fusion: list[KbRetrievalFusionHit] = Field(default_factory=list)
+    aggregation: list[KbRetrievalAggregationHit] = Field(default_factory=list)
+    rerank: list[KbRetrievalRerankHit] = Field(default_factory=list)
 
 
 class KbSearchResponse(BaseModel):
     items: list[KbSearchHit]
     total: int
     query: str
+    trace: KbRetrievalTrace | None = None
+
+
+class KbChunkFullText(BaseModel):
+    chunk_id: str
+    document_id: str
+    document_name: str
+    kb_id: str
+    kb_name: str
+    content: str
+    header_path: str = ""
+    source_type: str = "text"
+    metadata: dict = Field(default_factory=dict)
+    page: int | None = None
+    page_start: int | None = None
+    page_end: int | None = None
+    source_url: str | None = None
 
 
 # ----------------------------------------------------------------------

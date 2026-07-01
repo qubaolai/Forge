@@ -55,6 +55,7 @@ class TurnPreparer:
         trace_id: str,
         model_options: ModelOptionsIn | None = None,
         attachments: list | None = None,
+        kb_ids: list[str] | None = None,
     ) -> TurnContext:
         """跑完所有 DB 准备工作, 返回 TurnContext.
 
@@ -70,6 +71,7 @@ class TurnPreparer:
             session_hint=session_id or "<new>",
             input_len=len(message or ""),
         ) as s:
+            selected_kb_ids: tuple[str, ...] = ()
             # ---- 段1: 会话解析 / 重命名判定 ----
             async with session_scope() as db:
                 sess_repo = ChatSessionRepository(db)
@@ -93,6 +95,7 @@ class TurnPreparer:
                     existing_count = await msg_repo.count_by_session(session_id_actual)
                     should_rename = existing_count == 0 and session.title == "新会话"
 
+                selected_kb_ids = await _resolve_accessible_kb_ids(db, kb_ids, user_id)
                 await db.commit()
 
             # ---- 段中 (无事务): LLM 生成标题, 不占 DB 连接 ----
@@ -163,6 +166,7 @@ class TurnPreparer:
             new_title=new_title,
             trace_id=trace_id,
             model_options=model_options_dict,
+            selected_kb_ids=selected_kb_ids,
             exclude_message_ids=(user_msg_id,),
             context_window=context_window,
         )
@@ -219,6 +223,20 @@ async def _bind_attachments(
         await repo.bind_session_and_message(
             fid, session_id, message_id, owner_user_id=user_id
         )
+
+
+async def _resolve_accessible_kb_ids(db, kb_ids: list[str] | None, user_id: str) -> tuple[str, ...]:
+    cleaned = [str(kb_id).strip() for kb_id in (kb_ids or []) if str(kb_id).strip()]
+    if not cleaned:
+        return ()
+    from forge.infrastructure.database.repositories.knowledge_base_repo import (
+        KnowledgeBaseRepository,
+    )
+
+    repo = KnowledgeBaseRepository(db)
+    kbs = await repo.find_accessible_by_ids(cleaned, user_id)
+    accessible = {str(kb.id) for kb in kbs}
+    return tuple(kb_id for kb_id in cleaned if kb_id in accessible)
 
 
 def _make_title(text: str, max_len: int = 25) -> str:

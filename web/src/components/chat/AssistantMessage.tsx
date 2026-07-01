@@ -17,7 +17,7 @@ interface Props {
   message: ChatMessage;
   onRegenerate?: () => void;
   onResume?: () => void;
-  onCitationClick?: (citation: Citation) => void;
+  onCitationClick?: (citation: Citation, message: ChatMessage) => void;
   onFilePreview?: (file: ChatFileMeta) => void;
 }
 
@@ -30,7 +30,7 @@ export function AssistantMessage({ message, onRegenerate, onResume, onCitationCl
   function handleCitationClick(c: Citation) {
     setCitationsOpen(true);
     setActiveCitation(c.index);
-    onCitationClick?.(c);
+    onCitationClick?.(c, message);
   }
 
   async function handleCopy() {
@@ -90,7 +90,7 @@ export function AssistantMessage({ message, onRegenerate, onResume, onCitationCl
             open={citationsOpen}
             onToggle={() => setCitationsOpen((v) => !v)}
             activeIndex={activeCitation}
-            onCitationClick={onCitationClick}
+            onCitationClick={handleCitationClick}
           />
         )}
 
@@ -418,9 +418,14 @@ function formatDuration(ms: number): string {
 // ---------------------------------------------------------------------------
 // 引用来源
 // ---------------------------------------------------------------------------
-function citationPage(c: Citation): number | null {
-  const p = (c.metadata as Record<string, unknown> | undefined)?.page;
-  return typeof p === 'number' ? p : null;
+function citationPageLabel(c: Citation): string {
+  const meta = c.metadata as Record<string, unknown> | undefined;
+  const page = typeof meta?.page === 'number' ? meta.page : null;
+  const start = typeof meta?.page_start === 'number' ? meta.page_start : page;
+  const end = typeof meta?.page_end === 'number' ? meta.page_end : start;
+  if (start == null) return '';
+  if (end == null || end === start) return `第 ${start} 页`;
+  return `第 ${start}-${end} 页`;
 }
 
 function citationMeta(c: Citation, key: string): string {
@@ -486,7 +491,7 @@ function CitationCard({
       ref.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
   }, [active]);
-  const page = citationPage(citation);
+  const pageLabel = citationPageLabel(citation);
   const kbName = citationMeta(citation, 'kb_name');
   return (
     <button
@@ -500,7 +505,7 @@ function CitationCard({
       <div className="flex items-center gap-1.5">
         <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-500">[{citation.index}]</span>
         <span className="truncate font-medium text-gray-700">{citation.document_name || '未命名文档'}</span>
-        {page != null && <span className="shrink-0 text-gray-400">第 {page} 页</span>}
+        {pageLabel && <span className="shrink-0 text-gray-400">{pageLabel}</span>}
         <span className="ml-auto shrink-0 text-gray-300">{citation.score.toFixed(3)}</span>
       </div>
       {kbName && <div className="mt-0.5 text-[11px] text-gray-400">{kbName}</div>}

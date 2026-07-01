@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, KeyboardEvent, ClipboardEvent, ChangeEvent } from 'react';
-import { Send, Square, Brain, Paperclip, X, Loader2 } from 'lucide-react';
-import type { ModelGroup } from '@/types';
+import { Send, Square, Brain, Paperclip, X, Loader2, BookOpen, Check } from 'lucide-react';
+import type { KnowledgeBase, ModelGroup } from '@/types';
 import { cn } from '@/lib/utils';
 
 export type ThinkingLevel = 'low' | 'medium' | 'high' | 'xhigh';
@@ -24,6 +24,9 @@ interface Props {
   onModelChange: (provider: string, model: string) => void;
   thinkingEnabled: boolean;
   onThinkingChange: (enabled: boolean) => void;
+  knowledgeBases?: KnowledgeBase[];
+  selectedKbIds?: string[];
+  onSelectedKbIdsChange?: (ids: string[]) => void;
 }
 
 const THINKING_LEVEL_LABELS: Record<ThinkingLevel, string> = {
@@ -73,11 +76,15 @@ export function ChatInput({
   thinkingEnabled,
   onThinkingChange,
   onUploadAttachment,
+  knowledgeBases = [],
+  selectedKbIds = [],
+  onSelectedKbIdsChange,
 }: Props) {
   const [value, setValue] = useState('');
   const [attachments, setAttachments] = useState<{ id: string; name: string }[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
+  const [kbPickerOpen, setKbPickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // 粘贴文本超过该字符数时自动转为会话附件 (降上下文占用, 后端 read_file 按需读取)
@@ -172,6 +179,16 @@ export function ChatInput({
     thinkingOptions.includes(thinkingLevel) ? thinkingLevel : thinkingOptions[0]
   ) as ThinkingLevel;
   const selectedValue = `${selectedProvider}::${selectedModel}`;
+  const selectedKbSet = new Set(selectedKbIds);
+  const selectedKbCount = selectedKbIds.length;
+
+  function toggleKb(id: string) {
+    if (!onSelectedKbIdsChange) return;
+    const next = selectedKbSet.has(id)
+      ? selectedKbIds.filter((item) => item !== id)
+      : [...selectedKbIds, id];
+    onSelectedKbIdsChange(next);
+  }
 
   return (
     <div className="border-t bg-white px-6 py-4">
@@ -269,6 +286,78 @@ export function ChatInput({
         </div>
         <div className="mt-2 flex items-center justify-between px-1 text-[12px] text-gray-400">
           <div className="flex items-center gap-2">
+            {onSelectedKbIdsChange && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setKbPickerOpen((open) => !open)}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded border px-2 py-0.5 transition-colors',
+                    selectedKbCount > 0
+                      ? 'border-blue-200 bg-blue-50 text-blue-700'
+                      : 'border-gray-200 text-gray-500 hover:text-gray-700',
+                  )}
+                  title={selectedKbCount > 0 ? '已选择知识库' : '未选择知识库, 本轮不会查询'}
+                >
+                  <BookOpen size={13} />
+                  <span>{selectedKbCount > 0 ? `知识库 ${selectedKbCount}` : '知识库'}</span>
+                </button>
+                {kbPickerOpen && (
+                  <div className="absolute bottom-full left-0 z-20 mb-2 w-72 rounded-lg border border-gray-200 bg-white p-2 shadow-lg">
+                    <div className="mb-1 flex items-center justify-between px-1 text-[11px] text-gray-400">
+                      <span>选择本轮要查询的知识库</span>
+                      {selectedKbCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => onSelectedKbIdsChange([])}
+                          className="text-gray-400 hover:text-gray-700"
+                        >
+                          清空
+                        </button>
+                      )}
+                    </div>
+                    {knowledgeBases.length === 0 ? (
+                      <div className="px-2 py-3 text-center text-xs text-gray-400">
+                        暂无可用知识库
+                      </div>
+                    ) : (
+                      <div className="max-h-56 overflow-y-auto">
+                        {knowledgeBases.map((kb) => {
+                          const selected = selectedKbSet.has(kb.id);
+                          return (
+                            <button
+                              key={kb.id}
+                              type="button"
+                              onClick={() => toggleKb(kb.id)}
+                              className="flex w-full items-start gap-2 rounded-md px-2 py-2 text-left hover:bg-gray-50"
+                            >
+                              <span
+                                className={cn(
+                                  'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border',
+                                  selected
+                                    ? 'border-blue-500 bg-blue-500 text-white'
+                                    : 'border-gray-300 text-transparent',
+                                )}
+                              >
+                                <Check size={11} />
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-xs font-medium text-gray-700">
+                                  {kb.name}
+                                </span>
+                                <span className="block truncate text-[11px] text-gray-400">
+                                  {kb.document_count} 文档 · {kb.chunk_count} 分块
+                                </span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             <select
               value={selectedValue}
               onChange={(e) => {

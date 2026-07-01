@@ -6,7 +6,7 @@ import { AssistantMessage } from './AssistantMessage';
 
 interface Props {
   messages: ChatMessage[];
-  onCitationClick?: (citation: Citation) => void;
+  onCitationClick?: (citation: Citation, message: ChatMessage) => void;
   onRegenerate?: (messageId: string) => void;
   onResume?: (messageId: string) => void;
   onFilePreview?: (file: ChatFileMeta) => void;

@@ -31,7 +31,13 @@ export default function KnowledgeListPage() {
   }, [kbs, query]);
 
   const createMutation = useMutation({
-    mutationFn: (input: { name: string; description?: string; visibility: Visibility }) =>
+    mutationFn: (input: {
+      name: string;
+      description?: string;
+      visibility: Visibility;
+      chunk_size?: number;
+      chunk_overlap?: number;
+    }) =>
       kbApi.create(input),
     onSuccess: (kb) => {
       queryClient.invalidateQueries({ queryKey: ['kb-list'] });
@@ -189,12 +195,21 @@ function CreateDialog({
   submitting,
 }: {
   onClose: () => void;
-  onCreate: (input: { name: string; description?: string; visibility: Visibility }) => void;
+  onCreate: (input: {
+    name: string;
+    description?: string;
+    visibility: Visibility;
+    chunk_size?: number;
+    chunk_overlap?: number;
+  }) => void;
   submitting?: boolean;
 }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [visibility, setVisibility] = useState<Visibility>('private');
+  const [chunkSize, setChunkSize] = useState(512);
+  const [chunkOverlap, setChunkOverlap] = useState(64);
+  const invalidChunkConfig = chunkOverlap >= chunkSize;
 
   return (
     <div onClick={onClose} className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
@@ -237,14 +252,51 @@ function CreateDialog({
               ))}
             </div>
           </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="分块大小">
+              <input
+                type="number"
+                min={64}
+                max={4096}
+                value={chunkSize}
+                onChange={(event) =>
+                  setChunkSize(Math.max(64, Math.min(4096, Number(event.target.value) || 64)))
+                }
+                className="w-full rounded-md border px-3 py-1.5 text-sm outline-none focus:border-gray-400"
+              />
+            </Field>
+            <Field label="重叠长度">
+              <input
+                type="number"
+                min={0}
+                max={512}
+                value={chunkOverlap}
+                onChange={(event) =>
+                  setChunkOverlap(Math.max(0, Math.min(512, Number(event.target.value) || 0)))
+                }
+                className="w-full rounded-md border px-3 py-1.5 text-sm outline-none focus:border-gray-400"
+              />
+            </Field>
+          </div>
+          <p className={cn('text-xs leading-5', invalidChunkConfig ? 'text-red-600' : 'text-gray-400')}>
+            重叠长度必须小于分块大小；该配置会用于后续上传文档的切分。
+          </p>
         </div>
         <div className="mt-5 flex justify-end gap-2">
           <button onClick={onClose} className="rounded-md border px-3 py-1.5 text-sm hover:bg-gray-50">
             取消
           </button>
           <button
-            onClick={() => onCreate({ name: name.trim(), description: description.trim() || undefined, visibility })}
-            disabled={!name.trim() || submitting}
+            onClick={() =>
+              onCreate({
+                name: name.trim(),
+                description: description.trim() || undefined,
+                visibility,
+                chunk_size: chunkSize,
+                chunk_overlap: chunkOverlap,
+              })
+            }
+            disabled={!name.trim() || invalidChunkConfig || submitting}
             className="rounded-md bg-black px-3 py-1.5 text-sm text-white hover:bg-gray-800 disabled:opacity-50"
           >
             {submitting ? '创建中…' : '创建'}

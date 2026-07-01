@@ -24,12 +24,17 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from forge.core.request_context import add_citations, current_user_id
+from forge.core.request_context import (
+    add_citations,
+    current_allowed_knowledge_kb_ids,
+    current_user_id,
+)
 from forge.infrastructure.database.database import session_scope
 from forge.infrastructure.database.repositories.knowledge_base_repo import (
     KnowledgeBaseRepository,
 )
 from forge.llm.cost_tracker import LLMBudgetExceeded
+from forge.retrieval.common.excerpt import build_query_focused_excerpt
 from forge.tools.base import Tool
 from forge.tools.registry import register_tool
 
@@ -39,6 +44,36 @@ logger = logging.getLogger(__name__)
 _MAX_SNIPPET_CHARS = 1200
 # 落 citation 的片段摘要长度 (前端来源卡片展示用, 比给 LLM 的更短).
 _CITATION_CONTENT_CHARS = 500
+
+
+def _as_clean_str_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items = [value]
+    elif isinstance(value, list | tuple | set):
+        items = list(value)
+    else:
+        items = [value]
+    return [str(item).strip() for item in items if str(item).strip()]
+
+
+def _parse_top_n(value: Any) -> int | None:
+    try:
+        top_n = int(value or 5)
+    except (TypeError, ValueError):
+        return None
+    return max(1, min(top_n, 10))
+
+
+def _format_page_range(page: int | None, page_start: int | None, page_end: int | None) -> str:
+    start = page_start if page_start is not None else page
+    end = page_end if page_end is not None else start
+    if start is None:
+        return ""
+    if end is None or end == start:
+        return f"第 {start} 页"
+    return f"第 {start}-{end} 页"
 
 
 @register_tool
@@ -68,6 +103,7 @@ class KnowledgeSearchTool(Tool):
             "kb_ids": {
                 "type": "array",
                 "items": {"type": "string"},
+                "minItems": 1,
                 "description": "知识库 ID 列表，取自系统提示里的 kb_id",
             },
             "top_n": {
@@ -76,29 +112,32 @@ class KnowledgeSearchTool(Tool):
                 "default": 5,
             },
         },
-        "required": ["query"],
+        "required": ["query", "kb_ids"],
     }
     parallelism_safe = True
 
     async def arun(self, args: dict[str, Any]) -> str:
         query = (args.get("query") or "").strip()
-        kb_names = [
-            str(item).strip()
-            for item in (args.get("kb_names") or [])
-            if str(item).strip()
-        ]
-        kb_ids = [
-            str(item).strip()
-            for item in (args.get("kb_ids") or [])
-            if str(item).strip()
-        ]
-        top_n = int(args.get("top_n") or 5)
-        top_n = max(1, min(top_n, 10))
+        kb_names = _as_clean_str_list(args.get("kb_names"))
+        kb_ids = _as_clean_str_list(args.get("kb_ids"))
+        top_n = _parse_top_n(args.get("top_n"))
 
         if not query:
             return "错误: query 不能为空"
         if not kb_ids and not kb_names:
             return "错误: kb_ids 不能为空, 必须明确指定要搜哪些知识库"
+        if top_n is None:
+            return "错误: top_n 必须是整数"
+
+        allowed_kb_ids = set(current_allowed_knowledge_kb_ids())
+        if not allowed_kb_ids:
+            return "错误: 当前对话未选择知识库, 不允许执行 knowledge_search"
+        if kb_names:
+            return "错误: 当前对话由前端选择知识库, 请只使用系统提示中列出的 kb_ids"
+        requested = set(kb_ids)
+        disallowed = sorted(requested - allowed_kb_ids)
+        if disallowed:
+            return f"错误: 请求的知识库不在本轮允许范围内: {disallowed}"
 
         user_id = current_user_id() or ""
         if not user_id:
@@ -149,10 +188,10 @@ class KnowledgeSearchTool(Tool):
                 names = sorted(kb.name for kb in kbs)
                 return f"在知识库 {names} 中未找到与 '{query}' 相关的内容"
 
-            return self._format_results(results)
+            return self._format_results(results, query=query)
 
     @staticmethod
-    def _format_results(results) -> str:
+    def _format_results(results, query: str = "") -> str:
         """格式化结果给 LLM, 并把结构化 citations 写入回合收集器.
 
         每段以 [N] 起头并携带引用信息 (文档名 / KB / 章节 / 页码), 便于 LLM
@@ -164,9 +203,11 @@ class KnowledgeSearchTool(Tool):
         ]
         for i, r in enumerate(results, 1):
             content = (r.content or "").strip()
-            snippet = content
-            if len(snippet) > _MAX_SNIPPET_CHARS:
-                snippet = snippet[:_MAX_SNIPPET_CHARS] + "...(已截断)"
+            snippet = build_query_focused_excerpt(
+                content,
+                query,
+                max_chars=_MAX_SNIPPET_CHARS,
+            )
 
             # 引用信息: 优先人类可读字段, 没有再回退
             citation_parts: list[str] = []
@@ -176,8 +217,9 @@ class KnowledgeSearchTool(Tool):
                 citation_parts.append(f"知识库「{r.kb_name}」")
             if r.header_path:
                 citation_parts.append(f"章节: {r.header_path}")
-            if r.page is not None:
-                citation_parts.append(f"第 {r.page} 页")
+            page_label = _format_page_range(r.page, r.page_start, r.page_end)
+            if page_label:
+                citation_parts.append(page_label)
             head = " | ".join(citation_parts) if citation_parts else "片段"
             lines.append(f"[{i}] {head} (相关度={r.final_score:.4f})")
             if r.source_url:
@@ -186,20 +228,31 @@ class KnowledgeSearchTool(Tool):
             lines.append(f"内容:\n{snippet}")
             lines.append("")
 
+            metadata = {
+                "kb_name": r.kb_name or "",
+                "header_path": r.header_path or "",
+                "source_url": r.source_url,
+            }
+            if r.page is not None:
+                metadata["page"] = r.page
+            if r.page_start is not None:
+                metadata["page_start"] = r.page_start
+            if r.page_end is not None:
+                metadata["page_end"] = r.page_end
+
             citations.append(
                 {
                     "index": i,
                     "chunk_id": str(r.chunk_id),
                     "document_id": str(r.document_id),
                     "document_name": r.document_name or "",
-                    "content": content[:_CITATION_CONTENT_CHARS],
+                    "content": build_query_focused_excerpt(
+                        content,
+                        query,
+                        max_chars=_CITATION_CONTENT_CHARS,
+                    ),
                     "score": round(float(r.final_score), 4),
-                    "metadata": {
-                        "kb_name": r.kb_name or "",
-                        "page": r.page,
-                        "header_path": r.header_path or "",
-                        "source_url": r.source_url,
-                    },
+                    "metadata": metadata,
                 }
             )
 

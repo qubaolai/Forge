@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from forge.infrastructure.database.orm.knowledge_base_orm import (
@@ -121,14 +121,35 @@ class KnowledgeBaseRepository(BaseRepository, KnowledgeBaseStore):
         chunk_count_delta: int = 0,
         size_bytes_delta: int = 0,
     ) -> None:
-        """增量更新 KB 统计字段. 不 commit."""
-        kb = await self.session.get(KnowledgeBaseOrm, _to_int(kb_id))
-        if kb is None:
+        """原子增量更新 KB 统计字段. 不 commit.
+
+        多文件批量上传会并发触发多次统计更新, 因此这里必须由数据库做
+        ``current + delta``; 不能先把 ORM 行读出来再在 Python 里累加,
+        否则会出现 lost update, 导致文档数只增加 1。
+        """
+        kid = _to_int(kb_id)
+        if kid is None:
             return
-        kb.document_count = max(0, (kb.document_count or 0) + document_count_delta)
-        kb.chunk_count = max(0, (kb.chunk_count or 0) + chunk_count_delta)
-        kb.size_bytes = max(0, (kb.size_bytes or 0) + size_bytes_delta)
-        await self.session.flush()
+
+        def bump(column, delta: int):
+            expr = column + int(delta)
+            return case((expr < 0, 0), else_=expr)
+
+        stmt = (
+            update(KnowledgeBaseOrm)
+            .where(KnowledgeBaseOrm.id == kid)
+            .values(
+                document_count=bump(
+                    KnowledgeBaseOrm.document_count,
+                    document_count_delta,
+                ),
+                chunk_count=bump(KnowledgeBaseOrm.chunk_count, chunk_count_delta),
+                size_bytes=bump(KnowledgeBaseOrm.size_bytes, size_bytes_delta),
+                updated_at=func.now(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        await self.session.execute(stmt)
 
     # ------------------------------------------------------------------
     # knowledge_search 工具使用

@@ -18,9 +18,12 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from forge.api.schemas.knowledge_base import (
+    KbChildChunkDebugInfo,
     KbCreateIn,
+    KbDocumentChunkInfo,
     KbDocumentInfo,
     KbInfo,
+    KbRetrievalTrace,
     KbSearchHit,
     KbUpdateIn,
 )
@@ -28,6 +31,9 @@ from forge.config.domains.paths import uploads_dir
 from forge.core.exceptions import BadRequest, Conflict, NotFound
 from forge.infrastructure.database.orm.kb_document_orm import KbDocumentOrm
 from forge.infrastructure.database.orm.knowledge_base_orm import KnowledgeBaseOrm
+from forge.infrastructure.database.repositories.kb_document_chunk_repo import (
+    KbDocumentChunkRepository,
+)
 from forge.infrastructure.database.repositories.kb_document_repo import (
     KbDocumentRepository,
 )
@@ -35,10 +41,13 @@ from forge.infrastructure.database.repositories.knowledge_base_repo import (
     KnowledgeBaseRepository,
 )
 from forge.infrastructure.storage.local_fs import LocalFileStorage
+from forge.retrieval.common.excerpt import build_query_focused_excerpt
 
 logger = logging.getLogger(__name__)
 
 _SEARCH_HIT_MAX_CHARS = 4000
+_CHUNK_PREVIEW_CHARS = 800
+_CHILD_PREVIEW_CHARS = 240
 
 
 def to_kb_info(kb: KnowledgeBaseOrm) -> KbInfo:
@@ -246,6 +255,20 @@ class KbService:
             raise NotFound("文档不存在", code=40421)
         return doc
 
+    async def list_document_chunks(
+        self,
+        *,
+        document_id: str,
+        page: int,
+        page_size: int,
+    ) -> tuple[list[KbDocumentChunkInfo], int]:
+        rows, total = await KbDocumentChunkRepository(self.db).list_by_document(
+            document_id,
+            page=page,
+            page_size=page_size,
+        )
+        return [_to_chunk_info(row) for row in rows], total
+
     async def delete_document(self, kb: KnowledgeBaseOrm, doc: KbDocumentOrm) -> None:
         """删除文档: 清库外索引 + 删 DB 行 + 回退 KB 统计."""
         ingest = _try_ingest_service()
@@ -273,30 +296,122 @@ class KbService:
         *,
         query: str,
         top_n: int,
-    ) -> list[KbSearchHit]:
-        from forge.retrieval.search import search_chunks
+        debug: bool = False,
+    ) -> tuple[list[KbSearchHit], KbRetrievalTrace | None]:
+        if debug:
+            from forge.retrieval.search import search_chunks_with_trace
 
-        results = await search_chunks(
-            self.db, kb_ids=[str(kb.id)], query=query, top_n=top_n
-        )
-        return [
+            results, trace = await search_chunks_with_trace(
+                self.db, kb_ids=[str(kb.id)], query=query, top_n=top_n
+            )
+        else:
+            from forge.retrieval.search import search_chunks
+
+            results = await search_chunks(
+                self.db, kb_ids=[str(kb.id)], query=query, top_n=top_n
+            )
+            trace = None
+        hits = [
             KbSearchHit(
                 chunk_id=str(r.chunk_id),
                 document_id=str(r.document_id),
                 document_name=r.document_name,
                 kb_name=r.kb_name,
-                content=_truncate_search_hit(r.content),
+                content=_excerpt_search_hit(r.content, query),
                 score=r.final_score,
                 page=r.page,
+                page_start=r.page_start,
+                page_end=r.page_end,
                 header_path=r.header_path,
                 source_url=r.source_url,
             )
             for r in results
         ]
+        return hits, KbRetrievalTrace(**trace) if trace is not None else None
 
 
-def _truncate_search_hit(content: str) -> str:
-    text = content or ""
-    if len(text) <= _SEARCH_HIT_MAX_CHARS:
+def _excerpt_search_hit(content: str, query: str) -> str:
+    return build_query_focused_excerpt(
+        content,
+        query,
+        max_chars=_SEARCH_HIT_MAX_CHARS,
+    )
+
+
+def _preview(text: str, max_chars: int) -> str:
+    text = (text or "").strip()
+    if len(text) <= max_chars:
         return text
-    return text[:_SEARCH_HIT_MAX_CHARS] + "...(已截断)"
+    return f"{text[:max_chars].rstrip()}\n...(已截断)"
+
+
+def _to_int(value) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _to_nonnegative_int(value) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _page_fields(extra: dict) -> tuple[int | None, int | None, int | None]:
+    page = _to_int(extra.get("page"))
+    page_start = _to_int(extra.get("page_start")) or page
+    page_end = _to_int(extra.get("page_end")) or page_start
+    page = page or page_start
+    return page, page_start, page_end
+
+
+def _child_debug_info(item: dict) -> KbChildChunkDebugInfo:
+    return KbChildChunkDebugInfo(
+        id=str(item.get("id") or ""),
+        source_type=str(item.get("source_type") or "text"),
+        chars=int(item.get("chars") or 0),
+        content_preview=str(item.get("content_preview") or "")[:_CHILD_PREVIEW_CHARS],
+        splitter=item.get("splitter"),
+        row_start=_to_int(item.get("row_start")),
+        row_end=_to_int(item.get("row_end")),
+        table_index=_to_nonnegative_int(item.get("table_index")),
+    )
+
+
+def _to_chunk_info(row: dict) -> KbDocumentChunkInfo:
+    content = row.get("content") or ""
+    extra = row.get("extra") or {}
+    if not isinstance(extra, dict):
+        extra = {}
+    child_debug_raw = extra.get("child_debug_manifest")
+    child_debug_manifest = [
+        _child_debug_info(item) for item in child_debug_raw if isinstance(item, dict)
+    ] if isinstance(child_debug_raw, list) else []
+    child_manifest = extra.get("child_manifest")
+    child_count = (
+        len(child_debug_manifest)
+        if child_debug_manifest
+        else len(child_manifest)
+        if isinstance(child_manifest, list)
+        else 0
+    )
+    page, page_start, page_end = _page_fields(extra)
+    return KbDocumentChunkInfo(
+        chunk_id=str(row.get("chunk_id") or ""),
+        seq=int(row.get("seq") or 0),
+        header_path=row.get("header_path") or "",
+        source_type=row.get("source_type") or "text",
+        page=page,
+        page_start=page_start,
+        page_end=page_end,
+        token_count=int(row.get("token_count") or 0),
+        content_chars=len(content),
+        content_preview=_preview(content, _CHUNK_PREVIEW_CHARS),
+        metadata=extra,
+        child_count=child_count,
+        child_debug_manifest=child_debug_manifest,
+    )

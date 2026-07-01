@@ -64,3 +64,30 @@ async def test_existing_session_owner_mismatch_rejected() -> None:
     assert exc.value.code == "40310"
     msg_repo.count_by_session.assert_not_called()
     msg_repo.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resolve_accessible_kb_ids_keeps_only_authorized_ids(monkeypatch) -> None:
+    from forge.chat import preparer as preparer_mod
+
+    class Repo:
+        def __init__(self, db) -> None:
+            _ = db
+
+        async def find_accessible_by_ids(self, ids, user_id):
+            assert ids == ["kb1", "kb2", "kb3"]
+            assert user_id == "u1"
+            return [SimpleNamespace(id="kb1"), SimpleNamespace(id="kb3")]
+
+    monkeypatch.setattr(
+        "forge.infrastructure.database.repositories.knowledge_base_repo.KnowledgeBaseRepository",
+        Repo,
+    )
+
+    result = await preparer_mod._resolve_accessible_kb_ids(
+        object(),
+        ["kb1", "kb2", "kb3"],
+        "u1",
+    )
+
+    assert result == ("kb1", "kb3")

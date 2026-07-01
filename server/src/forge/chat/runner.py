@@ -103,6 +103,7 @@ class ReActRunner(AgentRunner):
         guard_factories: list[GuardFactory] | None = None,
         role: str = "local",
         tools: Iterable[Tool] | None = None,
+        knowledge_search_enabled: bool | None = None,
     ) -> None:
         self._llm = llm_chain
         self._system_prompt = system_prompt
@@ -110,6 +111,7 @@ class ReActRunner(AgentRunner):
         self._guard_factories = guard_factories
         self._role = role
         self._tools = list(tools) if tools is not None else None
+        self._knowledge_search_enabled = knowledge_search_enabled
         self.result: RunResult = RunResult()
 
     async def run(
@@ -127,6 +129,7 @@ class ReActRunner(AgentRunner):
             KnowledgeSearchToolGate(
                 tools=self._tools,
                 user_message=ctx.current_user_message,
+                knowledge_search_enabled=self._knowledge_search_enabled,
             ),
             GuardLifecycleAdapter(guards),
         ])
@@ -201,6 +204,7 @@ class ReActRunner(AgentRunner):
         *,
         system_prompt: str,
         role: str = "local",
+        knowledge_search_enabled: bool | None = None,
     ) -> ReActRunner:
         """按 Profile 装配 Runner.
 
@@ -222,4 +226,5 @@ class ReActRunner(AgentRunner):
             max_steps=profile.max_steps,
             role=role,
             tools=tools,
+            knowledge_search_enabled=knowledge_search_enabled,
         )

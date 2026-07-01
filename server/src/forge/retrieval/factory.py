@@ -73,7 +73,10 @@ class RetrieverFactory:
             fusion_cfg.strategy,
             {
                 "rrf_k": getattr(fusion_cfg, "rrf_k", 60),
-                "weights": dict(getattr(fusion_cfg, "weights", {}) or {}),
+                "weights": {
+                    "vector": float(getattr(fusion_cfg, "weighted_vector", 0.7)),
+                    "bm25": float(getattr(fusion_cfg, "weighted_bm25", 0.3)),
+                },
             },
         )
 
@@ -93,6 +96,8 @@ class RetrieverFactory:
             vector_top_k=recall_cfg.vector.top_k,
             bm25_top_k=recall_cfg.bm25.top_k,
             rerank_enabled=rerank_enabled,
+            vector_enabled=vector_recall is not None,
+            bm25_enabled=bm25_recall is not None,
         )
 
         return ParentChildRetriever(

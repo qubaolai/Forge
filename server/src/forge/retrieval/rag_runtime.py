@@ -6,6 +6,8 @@ import threading
 
 from forge.retrieval.bound_model_resolver import get_bound_model_resolver
 
+_MISSING = object()
+
 
 class RagRuntime:
     def __init__(self, *, settings, bm25_store) -> None:
@@ -21,6 +23,12 @@ class RagRuntime:
         if embedder is None:
             return None
         model_id = str(embedder._forge_model_id)
+        return await self.vector_store_for_model_id(model_id)
+
+    async def vector_store_for_model_id(self, model_id):
+        if model_id is None:
+            return None
+        model_id = str(model_id)
         with self._lock:
             if model_id in self._vector_stores:
                 return self._vector_stores[model_id]
@@ -34,12 +42,14 @@ class RagRuntime:
             self._vector_stores[model_id] = store
         return store
 
-    async def build_retriever(self):
+    async def build_retriever(self, *, embedder=_MISSING, reranker=_MISSING):
         from forge.retrieval.factory import RetrieverFactory
 
-        embedder = await self.resolve_embedding()
+        if embedder is _MISSING:
+            embedder = await self.resolve_embedding()
         vector_store = await self.vector_store_for(embedder)
-        reranker = await get_bound_model_resolver().resolve("rag_reranker")
+        if reranker is _MISSING:
+            reranker = await get_bound_model_resolver().resolve("rag_reranker")
         return RetrieverFactory.create(
             settings=self.settings,
             child_store=vector_store,

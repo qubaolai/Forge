@@ -58,14 +58,18 @@ class WeightedFusion(Fusion):
         if not hits_per_source:
             return []
 
-        # 1. 每路 min-max 归一化, 得到 chunk_id -> norm_score 映射
+        # 1. 每路先按 chunk_id 去重, 再 min-max 归一化
+        deduped_hits_per_source = {
+            source: self._dedupe_source_hits(hits)
+            for source, hits in hits_per_source.items()
+        }
         norm_per_source: dict[str, dict[str, float]] = {}
-        for source, hits in hits_per_source.items():
+        for source, hits in deduped_hits_per_source.items():
             norm_per_source[source] = self._normalize(hits)
 
         # 2. 按 chunk_id 累计加权
         accum: dict[str, FusedHit] = {}
-        for source, hits in hits_per_source.items():
+        for source, hits in deduped_hits_per_source.items():
             w = self.weights.get(source, 0.0)
             norm_map = norm_per_source[source]
             if w == 0.0:
@@ -102,6 +106,18 @@ class WeightedFusion(Fusion):
             len(result),
         )
         return result
+
+    @staticmethod
+    def _dedupe_source_hits(hits: list[ChildHit]) -> list[ChildHit]:
+        """同一路召回内同一 chunk 只贡献一次, 取分数最高的命中."""
+        by_chunk: dict[str, ChildHit] = {}
+        for hit in hits:
+            existing = by_chunk.get(hit.chunk_id)
+            if existing is None or hit.score > existing.score:
+                by_chunk[hit.chunk_id] = hit
+            elif hit.score == existing.score and hit.rank < existing.rank:
+                by_chunk[hit.chunk_id] = hit
+        return sorted(by_chunk.values(), key=lambda h: h.rank)
 
     @staticmethod
     def _normalize(hits: list[ChildHit]) -> dict[str, float]:

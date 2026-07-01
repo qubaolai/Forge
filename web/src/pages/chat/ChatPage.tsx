@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { filesApi, sessionsApi, systemApi } from '@/api';
-import { ChatMessage, ChatFileMeta, Citation, ModelGroup } from '@/types';
+import { filesApi, kbApi, sessionsApi, systemApi } from '@/api';
+import { ChatMessage, ChatFileMeta, Citation, KnowledgeBase, ModelGroup } from '@/types';
 import { useChatStream } from '@/hooks/useChatStream';
 import { MessageList } from '@/components/chat/MessageList';
 import { ChatInput, ThinkingLevel } from '@/components/chat/ChatInput';
@@ -40,16 +40,26 @@ export default function ChatPage() {
 
   const [pendingUser, setPendingUser] = useState<ChatMessage[]>([]);
   const [showPanel, setShowPanel] = useState(true);
-  const [selectedCitation, setSelectedCitation] = useState<number | null>(null);
+  const [citationPanelSelection, setCitationPanelSelection] = useState<{
+    messageId: string;
+    highlightedIndex: number | null;
+  } | null>(null);
   const [previewFile, setPreviewFile] = useState<ChatFileMeta | null>(null);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>('medium');
   const [thinkingEnabled, setThinkingEnabled] = useState(true);
   const [prefill, setPrefill] = useState('');
+  const [selectedKbIds, setSelectedKbIds] = useState<string[]>([]);
 
   // 模型选择
   const [selectedProvider, setSelectedProvider] = useState('anthropic');
   const [selectedModel, setSelectedModel] = useState('claude-sonnet-4-6');
   const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
+
+  const { data: kbList } = useQuery({
+    queryKey: ['kb-list'],
+    queryFn: () => kbApi.list(),
+  });
+  const knowledgeBases = useMemo<KnowledgeBase[]>(() => kbList?.items || [], [kbList]);
 
   // 加载分组模型列表（按供应商）
   const loadModelGroups = useCallback(async () => {
@@ -79,6 +89,15 @@ export default function ChatPage() {
   useEffect(() => {
     loadModelGroups();
   }, [loadModelGroups]);
+
+  useEffect(() => {
+    if (knowledgeBases.length === 0) {
+      setSelectedKbIds([]);
+      return;
+    }
+    const available = new Set(knowledgeBases.map((kb) => kb.id));
+    setSelectedKbIds((prev) => prev.filter((id) => available.has(id)));
+  }, [knowledgeBases]);
 
   const currentModelMeta = useMemo(() => {
     for (const group of modelGroups) {
@@ -128,7 +147,7 @@ export default function ChatPage() {
       return;
     }
     setPendingUser([]);
-    setSelectedCitation(null);
+    setCitationPanelSelection(null);
     setShowPanel(true);
     setPrefill('');
     setPreviewFile(null);
@@ -187,6 +206,18 @@ export default function ChatPage() {
     return [];
   }, [messages]);
 
+  const panelCitationMessage = useMemo(() => {
+    if (!citationPanelSelection) return null;
+    return messages.find((m) => m.id === citationPanelSelection.messageId) || null;
+  }, [citationPanelSelection, messages]);
+
+  const panelCitations = useMemo<Citation[]>(() => {
+    if (panelCitationMessage?.citations?.length) {
+      return panelCitationMessage.citations;
+    }
+    return currentCitations;
+  }, [panelCitationMessage, currentCitations]);
+
   // 上下文占用: 实时 SSE 优先, 否则回退到最后一条带 context_usage 的 assistant 消息 (持久化展示)
   // context_window 强制使用前端当前选中模型的值, 确保占比与下拉框一致
   const displayUsage = useMemo<ContextUsage | null>(() => {
@@ -244,7 +275,7 @@ export default function ChatPage() {
     setPendingUser((prev) => [...prev, pendingMsg]);
 
     const modelOptions = buildModelOptions();
-    send(targetSid, text, attachments, modelOptions);
+    send(targetSid, text, attachments, modelOptions, selectedKbIds);
   }
 
   /** 上传用户文件: 与会话解耦, 上传时不建会话 (发消息时后端再回填会话关系) */
@@ -257,9 +288,9 @@ export default function ChatPage() {
     setPreviewFile(file);
   }
 
-  function handleCitationClick(c: Citation) {
+  function handleCitationClick(c: Citation, message: ChatMessage) {
     setShowPanel(true);
-    setSelectedCitation(c.index);
+    setCitationPanelSelection({ messageId: message.id, highlightedIndex: c.index });
   }
 
   function handleResume(messageId: string) {
@@ -306,7 +337,10 @@ export default function ChatPage() {
           <div className="flex shrink-0 items-center gap-3">
             {!isNew && !showPanel && currentCitations.length > 0 && (
               <button
-                onClick={() => setShowPanel(true)}
+                onClick={() => {
+                  setCitationPanelSelection(null);
+                  setShowPanel(true);
+                }}
                 className="text-xs text-gray-500 hover:text-gray-900 flex items-center gap-1"
               >
                 <PanelRight size={14} />
@@ -352,15 +386,18 @@ export default function ChatPage() {
           }}
           thinkingEnabled={thinkingEnabled}
           onThinkingChange={setThinkingEnabled}
+          knowledgeBases={knowledgeBases}
+          selectedKbIds={selectedKbIds}
+          onSelectedKbIdsChange={setSelectedKbIds}
         />
       </main>
 
       {previewFile ? (
         <FilePreviewPanel file={previewFile} onClose={() => setPreviewFile(null)} />
-      ) : !isNew && showPanel && currentCitations.length > 0 ? (
+      ) : !isNew && showPanel && panelCitations.length > 0 ? (
         <CitationPanel
-          citations={currentCitations}
-          highlightedIndex={selectedCitation}
+          citations={panelCitations}
+          highlightedIndex={citationPanelSelection?.highlightedIndex ?? null}
           onClose={() => setShowPanel(false)}
         />
       ) : null}

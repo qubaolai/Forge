@@ -30,7 +30,7 @@ import statistics
 
 from forge.core.types import ChunkMetadata, ChunkStrategy, Element, ElementType
 from forge.retrieval.chunkers import BaseChunker
-from forge.retrieval.chunkers.base import first_page_of
+from forge.retrieval.chunkers.base import page_range_extra
 
 logger = logging.getLogger(__name__)
 
@@ -346,18 +346,22 @@ class HierarchicalChunker(BaseChunker):
         if not content.strip():
             return []
 
+        if any(
+            el.type == ElementType.TABLE and len(el.content) > self.config.parent_target_max
+            for el in elements
+        ):
+            return self._materialize_section_with_table_splits(header_path, elements)
+
         # 抽取起始页码 (PDF 等格式), 没有时为 None.
         # 父块可能横跨多页, 先记录起始页, 后续可扩展为 page range.
-        page = first_page_of(elements)
-        extra: dict = {}
-        if page is not None:
-            extra["page"] = page
+        extra = page_range_extra(elements)
 
         return [
             {
                 "content": content,
                 "header_path": header_path,
                 "source_type": source_type,
+                "elements": list(elements),
                 "metadata": ChunkMetadata(
                     strategy=ChunkStrategy.HIERARCHICAL,
                     element_count=len(elements),
@@ -366,6 +370,112 @@ class HierarchicalChunker(BaseChunker):
                 ),
             }
         ]
+
+    def _materialize_section_with_table_splits(
+        self,
+        header_path: str,
+        elements: list[Element],
+    ) -> list[dict]:
+        """把含超长表格的章节拆成正文 parent + 表格行组 parent."""
+        parents: list[dict] = []
+        buffer: list[Element] = []
+        table_index = 0
+
+        def flush_buffer() -> None:
+            nonlocal buffer
+            if not buffer:
+                return
+            content = self._render_elements(buffer)
+            if not content.strip():
+                buffer = []
+                return
+            extra = page_range_extra(buffer)
+            has_table = any(el.type == ElementType.TABLE for el in buffer)
+            parents.append(
+                {
+                    "content": content,
+                    "header_path": header_path,
+                    "source_type": "mixed" if has_table else "text",
+                    "elements": list(buffer),
+                    "metadata": ChunkMetadata(
+                        strategy=ChunkStrategy.HIERARCHICAL,
+                        element_count=len(buffer),
+                        has_table=has_table,
+                        extra=extra,
+                    ),
+                }
+            )
+            buffer = []
+
+        for el in elements:
+            if el.type != ElementType.TABLE:
+                buffer.append(el)
+                continue
+
+            if len(el.content) <= self.config.parent_target_max:
+                buffer.append(el)
+                table_index += 1
+                continue
+
+            context = self._table_context_from_elements(buffer)
+            flush_buffer()
+            table_content = self._render_table_child(context, [el.content], [], "")
+            slices = self._split_table_content(
+                table_content,
+                base_extra={
+                    "parent_splitter": "table_rows",
+                    "table_index": table_index,
+                },
+                target_chars=self.config.parent_target_max,
+            )
+            page_extra = page_range_extra([el])
+            for table_slice in slices:
+                extra = dict(table_slice.extra or {})
+                extra.update({k: v for k, v in page_extra.items() if k not in extra})
+                row_label = self._table_row_label(extra)
+                split_header = f"{header_path} > 表格 {table_index + 1}{row_label}"
+                split_element = Element(
+                    type=ElementType.TABLE,
+                    content=table_slice.content,
+                    level=el.level,
+                    metadata=el.metadata,
+                )
+                parents.append(
+                    {
+                        "content": table_slice.content,
+                        "header_path": split_header,
+                        "source_type": "table",
+                        "elements": [split_element],
+                        "metadata": ChunkMetadata(
+                            strategy=ChunkStrategy.HIERARCHICAL,
+                            element_count=1,
+                            has_table=True,
+                            has_context=bool(context),
+                            context_chars=len(context),
+                            extra=extra,
+                        ),
+                    }
+                )
+            table_index += 1
+
+        flush_buffer()
+        return parents
+
+    def _table_context_from_elements(self, elements: list[Element]) -> str:
+        parts: list[str] = []
+        for el in elements:
+            if not el.content or el.type in {ElementType.TABLE, ElementType.IMAGE}:
+                continue
+            parts.append(self._render_elements([el]))
+        return self._table_context_from_text_buffer(parts)
+
+    @staticmethod
+    def _table_row_label(extra: dict) -> str:
+        start = extra.get("row_start")
+        end = extra.get("row_end")
+        if isinstance(start, int) and isinstance(end, int):
+            return f" 行 {start}-{end}"
+        return ""
 
     @staticmethod
     def _render_elements(elements: list[Element]) -> str:

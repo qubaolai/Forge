@@ -4,8 +4,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
   Database,
+  Eye,
   FilePlus2,
   FileText,
+  Layers,
   RefreshCw,
   Save,
   Search,
@@ -14,7 +16,13 @@ import {
   Upload,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
-import type { KnowledgeBase, KnowledgeDocument, Visibility } from '@/types';
+import type {
+  KbDocumentChunkInfo,
+  KbRetrievalTrace,
+  KnowledgeBase,
+  KnowledgeDocument,
+  Visibility,
+} from '@/types';
 import { ApiError } from '@/types';
 import { kbApi } from '@/api';
 import { cn } from '@/lib/utils';
@@ -27,12 +35,25 @@ type TabKey = 'documents' | 'retrieval' | 'settings';
 // 入库未到终态的状态: 文档列表轮询期间据此判断是否继续刷新
 const DOC_ACTIVE_STATUSES = new Set(['pending', 'parsing', 'chunking', 'embedding']);
 
+function formatHitPageRange(hit: {
+  page?: number | null;
+  page_start?: number | null;
+  page_end?: number | null;
+}): string {
+  const start = hit.page_start ?? hit.page ?? null;
+  const end = hit.page_end ?? start;
+  if (start == null) return '';
+  if (end == null || end === start) return `第 ${start} 页`;
+  return `第 ${start}-${end} 页`;
+}
+
 export default function KnowledgeDetailPage() {
   const { kbId = '' } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [tab, setTab] = useState<TabKey>('documents');
+  const [chunkDoc, setChunkDoc] = useState<KnowledgeDocument | null>(null);
 
   const { data: kb, isLoading, isError } = useQuery({
     queryKey: ['kb', kbId],
@@ -87,6 +108,15 @@ export default function KnowledgeDetailPage() {
     onError: (e) => toast.error((e as ApiError).message || '重建失败'),
   });
 
+  const reingestMutation = useMutation({
+    mutationFn: (docId: string) => kbApi.reingestDocument(kbId, docId),
+    onSuccess: () => {
+      toast.success('已触发重新入库');
+      invalidate();
+    },
+    onError: (e) => toast.error((e as ApiError).message || '重新入库失败'),
+  });
+
   const removeKbMutation = useMutation({
     mutationFn: () => kbApi.remove(kbId),
     onSuccess: () => {
@@ -132,6 +162,15 @@ export default function KnowledgeDetailPage() {
       danger: true,
     });
     if (ok) removeDocMutation.mutate(doc.id);
+  }
+
+  async function reingestDoc(doc: KnowledgeDocument) {
+    const ok = await confirm({
+      title: '重新入库文档',
+      message: `确认重新入库「${doc.name}」? 将按当前知识库分块配置重新解析、切分并重建全文索引。`,
+      confirmLabel: '重新入库',
+    });
+    if (ok) reingestMutation.mutate(doc.id);
   }
 
   async function removeKb() {
@@ -228,11 +267,22 @@ export default function KnowledgeDetailPage() {
                       key={doc.id}
                       doc={doc}
                       rebuilding={rebuildMutation.isPending}
+                      reingesting={reingestMutation.isPending}
+                      onViewChunks={() => setChunkDoc(doc)}
                       onDelete={() => removeDoc(doc)}
                       onRebuild={() => rebuildMutation.mutate(doc.id)}
+                      onReingest={() => reingestDoc(doc)}
                     />
                   ))}
                 </div>
+              )}
+              {chunkDoc && (
+                <DocumentChunksPanel
+                  key={chunkDoc.id}
+                  kbId={kbId}
+                  doc={chunkDoc}
+                  onClose={() => setChunkDoc(null)}
+                />
               )}
             </section>
           </div>
@@ -254,12 +304,14 @@ export default function KnowledgeDetailPage() {
 function RetrievalTab({ kbId }: { kbId: string }) {
   const [query, setQuery] = useState('');
   const [topN, setTopN] = useState(5);
+  const [showTrace, setShowTrace] = useState(false);
 
   const searchMutation = useMutation({
-    mutationFn: () => kbApi.search(kbId, { query: query.trim(), top_n: topN }),
+    mutationFn: () => kbApi.search(kbId, { query: query.trim(), top_n: topN, debug: showTrace }),
     onError: (e) => toast.error((e as ApiError).message || '检索失败'),
   });
   const results = searchMutation.data?.items ?? [];
+  const trace = searchMutation.data?.trace ?? null;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)]">
@@ -284,6 +336,14 @@ function RetrievalTab({ kbId }: { kbId: string }) {
             className="w-full rounded-md border px-3 py-1.5 text-sm outline-none focus:border-gray-400"
           />
         </Field>
+        <label className="flex items-center gap-2 text-xs text-gray-600">
+          <input
+            type="checkbox"
+            checked={showTrace}
+            onChange={(event) => setShowTrace(event.target.checked)}
+          />
+          显示检索过程
+        </label>
         <button
           onClick={() => searchMutation.mutate()}
           disabled={!query.trim() || searchMutation.isPending}
@@ -310,29 +370,279 @@ function RetrievalTab({ kbId }: { kbId: string }) {
           </div>
         ) : (
           <div className="space-y-3">
-            {results.map((hit, idx) => (
-              <div key={`${hit.chunk_id}-${idx}`} className="rounded-lg border border-gray-200 p-4">
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="truncate text-sm font-medium">{hit.document_name || '未命名文档'}</span>
-                  <span className="shrink-0 rounded bg-green-50 px-2 py-0.5 text-xs text-green-700">
-                    {hit.score.toFixed(4)}
-                  </span>
+            {results.map((hit, idx) => {
+              const pageLabel = formatHitPageRange(hit);
+              return (
+                <div key={`${hit.chunk_id}-${idx}`} className="rounded-lg border border-gray-200 p-4">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <span className="truncate text-sm font-medium">{hit.document_name || '未命名文档'}</span>
+                    <span className="shrink-0 rounded bg-green-50 px-2 py-0.5 text-xs text-green-700">
+                      {hit.score.toFixed(4)}
+                    </span>
+                  </div>
+                  {(hit.header_path || pageLabel) && (
+                    <p className="mb-1 text-xs text-gray-400">
+                      {hit.header_path}
+                      {hit.header_path && pageLabel ? ' · ' : ''}
+                      {pageLabel}
+                    </p>
+                  )}
+                  <p className="whitespace-pre-wrap text-sm leading-6 text-gray-600">{hit.content}</p>
                 </div>
-                {(hit.header_path || hit.page != null) && (
-                  <p className="mb-1 text-xs text-gray-400">
-                    {hit.header_path}
-                    {hit.header_path && hit.page != null ? ' · ' : ''}
-                    {hit.page != null ? `第 ${hit.page} 页` : ''}
-                  </p>
-                )}
-                <p className="whitespace-pre-wrap text-sm leading-6 text-gray-600">{hit.content}</p>
+              );
+            })}
+          </div>
+        )}
+        {showTrace && searchMutation.isSuccess && <RetrievalTracePanel trace={trace} />}
+      </section>
+    </div>
+  );
+}
+
+function DocumentChunksPanel({
+  kbId,
+  doc,
+  onClose,
+}: {
+  kbId: string;
+  doc: KnowledgeDocument;
+  onClose: () => void;
+}) {
+  const [page, setPage] = useState(1);
+  const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null);
+  const pageSize = 20;
+  const chunksQuery = useQuery({
+    queryKey: ['kb-doc-chunks', kbId, doc.id, page],
+    queryFn: () => kbApi.listDocumentChunks(kbId, doc.id, { page, page_size: pageSize }),
+    enabled: doc.status === 'indexed',
+  });
+  const fullTextQuery = useQuery({
+    queryKey: ['kb-chunk-full-text', selectedChunkId],
+    queryFn: () => kbApi.getChunkFullText(selectedChunkId || ''),
+    enabled: !!selectedChunkId,
+  });
+  const chunks = chunksQuery.data?.items ?? [];
+  const total = chunksQuery.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  return (
+    <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="truncate text-sm font-medium">分块预览：{doc.name}</h3>
+          <p className="mt-0.5 text-xs text-gray-400">仅展示 parent chunk；全文通过“查看全文”读取。</p>
+        </div>
+        <button onClick={onClose} className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-white">
+          关闭
+        </button>
+      </div>
+
+      {chunksQuery.isLoading ? (
+        <p className="py-6 text-center text-sm text-gray-400">加载分块中…</p>
+      ) : chunks.length === 0 ? (
+        <p className="py-6 text-center text-sm text-gray-500">暂无可查看的分块。</p>
+      ) : (
+        <div className="space-y-3">
+          {chunks.map((chunk) => (
+            <ChunkDebugCard
+              key={chunk.chunk_id}
+              chunk={chunk}
+              selected={selectedChunkId === chunk.chunk_id}
+              onViewFullText={() => setSelectedChunkId(chunk.chunk_id)}
+            />
+          ))}
+        </div>
+      )}
+
+      {total > pageSize && (
+        <div className="mt-3 flex items-center justify-end gap-2 text-xs text-gray-500">
+          <span>
+            第 {page} / {totalPages} 页
+          </span>
+          <button
+            onClick={() => setPage((value) => Math.max(1, value - 1))}
+            disabled={page <= 1}
+            className="rounded border bg-white px-2 py-1 disabled:opacity-40"
+          >
+            上一页
+          </button>
+          <button
+            onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+            disabled={page >= totalPages}
+            className="rounded border bg-white px-2 py-1 disabled:opacity-40"
+          >
+            下一页
+          </button>
+        </div>
+      )}
+
+      {selectedChunkId && (
+        <div className="mt-4 rounded-md border border-gray-200 bg-white p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <h4 className="text-xs font-medium text-gray-700">Parent 原始全文</h4>
+            <button
+              onClick={() => setSelectedChunkId(null)}
+              className="rounded px-2 py-0.5 text-xs text-gray-400 hover:bg-gray-50"
+            >
+              收起
+            </button>
+          </div>
+          {fullTextQuery.isLoading ? (
+            <p className="text-sm text-gray-400">加载全文中…</p>
+          ) : (
+            <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-3 text-xs leading-5 text-gray-700">
+              {fullTextQuery.data?.content || '未读取到内容'}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChunkDebugCard({
+  chunk,
+  selected,
+  onViewFullText,
+}: {
+  chunk: KbDocumentChunkInfo;
+  selected: boolean;
+  onViewFullText: () => void;
+}) {
+  const pageLabel = formatHitPageRange(chunk);
+  const hasChildDebug = chunk.child_debug_manifest.length > 0;
+  return (
+    <div className="rounded-md border border-gray-200 bg-white p-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium">
+            #{chunk.seq} {chunk.header_path || '(无标题路径)'}
+          </p>
+          <p className="mt-0.5 text-xs text-gray-400">
+            {chunk.source_type} / {chunk.token_count} tokens / {chunk.content_chars} chars
+            {pageLabel ? ` / ${pageLabel}` : ''}
+          </p>
+        </div>
+        <button
+          onClick={onViewFullText}
+          className={cn(
+            'flex items-center gap-1 rounded px-2 py-1 text-xs',
+            selected ? 'bg-gray-900 text-white' : 'text-gray-500 hover:bg-gray-50',
+          )}
+        >
+          <Eye size={12} />
+          查看全文
+        </button>
+      </div>
+      <p className="whitespace-pre-wrap rounded bg-gray-50 p-2 text-xs leading-5 text-gray-700">
+        {chunk.content_preview}
+      </p>
+      <div className="mt-3">
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-xs font-medium text-gray-600">Child 分块摘要</span>
+          <span className="text-xs text-gray-400">{chunk.child_count} 个 child</span>
+        </div>
+        {!hasChildDebug ? (
+          <p className="rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-700">
+            旧文档未记录 child 调试摘要，重新入库后可查看 child 分块详情。
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            {chunk.child_debug_manifest.map((child) => (
+              <div key={child.id} className="rounded border border-gray-100 p-2">
+                <p className="mb-1 text-[11px] text-gray-400">
+                  {child.id} / {child.source_type} / {child.chars} chars
+                  {child.splitter ? ` / ${child.splitter}` : ''}
+                  {child.row_start != null && child.row_end != null
+                    ? ` / 行 ${child.row_start}-${child.row_end}`
+                    : ''}
+                  {child.table_index != null ? ` / 表 ${child.table_index + 1}` : ''}
+                </p>
+                <p className="whitespace-pre-wrap text-xs leading-5 text-gray-600">{child.content_preview}</p>
               </div>
             ))}
           </div>
         )}
-      </section>
+      </div>
     </div>
   );
+}
+
+function RetrievalTracePanel({ trace }: { trace: KbRetrievalTrace | null }) {
+  if (!trace) {
+    return (
+      <div className="mt-4 rounded-lg border border-amber-100 bg-amber-50 p-3 text-xs text-amber-700">
+        本次请求未返回检索过程。请开启“显示检索过程”后重新运行检索。
+      </div>
+    );
+  }
+  return (
+    <div className="mt-5 space-y-3">
+      <h3 className="text-sm font-medium">检索过程</h3>
+      <TraceSection title="Vector 召回" items={trace.recall.vector || []} render={renderRecallHit} />
+      <TraceSection title="BM25 召回" items={trace.recall.bm25 || []} render={renderRecallHit} />
+      <TraceSection
+        title="Fusion"
+        items={trace.fusion}
+        render={(item) =>
+          `${item.chunk_id} → ${item.parent_id} / score=${item.fusion_score.toFixed(4)} / ${item.sources.join(', ')}`
+        }
+      />
+      <TraceSection
+        title="Aggregation"
+        items={trace.aggregation}
+        render={(item) =>
+          `${item.parent_id} / score=${item.fusion_score.toFixed(4)} / children=${item.hit_child_count}`
+        }
+      />
+      <TraceSection
+        title="Rerank / Final"
+        items={trace.rerank}
+        render={(item) =>
+          `${item.parent_id} / ${item.before_rank} → ${item.after_rank} / fusion=${item.fusion_score.toFixed(4)} / final=${item.final_score.toFixed(4)}`
+        }
+      />
+    </div>
+  );
+}
+
+function TraceSection<T>({
+  title,
+  items,
+  render,
+}: {
+  title: string;
+  items: T[];
+  render: (item: T) => string;
+}) {
+  return (
+    <div className="rounded-lg border border-gray-200 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <h4 className="text-xs font-medium text-gray-700">{title}</h4>
+        <span className="text-xs text-gray-400">{items.length} 条</span>
+      </div>
+      {items.length === 0 ? (
+        <p className="text-xs text-gray-400">无结果</p>
+      ) : (
+        <div className="max-h-48 space-y-1 overflow-auto">
+          {items.map((item, idx) => (
+            <p key={idx} className="truncate rounded bg-gray-50 px-2 py-1 text-xs text-gray-600">
+              {render(item)}
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function renderRecallHit(item: {
+  rank: number;
+  chunk_id: string;
+  parent_id: string;
+  score: number;
+}) {
+  return `#${item.rank} ${item.chunk_id} → ${item.parent_id} / score=${item.score.toFixed(4)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -355,6 +665,7 @@ function SettingsTab({
     chunk_size: kb.chunk_size,
     chunk_overlap: kb.chunk_overlap,
   });
+  const invalidChunkConfig = draft.chunk_overlap >= draft.chunk_size;
 
   const updateMutation = useMutation({
     mutationFn: () =>
@@ -445,9 +756,12 @@ function SettingsTab({
         <p className="text-xs leading-5 text-gray-400">
           分块参数影响后续上传和重新入库；已有文档不会自动重切。
         </p>
+        {invalidChunkConfig && (
+          <p className="text-xs leading-5 text-red-600">重叠长度必须小于分块大小。</p>
+        )}
         <button
           onClick={() => updateMutation.mutate()}
-          disabled={updateMutation.isPending}
+          disabled={invalidChunkConfig || updateMutation.isPending}
           className="flex items-center gap-2 rounded-md bg-black px-3 py-1.5 text-sm text-white hover:bg-gray-800 disabled:opacity-50"
         >
           <Save size={15} />
@@ -514,16 +828,23 @@ function TabButton({
 
 function DocumentRow({
   doc,
+  onViewChunks,
   onDelete,
   onRebuild,
+  onReingest,
   rebuilding,
+  reingesting,
 }: {
   doc: KnowledgeDocument;
+  onViewChunks: () => void;
   onDelete: () => void;
   onRebuild: () => void;
+  onReingest: () => void;
   rebuilding: boolean;
+  reingesting: boolean;
 }) {
   const inProgress = DOC_ACTIVE_STATUSES.has(doc.status);
+  const busy = inProgress || doc.vector_index_status === 'rebuilding';
   return (
     <div className="flex items-center gap-4 border-b border-gray-100 px-4 py-3 last:border-b-0">
       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gray-100">
@@ -551,12 +872,28 @@ function DocumentRow({
         )}
       </div>
       <button
+        onClick={onViewChunks}
+        disabled={doc.status !== 'indexed'}
+        className="flex items-center gap-1 rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-50 disabled:opacity-40"
+      >
+        <Layers size={12} />
+        查看分块
+      </button>
+      <button
         onClick={onRebuild}
-        disabled={doc.status !== 'indexed' || doc.vector_index_status === 'rebuilding' || rebuilding}
+        disabled={doc.status !== 'indexed' || busy || rebuilding}
         className="flex items-center gap-1 rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-50 disabled:opacity-40"
       >
         <RefreshCw size={12} />
-        重建索引
+        重建向量
+      </button>
+      <button
+        onClick={onReingest}
+        disabled={busy || reingesting}
+        className="flex items-center gap-1 rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-50 disabled:opacity-40"
+      >
+        <RefreshCw size={12} />
+        重新入库
       </button>
       <button
         onClick={onDelete}

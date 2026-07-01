@@ -1,5 +1,13 @@
 import { apiClient } from './client';
-import type { KnowledgeBase, KnowledgeDocument, KbSearchHit, Visibility } from '@/types';
+import type {
+  KnowledgeBase,
+  KnowledgeChunkFullText,
+  KnowledgeDocument,
+  KbDocumentChunkListData,
+  KbRetrievalTrace,
+  KbSearchHit,
+  Visibility,
+} from '@/types';
 
 export interface KbListData {
   items: KnowledgeBase[];
@@ -17,6 +25,7 @@ export interface KbSearchData {
   items: KbSearchHit[];
   total: number;
   query: string;
+  trace?: KbRetrievalTrace | null;
 }
 
 export interface KbCreatePayload {
@@ -51,6 +60,13 @@ export const kbApi = {
   ) => apiClient.get<KbDocumentListData>(`/kb/${kbId}/documents`, { params }),
   getDocument: (kbId: string, docId: string) =>
     apiClient.get<KnowledgeDocument>(`/kb/${kbId}/documents/${docId}`),
+  listDocumentChunks: (
+    kbId: string,
+    docId: string,
+    params?: { page?: number; page_size?: number },
+  ) => apiClient.get<KbDocumentChunkListData>(`/kb/${kbId}/documents/${docId}/chunks`, { params }),
+  getChunkFullText: (chunkId: string) =>
+    apiClient.get<KnowledgeChunkFullText>(`/kb/chunks/${encodeURIComponent(chunkId)}`),
   uploadDocument: (kbId: string, file: File) => {
     const form = new FormData();
     form.append('file', file);
@@ -65,8 +81,12 @@ export const kbApi = {
     apiClient.post<{ id: string; vector_index_status: string }>(
       `/kb/${kbId}/documents/${docId}/rebuild`,
     ),
+  reingestDocument: (kbId: string, docId: string) =>
+    apiClient.post<{ id: string; status: string }>(
+      `/kb/${kbId}/documents/${docId}/reingest`,
+    ),
 
   // ---- 检索测试 ----
-  search: (kbId: string, payload: { query: string; top_n?: number }) =>
+  search: (kbId: string, payload: { query: string; top_n?: number; debug?: boolean }) =>
     apiClient.post<KbSearchData>(`/kb/${kbId}/search`, payload),
 };

@@ -106,6 +106,12 @@ class RecallChannelConfig(BaseModel):
     enabled: bool = True
     top_k: int = 30
 
+    @model_validator(mode="after")
+    def _check_top_k_when_enabled(self) -> RecallChannelConfig:
+        if self.enabled and self.top_k <= 0:
+            raise ValueError("启用的 recall 通道 top_k 必须 > 0")
+        return self
+
 
 class RecallConfig(BaseModel):
     model_config = {"extra": "forbid"}

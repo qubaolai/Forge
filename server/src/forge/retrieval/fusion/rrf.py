@@ -52,7 +52,7 @@ class RRFFusion(Fusion):
         accum: dict[str, FusedHit] = {}
 
         for source, hits in hits_per_source.items():
-            for hit in hits:
+            for hit in self._dedupe_source_hits(hits):
                 contrib = 1.0 / (self.k + hit.rank)
                 existing = accum.get(hit.chunk_id)
                 if existing is None:
@@ -83,3 +83,15 @@ class RRFFusion(Fusion):
             len(result),
         )
         return result
+
+    @staticmethod
+    def _dedupe_source_hits(hits: list[ChildHit]) -> list[ChildHit]:
+        """同一路召回内同一 chunk 只贡献一次, 取 rank 最靠前的命中."""
+        by_chunk: dict[str, ChildHit] = {}
+        for hit in hits:
+            existing = by_chunk.get(hit.chunk_id)
+            if existing is None or hit.rank < existing.rank:
+                by_chunk[hit.chunk_id] = hit
+            elif hit.rank == existing.rank and hit.score > existing.score:
+                by_chunk[hit.chunk_id] = hit
+        return sorted(by_chunk.values(), key=lambda h: h.rank)
