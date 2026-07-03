@@ -30,9 +30,10 @@ def _parse_line_range(value: Any) -> tuple[int, int] | None:
 class ReadFile(Tool):
     name = "read_file"
     description = (
-        "按 file_id 读取会话文件内容。当用户输入中出现 [file:<id>] 引用占位 (大段输入/附件) 时, "
+        "按 file_id 读取会话文件内容 (纯文本/代码)。当用户输入中出现 [file:<id>] 引用占位 (大段输入/附件) 时, "
         "用本工具读取其完整内容; 可选 line_range=[起始行,结束行] (1-based 闭区间) 只取片段, 避免整段拉回。"
         "返回字段: text / total_lines / returned_range / truncated。"
+        "注意: Word/Excel/PDF 等二进制文档请改用 read_document (本工具只能读纯文本)。"
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -55,16 +56,9 @@ class ReadFile(Tool):
 
     async def arun(self, args: dict[str, Any]) -> dict[str, Any]:
         from forge.core.request_context import current_user_id
-        from forge.infrastructure.database.database import get_session_factory
-        from forge.infrastructure.database.repositories.chat_file_repo import (
-            ChatFileRepository,
-        )
-        from forge.infrastructure.database.repositories.user_file_repo import (
-            UserFileRepository,
-        )
         from forge.infrastructure.storage.content_store import slice_text
-        from forge.infrastructure.storage.user_upload_storage import UserUploadStorage
-        from forge.infrastructure.storage.workspace_storage import WorkspaceStorage
+
+        from ._access import resolve_owned_file
 
         file_id = str(args.get("file_id") or "").strip()
         if not file_id:
@@ -76,25 +70,11 @@ class ReadFile(Tool):
             return {"ok": False, "error": "缺少用户上下文, 拒绝执行"}
 
         # 读文件不限来源: 先查用户上传 (user_files), 未命中再查生成沙盒 (chat_files)。
-        filename: str | None = None
-        storage: UserUploadStorage | WorkspaceStorage | None = None
-        storage_path: str | None = None
-        factory = get_session_factory()
-        async with factory() as db:
-            uf = await UserFileRepository(db).get_by_id(file_id)
-            if uf is not None and uf.owner_user_id == user_id:
-                filename, storage, storage_path = (
-                    uf.filename, UserUploadStorage(), uf.storage_path,
-                )
-            else:
-                cf = await ChatFileRepository(db).get_by_id(file_id)
-                if cf is not None and cf.owner_user_id == user_id:
-                    filename, storage, storage_path = (
-                        cf.filename, WorkspaceStorage(), cf.storage_path,
-                    )
+        resolved = await resolve_owned_file(file_id, user_id)
         # 越权一律当作「未找到」(不泄露存在性)
-        if storage is None or storage_path is None:
+        if resolved is None:
             return {"ok": False, "error": f"文件未找到或无权访问: {file_id}"}
+        filename, storage, storage_path = resolved
 
         try:
             content = storage.read_text(storage_path)

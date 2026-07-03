@@ -176,6 +176,7 @@ agent_profiles:
         - time_tool
         - read_message
         - read_file
+        - read_document
         - write_file
       max_steps: 999
       model_profile: smart
