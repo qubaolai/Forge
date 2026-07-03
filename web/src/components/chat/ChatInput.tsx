@@ -87,6 +87,19 @@ export function ChatInput({
   const [kbPickerOpen, setKbPickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const kbPickerRef = useRef<HTMLDivElement>(null);
+
+  // 知识库选择框: 点击选择框以外的任意区域即关闭
+  useEffect(() => {
+    if (!kbPickerOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (kbPickerRef.current && !kbPickerRef.current.contains(event.target as Node)) {
+        setKbPickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [kbPickerOpen]);
   // 粘贴文本超过该字符数时自动转为会话附件 (降上下文占用, 后端 read_file 按需读取)
   const PASTE_THRESHOLD = 4000;
 
@@ -287,7 +300,7 @@ export function ChatInput({
         <div className="mt-2 flex items-center justify-between px-1 text-[12px] text-gray-400">
           <div className="flex items-center gap-2">
             {onSelectedKbIdsChange && (
-              <div className="relative">
+              <div className="relative" ref={kbPickerRef}>
                 <button
                   type="button"
                   onClick={() => setKbPickerOpen((open) => !open)}
