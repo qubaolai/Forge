@@ -111,10 +111,10 @@ export function SessionItem({ session, active }: Props) {
   }
 
   return (
-    <NavLink
-      to={`/chat/${session.id}`}
+    // 行容器不是 NavLink: 只有标题区可跳转, ⋯ 菜单作为兄弟节点, 点它/删除不会跳进会话
+    <div
       className={cn(
-        'group flex items-center gap-2 px-2.5 py-1.5 rounded-md text-sm transition-colors truncate',
+        'group relative flex items-center gap-2 px-2.5 py-1.5 rounded-md text-sm transition-colors',
         active
           ? 'bg-gray-200/70 text-gray-900'
           : 'text-gray-600 hover:bg-gray-100',
@@ -122,16 +122,18 @@ export function SessionItem({ session, active }: Props) {
         menuOpen && !active && 'bg-gray-100',
       )}
     >
-      <MessageSquare size={13} className="shrink-0 opacity-60" />
-      <span className="truncate flex-1">{session.title}</span>
+      <NavLink
+        to={`/chat/${session.id}`}
+        className="flex min-w-0 flex-1 items-center gap-2 truncate"
+      >
+        <MessageSquare size={13} className="shrink-0 opacity-60" />
+        <span className="truncate flex-1">{session.title}</span>
+      </NavLink>
 
       <DropdownMenu.Root open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenu.Trigger asChild>
           <button
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
+            onClick={(e) => e.stopPropagation()}
             className={cn(
               'shrink-0 p-0.5 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-200/70',
               'opacity-0 group-hover:opacity-100',
@@ -173,6 +175,6 @@ export function SessionItem({ session, active }: Props) {
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
-    </NavLink>
+    </div>
   );
 }

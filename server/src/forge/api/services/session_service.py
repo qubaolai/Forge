@@ -61,7 +61,8 @@ class SessionService:
         return await self.session_repo.create(user_id=user_id, title=title)
 
     async def get_owned(self, session_id: str, user_id: str) -> SessionView:
-        session = await self.session_repo.get_by_id(session_id)
+        # 用 active 版本: 已软删的会话一律当作不存在 (不返回被删除的会话)
+        session = await self.session_repo.get_active_by_id(session_id)
         if not session:
             raise NotFound("会话不存在", code=40410)
         if session.user_id != user_id:
@@ -72,9 +73,19 @@ class SessionService:
         return await self.session_repo.update_title(session, title)
 
     async def delete(self, session: SessionView) -> None:
-        await self.session_repo.delete(session)
+        # 顺序很重要: 先清级联子数据 (摘要 / 文件), 最后再软删会话本身。
+        # 若先软删, 主事务会持有 chat_sessions 行的排他锁直到请求结束提交;
+        # 而 _delete_summary / _delete_files 用独立会话删子表 (外键指向 chat_sessions),
+        # 需等待该行锁 -> 与主事务形成死锁, MySQL 可能回滚主事务 -> 软删丢失,
+        # 表现为"删除后分页接口仍返回被删会话"。子表先删则不持有该行锁, 规避死锁。
         await self._delete_summary(session.id)
         await self._delete_files(session)
+        await self.session_repo.delete(session)
+        # 显式提交: 保证 DELETE 返回 200 时软删已落库可读。
+        # 否则请求级事务的提交在 get_db 依赖 teardown 里 (可能晚于响应发出),
+        # 前端收到 200 后立刻刷新分页, 那次查询会读到"提交前"的旧数据 ->
+        # 已删会话仍出现在列表 (删除与分页读的竞态)。
+        await self.db.commit()
 
     @staticmethod
     async def _delete_summary(session_id: str) -> None:

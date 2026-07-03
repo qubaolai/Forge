@@ -29,7 +29,9 @@ def _session(session_id: str = "9001") -> SessionView:
 
 
 def _service() -> SessionService:
-    svc = SessionService(MagicMock())
+    db = MagicMock()
+    db.commit = AsyncMock()  # delete() 末尾显式 commit
+    svc = SessionService(db)
     svc.session_repo = MagicMock()
     svc.session_repo.delete = AsyncMock()
     return svc
