@@ -308,3 +308,42 @@ def test_hierarchical_splits_only_oversized_table_parent():
     assert all(parent["metadata"].extra["parent_splitter"] == "table_rows" for parent in table_parents)
     assert all("下面是核心指标表。" in parent["content"] for parent in table_parents)
     assert any("表格之后是结论。" in parent["content"] for parent in text_parents)
+
+
+def test_md_table_stays_whole_with_heading_and_paragraph_context():
+    # MD/Word 表格 (表结构定义类): 整表作为一个子块, 保留所属标题 + 紧邻上文段落,
+    # 不再被拆成多个行组子块
+    elements = [
+        Element(type=ElementType.TITLE, content="订单表结构", level=2),
+        Element(type=ElementType.TEXT, content="下表定义订单表的字段。"),
+        Element(
+            type=ElementType.TABLE,
+            content="\n".join(
+                [
+                    "| 字段 | 类型 | 说明 |",
+                    "| --- | --- | --- |",
+                    "| id | int | 主键 |",
+                    "| amount | decimal | 金额 |",
+                    "| status | varchar | 状态 |",
+                ]
+            ),
+        ),
+    ]
+    # parent_target_min 调低, 让这个小节保持层级切分 (heading 进 header_path)
+    chunker = HierarchicalChunker(ChunkConfig(min_titles_required=1, parent_target_min=10))
+
+    chunks = chunker.chunk(elements, doc_id="doc")
+    table_children = [
+        c for c in _children(chunks) if c.source_type == "table"
+    ]
+
+    assert len(table_children) == 1  # 整表一块, 未被拆行
+    child = table_children[0]
+    # 三行字段完整保留在同一个子块
+    assert "| id | int | 主键 |" in child.content
+    assert "| amount | decimal | 金额 |" in child.content
+    assert "| status | varchar | 状态 |" in child.content
+    # 紧邻上文段落作为上下文
+    assert "下表定义订单表的字段。" in child.content
+    # 所属标题保留在 header_path (embedding 时会前置)
+    assert "订单表结构" in child.header_path

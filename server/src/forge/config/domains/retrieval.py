@@ -45,8 +45,8 @@ class ChunkingConfig(BaseModel):
     strategy: str = "hierarchical"
     chunk_size: int = 500
     chunk_overlap: int = 50
-    # Excel 行级子块每块行数 (1=行级, 按值检索最精准; >1 分组降成本)
-    excel_child_rows: int = 1
+    # 表格子块 (Excel/MD/Word): 整表优先, 超此字符预算才按完整行组切
+    table_child_max_chars: int = 2500
 
     @field_validator("strategy")
     @classmethod

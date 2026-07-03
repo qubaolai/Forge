@@ -58,7 +58,7 @@ def test_single_non_empty_row_is_preserved_as_data(tmp_path):
     assert row["values"] == {"列1": "文件名称"}
 
 
-def test_title_row_is_kept_as_sheet_metadata(tmp_path):
+def test_preamble_row_above_header_is_kept_as_context(tmp_path):
     file_path = tmp_path / "loan.csv"
     file_path.write_text(
         "日初借据文件\n文件名称,金额\nloan.csv,100\n",
@@ -69,12 +69,38 @@ def test_title_row_is_kept_as_sheet_metadata(tmp_path):
     sheet = json.loads(elements[0].content)
     row = json.loads(elements[1].content)
 
-    assert sheet["table_title"] == "日初借据文件"
+    # 表头前的窄行 (标题/说明) 作为 preamble 上下文, 真实表头从满列宽行识别
+    assert "日初借据文件" in sheet["preamble"]
     assert sheet["columns"] == ["文件名称", "金额"]
     assert sheet["header_row_index"] == 2
     assert sheet["data_row_count"] == 1
     assert row["row_index"] == 3
     assert row["values"] == {"文件名称": "loan.csv", "金额": "100"}
+
+
+def test_metadata_preamble_before_table_is_detected(tmp_path):
+    # 表结构定义类: 前置元数据 + 说明行, 真实表头在下方 (对账文件典型结构)
+    file_path = tmp_path / "spec.csv"
+    file_path.write_text(
+        "文件名称,放款借据明细\n"
+        "文件说明,每日放款明细\n"
+        "字段说明\n"
+        "字段,名称,类型\n"
+        "cur_date,账务日期,string\n"
+        "loan_id,借据号,string\n",
+        encoding="utf-8",
+    )
+
+    elements = CsvParser().parse(file_path)
+    sheet = json.loads(elements[0].content)
+    rows = [json.loads(e.content) for e in elements if e.type == ElementType.ROW]
+
+    assert sheet["columns"] == ["字段", "名称", "类型"]
+    assert sheet["header_row_index"] == 4
+    assert sheet["data_row_count"] == 2
+    assert "文件名称: 放款借据明细" in sheet["preamble"]
+    assert "字段说明" in sheet["preamble"]
+    assert rows[0]["values"] == {"字段": "cur_date", "名称": "账务日期", "类型": "string"}
 
 
 def test_xlsx_parser_emits_rows_per_sheet(tmp_path):

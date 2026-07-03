@@ -40,22 +40,22 @@ def elements_from_tabular_rows(
         return []
 
     max_cols = max(len(cells) for _, cells in cleaned)
-    table_title: str | None = None
-    header_detected = len(cleaned) > 1
-
+    preamble: list[str] = []
     if len(cleaned) == 1:
+        # 单行: 无表头, 生成占位列, 整行作为数据 (保留内容, 不丢)
         header_row_index = None
         columns = _make_generated_headers(max_cols)
         data_rows = cleaned
-    elif _looks_like_title_row(cleaned[0][1], cleaned[1][1]):
-        table_title = cleaned[0][1][0]
-        header_row_index, header_cells = cleaned[1]
-        columns = _make_headers(header_cells, max_cols)
-        data_rows = cleaned[2:]
+        header_detected = False
     else:
-        header_row_index, header_cells = cleaned[0]
+        # 真实表头 = 第一个"满列宽"行 (跳过前置元数据/说明行);
+        # 表头之前的窄行作为 preamble 上下文 (文件名称/说明/目录 等).
+        header_pos = _find_header_pos(cleaned, max_cols)
+        preamble = _render_preamble([cells for _, cells in cleaned[:header_pos]])
+        header_row_index, header_cells = cleaned[header_pos]
         columns = _make_headers(header_cells, max_cols)
-        data_rows = cleaned[1:]
+        data_rows = cleaned[header_pos + 1 :]
+        header_detected = bool(data_rows)
 
     sheet_payload = {
         "source": source,
@@ -63,7 +63,8 @@ def elements_from_tabular_rows(
         "columns": columns,
         "header_row_index": header_row_index,
         "header_detected": header_detected,
-        "table_title": table_title,
+        "preamble": preamble,
+        "table_title": None,
         "data_row_count": len(data_rows),
     }
     elements = [
@@ -129,14 +130,30 @@ def _make_generated_headers(max_cols: int) -> list[str]:
     return [f"列{index + 1}" for index in range(max_cols)]
 
 
-def _looks_like_title_row(first_row: list[str], second_row: list[str]) -> bool:
-    first_count = _non_empty_count(first_row)
-    second_count = _non_empty_count(second_row)
-    return first_count == 1 and second_count > 1
+def _find_header_pos(cleaned: list[tuple[int, list[str]]], max_cols: int) -> int:
+    """定位真实表头行下标.
+
+    表头 = 第一个列宽达到全表最大列宽、且其后仍有数据行的行. 之前的窄行
+    (文件名称/文件说明/字段说明 等) 视为前置元数据. 找不到则退化为第 0 行.
+    """
+    for index, (_, cells) in enumerate(cleaned):
+        if len(cells) == max_cols and index < len(cleaned) - 1:
+            return index
+    return 0
 
 
-def _non_empty_count(cells: Sequence[str]) -> int:
-    return sum(1 for cell in cells if cell)
+def _render_preamble(rows: list[list[str]]) -> list[str]:
+    """把表头前的窄行渲染成上下文行: 两列→"键: 值", 其余→" | " 连接."""
+    lines: list[str] = []
+    for cells in rows:
+        nonempty = [cell for cell in cells if cell]
+        if not nonempty:
+            continue
+        if len(nonempty) == 2:
+            lines.append(f"{nonempty[0]}: {nonempty[1]}")
+        else:
+            lines.append(" | ".join(nonempty))
+    return lines
 
 
 def _pad(cells: Sequence[str], size: int) -> list[str]:

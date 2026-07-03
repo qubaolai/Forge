@@ -51,7 +51,7 @@ async def run_rag_rebuild_task(job_id: str) -> None:
         chunk_config=ChunkConfig(
             child_target_chars=settings.ingest.chunking.chunk_size,
             child_overlap_chars=settings.ingest.chunking.chunk_overlap,
-            excel_child_rows=settings.ingest.chunking.excel_child_rows,
+            table_child_max_chars=settings.ingest.chunking.table_child_max_chars,
         ),
     )
     factory = get_session_factory()

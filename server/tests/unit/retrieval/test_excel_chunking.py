@@ -57,60 +57,69 @@ def test_row_based_chunker_does_not_drop_single_row_sheet(tmp_path):
     assert parents[0].metadata.extra["row_end"] == 1
 
 
-def test_row_based_children_are_row_level_key_value(tmp_path):
+def test_small_table_stays_whole_single_child_with_context(tmp_path):
+    # 表结构定义类小表: 整表作为一个子块, 保留列头/工作表上下文, 不再拆行
     elements = _parse_csv(
         tmp_path,
         "编号,名称\n1,苹果\n\n2,香蕉\n3,梨\n",
     )
-    chunker = RowBasedChunker(ChunkConfig(parent_target_max=500))
+    chunker = RowBasedChunker(ChunkConfig())
 
     chunks = chunker.chunk(elements, doc_id="doc")
     children = [chunk for chunk in chunks if chunk.chunk_type == ChunkType.CHILD]
 
-    # 行级: 每个数据行一个子块 (真实行号 2/4/5, 第 3 行为空被跳过)
-    assert len(children) == 3
-    assert all(child.source_type == "table" for child in children)
-    assert all(child.metadata.extra["splitter"] == "excel_row_kv" for child in children)
-    assert children[0].metadata.extra["row_start"] == 2
-    assert children[-1].metadata.extra["row_end"] == 5
-    assert any(4 in child.metadata.extra["row_indices"] for child in children)
-    # 键值化内容 (列名: 值), 不再是 markdown 表格
-    assert "编号: 1" in children[0].content
-    assert "名称: 苹果" in children[0].content
-    assert all("|" not in child.content for child in children)
+    assert len(children) == 1
+    child = children[0]
+    assert child.source_type == "table"
+    assert child.metadata.extra["splitter"] == "excel_table"
+    # 整表内容 + 列头上下文
+    assert "| 编号 | 名称 |" in child.content
+    assert "苹果" in child.content and "香蕉" in child.content and "梨" in child.content
+    # 相对行号映射回真实行号 (2/4/5)
+    assert child.metadata.extra["row_start"] == 2
+    assert child.metadata.extra["row_end"] == 5
 
 
-def test_medium_sheet_single_parent_with_row_level_children(tmp_path):
+def test_large_table_splits_into_row_groups_not_single_rows(tmp_path):
     lines = ["编号,名称", *(f"{i},项目{i}" for i in range(1, 251))]
     elements = _parse_csv(tmp_path, "\n".join(lines))
-    chunker = RowBasedChunker(ChunkConfig(parent_target_max=70))
+    chunker = RowBasedChunker(ChunkConfig())
 
     chunks = chunker.chunk(elements, doc_id="doc")
     parents = [chunk for chunk in chunks if chunk.chunk_type == ChunkType.PARENT]
     children = [chunk for chunk in chunks if chunk.chunk_type == ChunkType.CHILD]
 
-    # 父块仍是整 sheet (供 P1-3 整表/命中行组回灌), 子块降到行级
+    # 父块仍是整 sheet; 子块按 table_child_max_chars 拆成完整行组 (远少于 250)
     assert len(parents) == 1
     assert parents[0].metadata.extra["chunking_mode"] == "medium_sheet"
-    assert len(children) == 250
-    assert all(child.metadata.extra["row_count"] == 1 for child in children)
+    assert 1 < len(children) < 250
+    assert all(child.source_type == "table" for child in children)
+    assert all("| 编号 | 名称 |" in child.content for child in children)  # 每组保留列头
     assert children[0].metadata.extra["row_start"] == 2
     assert children[-1].metadata.extra["row_end"] == 251
 
 
-def test_excel_child_rows_config_groups_rows(tmp_path):
-    lines = ["编号,名称", *(f"{i},项目{i}" for i in range(1, 26))]  # 25 数据行
+def test_table_child_budget_is_configurable(tmp_path):
+    lines = ["编号,名称", *(f"{i},项目{i}" for i in range(1, 21))]  # 20 数据行
     elements = _parse_csv(tmp_path, "\n".join(lines))
-    chunker = RowBasedChunker(ChunkConfig(excel_child_rows=10))
 
-    chunks = chunker.chunk(elements, doc_id="doc")
-    children = [chunk for chunk in chunks if chunk.chunk_type == ChunkType.CHILD]
+    whole = [
+        c
+        for c in RowBasedChunker(ChunkConfig()).chunk(elements, doc_id="doc")
+        if c.chunk_type == ChunkType.CHILD
+    ]
+    assert len(whole) == 1  # 默认预算下 20 行整表一块
 
-    # 每组 10 行 → 3 个子块 (10/10/5)
-    assert [child.metadata.extra["row_count"] for child in children] == [10, 10, 5]
-    assert children[0].metadata.extra["row_start"] == 2
-    assert children[0].metadata.extra["row_end"] == 11
-    assert children[0].content.count("编号:") == 10
+    tiny = [
+        c
+        for c in RowBasedChunker(ChunkConfig(table_child_max_chars=120)).chunk(
+            elements, doc_id="doc"
+        )
+        if c.chunk_type == ChunkType.CHILD
+    ]
+    assert len(tiny) > 1  # 调小预算后拆成多个行组
+    assert tiny[0].metadata.extra["row_start"] == 2
+    assert tiny[-1].metadata.extra["row_end"] == 21
 
 
 def test_excel_parent_thresholds_are_configurable(tmp_path):

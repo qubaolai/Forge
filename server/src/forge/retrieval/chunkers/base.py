@@ -114,11 +114,10 @@ class ChunkConfig:
     child_target_chars: int = 400
     child_overlap_chars: int = 80
 
-    # === Excel 行级子块 ===
-    # 每个 Excel 子块包含的表格行数: 1 = 行级 (每行一条记录, 按值检索最精准),
-    # >1 则按该行数分组. 子块内容用"列名: 值"键值化渲染, 提升语义命中.
-    excel_child_rows: int = 1
-    excel_child_max_chars: int = 4_000  # 单个行级子块字符软上限 (分组过宽时提前切)
+    # === 表格子块 (Excel + MD/Word 共用) ===
+    # 一张表 (sheet / md 表格) 优先整体作为一个子块 (保表结构定义语义),
+    # 只有整表 + 上下文超过此字符预算时, 才按完整行组拆分.
+    table_child_max_chars: int = 2_500
 
     # === Excel 父块粒度 (整 sheet 一块 vs 拆行组) ===
     excel_small_sheet_max_rows: int = 200  # <= 此行数标记为 small_sheet (仅影响 mode 标签)
@@ -129,7 +128,7 @@ class ChunkConfig:
 
     # === 滑窗策略专用 ===
     sliding_parent_chars: int = 1500  # 滑窗父块软目标
-    table_context_max_chars: int = 300  # 表格前置上下文字符上限
+    table_context_max_chars: int = 500  # 表格前置上下文字符上限 (含紧邻上文段落)
 
     # === 表格处理 ===
     table_with_context: bool = True
@@ -313,6 +312,7 @@ class BaseChunker(ABC):
                     self._split_table_content(
                         table_text,
                         base_extra={"table_index": table_index},
+                        target_chars=self.config.table_child_max_chars,
                     )
                 )
                 table_index += 1
@@ -352,7 +352,12 @@ class BaseChunker(ABC):
             if not segment_content.strip():
                 continue
             if segment_type == "table":
-                result.extend(self._split_table_content(segment_content))
+                result.extend(
+                    self._split_table_content(
+                        segment_content,
+                        target_chars=self.config.table_child_max_chars,
+                    )
+                )
             else:
                 result.extend(self._split_text_content(segment_content))
         return result

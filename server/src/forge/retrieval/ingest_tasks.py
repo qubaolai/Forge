@@ -65,7 +65,7 @@ def _build_ingest_service():
         chunk_config=ChunkConfig(
             child_target_chars=settings.ingest.chunking.chunk_size,
             child_overlap_chars=settings.ingest.chunking.chunk_overlap,
-            excel_child_rows=settings.ingest.chunking.excel_child_rows,
+            table_child_max_chars=settings.ingest.chunking.table_child_max_chars,
         ),
     )
     return ingest, settings

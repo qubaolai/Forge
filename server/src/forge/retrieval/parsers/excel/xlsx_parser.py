@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from itertools import zip_longest
 from pathlib import Path
@@ -29,6 +30,10 @@ class XlsxParser(BaseParser):
             elements: list[Element] = []
             for worksheet in value_workbook.worksheets:
                 formula_sheet = formula_workbook[worksheet.title]
+                # read_only 模式下 openpyxl 信任文件里缓存的 <dimension>, 部分导出工具
+                # 会写成错误的 A1, 导致只读到左上角一个单元格. reset 强制全量扫描.
+                _reset_dimensions(worksheet)
+                _reset_dimensions(formula_sheet)
                 rows = _merged_rows(worksheet, formula_sheet)
                 elements.extend(
                     elements_from_tabular_rows(
@@ -47,6 +52,14 @@ class XlsxParser(BaseParser):
         finally:
             value_workbook.close()
             formula_workbook.close()
+
+
+def _reset_dimensions(worksheet) -> None:
+    """强制 openpyxl 忽略缓存的 <dimension>, 全量扫描单元格 (兼容旧版本)."""
+    reset = getattr(worksheet, "reset_dimensions", None)
+    if callable(reset):
+        with contextlib.suppress(Exception):
+            reset()
 
 
 def _merged_rows(value_sheet, formula_sheet) -> list[tuple[int, list[Any]]]:

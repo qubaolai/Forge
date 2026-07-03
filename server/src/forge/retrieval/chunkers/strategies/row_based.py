@@ -39,11 +39,12 @@ class RowBasedChunker(BaseChunker):
         doc_version: str,
         elements: list[Element] | None = None,
     ) -> list[Chunk]:
-        """Excel 子块: 行级 (默认) 的"列名: 值"键值化, 提升按行/值检索精度.
+        """Excel 子块: 整表优先 (保表结构定义语义), 超预算才按完整行组切.
 
-        子块内容与父块 (markdown 整表) 解耦: 子块只管向量/BM25 召回精度,
-        父块保留整表供 P1-3 按预算整表 / 命中行组回灌. 子块 extra 里记录
-        真实行号 (row_start/row_end/row_indices), 供回灌层定位命中行.
+        父块内容 (工作表名/表标题/行范围 + markdown 整表) 已自带上下文;
+        子块直接复用之, 小表整块作单个子块 (一表一向量, 适合表结构定义/数据字典),
+        大表按 table_child_max_chars 拆完整行组. 子块相对行号经 row_indices
+        映射回真实行号, 供 P1-3 回灌定位命中行.
         """
         extra = parent.metadata.extra if parent.metadata is not None else {}
         if (
@@ -52,45 +53,30 @@ class RowBasedChunker(BaseChunker):
         ):
             return super()._build_children(parent, doc_id, doc_version, elements)
 
-        rows = self._rows_from_elements(elements)
-        if not rows:
-            # 兜底: 无结构化行 (异常路径), 退回基类按 markdown 表格切
-            return super()._build_children(parent, doc_id, doc_version, None)
-
-        columns = self._string_list(extra.get("columns")) or self._columns_from_rows(rows)
-        table_title = self._safe_string(extra.get("table_title")) or None
-        group_size = max(1, int(self.config.excel_child_rows))
-
-        # 先逐行渲染 kv, 再按 group_size + 字符软上限分组
-        rendered: list[tuple[int, str]] = []
-        for index, row in enumerate(rows):
-            text = self._render_row_kv(columns, row)
-            if text.strip():
-                rendered.append((self._row_index(row, fallback=index + 1), text))
-
+        base_extra = {
+            "table_index": extra.get("table_index"),
+            "sheet_name": extra.get("sheet_name"),
+        }
+        slices = self._split_table_content(
+            parent.content,
+            base_extra=base_extra,
+            target_chars=self.config.table_child_max_chars,
+            splitter_label="excel_table",
+        )
+        row_indices = extra.get("row_indices")
         children: list[Chunk] = []
-        groups = self._group_rendered(rendered, group_size, self.config.excel_child_max_chars)
-        for idx, group in enumerate(groups):
-            row_idxs = [ri for ri, _ in group]
-            body = "\n\n".join(text for _, text in group)
-            content = f"表: {table_title}\n{body}" if table_title else body
-            child_extra = {
-                "splitter": "excel_row_kv",
-                "sheet_name": extra.get("sheet_name"),
-                "table_index": extra.get("table_index"),
-                "row_start": row_idxs[0],
-                "row_end": row_idxs[-1],
-                "row_count": len(group),
-                "row_indices": row_idxs,
-            }
+        for idx, child_slice in enumerate(s for s in slices if s.content.strip()):
+            child_extra = dict(child_slice.extra or {})
+            if isinstance(row_indices, list):
+                self._map_child_row_range(child_extra, row_indices)
             children.append(
                 self._make_child(
                     parent,
                     doc_id,
                     doc_version,
                     idx,
-                    content,
-                    source_type="table",
+                    child_slice.content,
+                    source_type=child_slice.source_type,
                     extra=child_extra,
                 )
             )
@@ -113,6 +99,7 @@ class RowBasedChunker(BaseChunker):
                     "header_row_index": self._to_int(payload.get("header_row_index")),
                     "header_detected": bool(payload.get("header_detected")),
                     "table_title": self._safe_string(payload.get("table_title")) or None,
+                    "preamble": self._string_list(payload.get("preamble")),
                     "data_row_count": self._to_int(payload.get("data_row_count")),
                     "rows": [],
                 }
@@ -128,6 +115,9 @@ class RowBasedChunker(BaseChunker):
                 ) or sheet.get("header_row_index")
                 sheet["header_detected"] = bool(payload.get("header_detected"))
                 sheet["table_title"] = self._safe_string(payload.get("table_title")) or None
+                preamble = self._string_list(payload.get("preamble"))
+                if preamble:
+                    sheet["preamble"] = preamble
                 sheet["data_row_count"] = self._to_int(payload.get("data_row_count")) or sheet.get(
                     "data_row_count"
                 )
@@ -229,8 +219,6 @@ class RowBasedChunker(BaseChunker):
             "content": self._render_table(sheet, columns, rows),
             "header_path": f"工作表 {sheet_name} > {row_label}",
             "source_type": "table",
-            # 把结构化行随父块下传给 _build_children (行级 kv 子块用), 不入库
-            "elements": self._rows_to_elements(rows),
             "metadata": ChunkMetadata(
                 strategy=ChunkStrategy.ROW_BASED,
                 element_count=len(rows),
@@ -260,13 +248,15 @@ class RowBasedChunker(BaseChunker):
         columns: list[str],
         sheet_index: int,
     ) -> dict | None:
-        if not columns:
+        preamble = self._string_list(sheet.get("preamble"))
+        if not columns and not preamble:
             return None
         sheet_name = sheet["sheet_name"]
         content = "\n".join(
             [
                 f"工作表: {sheet_name}",
-                f"列: {', '.join(columns)}",
+                *preamble,
+                f"列: {', '.join(columns)}" if columns else "",
                 "数据行: 0",
             ]
         )
@@ -318,6 +308,8 @@ class RowBasedChunker(BaseChunker):
         parts = [
             f"工作表: {sheet_name}",
         ]
+        # 前置元数据 (文件名称/说明/目录 等) 作为整表上下文
+        parts.extend(self._string_list(sheet.get("preamble")))
         if sheet.get("table_title"):
             parts.append(f"表标题: {sheet['table_title']}")
         parts.extend(
@@ -356,93 +348,24 @@ class RowBasedChunker(BaseChunker):
         text = "" if value is None else str(value)
         return text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").strip()
 
-    # ------------------------------------------------------------------
-    # 行级子块渲染 (列名: 值)
-    # ------------------------------------------------------------------
-    def _rows_to_elements(self, rows: list[dict]) -> list[Element]:
-        """把结构化行 payload 包成 ROW Element, 随父块下传给 _build_children."""
-        return [
-            Element(
-                type=ElementType.ROW,
-                content=json.dumps(row, ensure_ascii=False, separators=(",", ":")),
-            )
-            for row in rows
-        ]
-
     @classmethod
-    def _rows_from_elements(cls, elements: list[Element] | None) -> list[dict]:
-        if not elements:
-            return []
-        rows: list[dict] = []
-        for el in elements:
-            if getattr(el, "type", None) == ElementType.ROW and el.content:
-                payload = cls._load_payload(el.content)
-                if payload:
-                    rows.append(payload)
-        return rows
-
-    @classmethod
-    def _render_row_kv(cls, columns: list[str], row: dict) -> str:
-        """单行渲染为"列名: 值"多行文本, 跳过空值."""
-        values = row.get("values")
-        cells = row.get("cells")
-        parts: list[str] = []
-        for index, col in enumerate(columns):
-            if isinstance(values, dict):
-                raw = values.get(col, "")
-            elif isinstance(cells, list):
-                raw = cells[index] if index < len(cells) else ""
-            else:
-                raw = ""
-            text = cls._cell_text(raw)
-            if text:
-                parts.append(f"{col}: {text}")
-        return "\n".join(parts)
-
-    @staticmethod
-    def _group_rendered(
-        rendered: list[tuple[int, str]],
-        group_size: int,
-        max_chars: int,
-    ) -> list[list[tuple[int, str]]]:
-        """按行数 group_size + 字符软上限 max_chars 把逐行 kv 分组."""
-        groups: list[list[tuple[int, str]]] = []
-        buffer: list[tuple[int, str]] = []
-        buffer_chars = 0
-        for row_index, text in rendered:
-            if buffer and (
-                len(buffer) >= group_size or buffer_chars + len(text) > max_chars
-            ):
-                groups.append(buffer)
-                buffer = []
-                buffer_chars = 0
-            buffer.append((row_index, text))
-            buffer_chars += len(text)
-        if buffer:
-            groups.append(buffer)
-        return groups
-
-    @classmethod
-    def _columns_from_rows(cls, rows: list[dict]) -> list[str]:
-        """无 columns 元数据时的兜底: 从行 payload 推断列名."""
-        columns: list[str] = []
-        for row in rows:
-            values = row.get("values")
-            if isinstance(values, dict):
-                for key in values:
-                    text = cls._safe_string(key)
-                    if text and text not in columns:
-                        columns.append(text)
-            cells = row.get("cells")
-            if isinstance(cells, list):
-                while len(columns) < len(cells):
-                    columns.append(f"列{len(columns) + 1}")
-        return columns
-
-    @staticmethod
-    def _cell_text(value: Any) -> str:
-        text = "" if value is None else str(value)
-        return text.replace("\n", " ").strip()
+    def _map_child_row_range(cls, extra: dict, row_indices: list[Any]) -> None:
+        """把子块的相对行号 (1-based) 映射回父块记录的真实行号, 供回灌定位命中行."""
+        rel_start = cls._to_int(extra.get("row_start"))
+        rel_end = cls._to_int(extra.get("row_end"))
+        if rel_start is None or rel_end is None:
+            return
+        clean_indices = [value for value in (cls._to_int(v) for v in row_indices) if value is not None]
+        if not clean_indices:
+            return
+        start_idx = min(max(rel_start - 1, 0), len(clean_indices) - 1)
+        end_idx = min(max(rel_end - 1, start_idx), len(clean_indices) - 1)
+        mapped = clean_indices[start_idx : end_idx + 1]
+        if not mapped:
+            return
+        extra["row_start"] = mapped[0]
+        extra["row_end"] = mapped[-1]
+        extra["row_indices"] = mapped
 
     @staticmethod
     def _row_index(row: dict, *, fallback: int) -> int:

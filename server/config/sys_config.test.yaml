@@ -95,7 +95,7 @@ ingest:
     strategy: hierarchical
     chunk_size: 500
     chunk_overlap: 50
-    excel_child_rows: 1  # Excel 行级子块行数 (1=行级检索最精准, 增大可降成本)
+    table_child_max_chars: 2500  # 表格子块整表优先, 超此预算才按行组切
 
 vector_store:
   provider: chroma
