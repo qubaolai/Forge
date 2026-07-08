@@ -197,6 +197,8 @@ class SqliteFTS5BM25Store(BM25Store):
     ) -> list[BM25Hit]:
         if not query or top_k <= 0:
             return []
+        if doc_id_filter is not None and len(doc_id_filter) == 0:
+            return []
 
         # 用与入库一致的 tokenizer 切 query, 保证 token 空间一致
         tokens = self.tokenizer.tokenize(query)

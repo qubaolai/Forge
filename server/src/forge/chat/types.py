@@ -25,6 +25,7 @@ class TurnContext:
     new_title: str | None  # 本轮是否自动重命名了 (None = 没改)
     trace_id: str
     model_options: dict[str, Any] | None = None
+    selected_kb_ids: tuple[str, ...] = ()
     # ★ ContextBuilder 需要排除本轮已持久化的 user 消息, 避免历史里重复
     exclude_message_ids: tuple[str, ...] = ()
     # 给上下文构建用的 agent 配置

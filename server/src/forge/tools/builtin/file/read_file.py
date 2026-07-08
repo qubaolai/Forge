@@ -12,6 +12,8 @@ from typing import Any
 from forge.tools.base import Tool
 from forge.tools.registry import register_tool
 
+_DEFAULT_PREVIEW_LINES = 400
+
 
 def _parse_line_range(value: Any) -> tuple[int, int] | None:
     """把 [start, end] 解析成 (start, end); 非法返回 None (= 取全文)。"""
@@ -30,9 +32,11 @@ def _parse_line_range(value: Any) -> tuple[int, int] | None:
 class ReadFile(Tool):
     name = "read_file"
     description = (
-        "按 file_id 读取会话文件内容。当用户输入中出现 [file:<id>] 引用占位 (大段输入/附件) 时, "
-        "用本工具读取其完整内容; 可选 line_range=[起始行,结束行] (1-based 闭区间) 只取片段, 避免整段拉回。"
+        "按 file_id 读取会话文件内容 (纯文本/代码)。当用户输入中出现 [file:<id>] 引用占位 (大段输入/附件) 时, "
+        "用本工具按需读取内容; 可选 line_range=[起始行,结束行] (1-based 闭区间) 只取片段, 避免整段拉回。"
+        "不传 line_range 时只返回开头预览页, 如 truncated=true 请根据 total_lines/returned_range 继续分段读取。"
         "返回字段: text / total_lines / returned_range / truncated。"
+        "注意: Word/Excel/PDF 等二进制文档请改用 read_document (本工具只能读纯文本)。"
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -46,7 +50,7 @@ class ReadFile(Tool):
                 "items": {"type": "integer"},
                 "minItems": 2,
                 "maxItems": 2,
-                "description": "(可选) 1-based 闭区间 [起始行, 结束行]; 不传则返回全文",
+                "description": "(可选) 1-based 闭区间 [起始行, 结束行]; 不传则返回开头预览页",
             },
         },
         "required": ["file_id"],
@@ -55,12 +59,9 @@ class ReadFile(Tool):
 
     async def arun(self, args: dict[str, Any]) -> dict[str, Any]:
         from forge.core.request_context import current_user_id
-        from forge.infrastructure.database.database import get_session_factory
-        from forge.infrastructure.database.repositories.chat_file_repo import (
-            ChatFileRepository,
-        )
         from forge.infrastructure.storage.content_store import slice_text
-        from forge.infrastructure.storage.workspace_storage import WorkspaceStorage
+
+        from ._access import resolve_owned_file
 
         file_id = str(args.get("file_id") or "").strip()
         if not file_id:
@@ -71,26 +72,33 @@ class ReadFile(Tool):
         if not user_id:
             return {"ok": False, "error": "缺少用户上下文, 拒绝执行"}
 
-        factory = get_session_factory()
-        async with factory() as db:
-            meta = await ChatFileRepository(db).get_by_id(file_id)
+        # 读文件不限来源: 先查用户上传 (user_files), 未命中再查生成沙盒 (chat_files)。
+        resolved = await resolve_owned_file(file_id, user_id)
         # 越权一律当作「未找到」(不泄露存在性)
-        if meta is None or meta.owner_user_id != user_id:
+        if resolved is None:
             return {"ok": False, "error": f"文件未找到或无权访问: {file_id}"}
+        filename, storage, storage_path = resolved
 
         try:
-            content = WorkspaceStorage().read_text(meta.storage_path)
+            content = storage.read_text(storage_path)
         except (FileNotFoundError, ValueError, OSError):
             return {"ok": False, "error": f"文件内容读取失败: {file_id}"}
 
-        line_range = _parse_line_range(args.get("line_range"))
+        requested_range = _parse_line_range(args.get("line_range"))
+        line_range = requested_range or (1, _DEFAULT_PREVIEW_LINES)
         sl = slice_text(content, line_range)
         return {
             "ok": True,
             "file_id": file_id,
-            "filename": meta.filename,
+            "filename": filename,
             "text": sl.text,
             "total_lines": sl.total_lines,
             "returned_range": list(sl.returned_range),
             "truncated": sl.truncated,
+            "range_required": requested_range is None and sl.truncated,
+            "hint": (
+                "输出为预览页; 如需后续内容, 继续调用 read_file 并传入 line_range"
+                if requested_range is None and sl.truncated
+                else ""
+            ),
         }

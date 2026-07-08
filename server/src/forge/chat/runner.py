@@ -26,6 +26,7 @@ from forge.chat.guards import (
     TokenBudgetGuard,
     WallClockGuard,
 )
+from forge.chat.knowledge_gate import KnowledgeSearchToolGate
 from forge.chat.types import RunResult, TurnContext
 from forge.config.domains.agent_profiles import AgentProfile
 from forge.core.types.message import Message
@@ -102,6 +103,7 @@ class ReActRunner(AgentRunner):
         guard_factories: list[GuardFactory] | None = None,
         role: str = "local",
         tools: Iterable[Tool] | None = None,
+        knowledge_search_enabled: bool | None = None,
     ) -> None:
         self._llm = llm_chain
         self._system_prompt = system_prompt
@@ -109,6 +111,7 @@ class ReActRunner(AgentRunner):
         self._guard_factories = guard_factories
         self._role = role
         self._tools = list(tools) if tools is not None else None
+        self._knowledge_search_enabled = knowledge_search_enabled
         self.result: RunResult = RunResult()
 
     async def run(
@@ -122,7 +125,14 @@ class ReActRunner(AgentRunner):
         guards: list[LoopGuard] = [
             factory(self._max_steps) for factory in self._build_guard_factories()
         ]
-        lifecycle = MultiLifecycle([GuardLifecycleAdapter(guards)])
+        lifecycle = MultiLifecycle([
+            KnowledgeSearchToolGate(
+                tools=self._tools,
+                user_message=ctx.current_user_message,
+                knowledge_search_enabled=self._knowledge_search_enabled,
+            ),
+            GuardLifecycleAdapter(guards),
+        ])
 
         run_ctx = RunContext(
             user_id=ctx.user_id,
@@ -194,6 +204,7 @@ class ReActRunner(AgentRunner):
         *,
         system_prompt: str,
         role: str = "local",
+        knowledge_search_enabled: bool | None = None,
     ) -> ReActRunner:
         """按 Profile 装配 Runner.
 
@@ -215,4 +226,5 @@ class ReActRunner(AgentRunner):
             max_steps=profile.max_steps,
             role=role,
             tools=tools,
+            knowledge_search_enabled=knowledge_search_enabled,
         )

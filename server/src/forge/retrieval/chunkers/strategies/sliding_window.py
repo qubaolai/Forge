@@ -22,7 +22,7 @@ import logging
 
 from forge.core.types import ChunkMetadata, ChunkStrategy, Element, ElementType
 from forge.retrieval.chunkers import BaseChunker
-from forge.retrieval.chunkers.base import first_page_of
+from forge.retrieval.chunkers.base import page_range_extra
 
 logger = logging.getLogger(__name__)
 
@@ -178,15 +178,15 @@ class SlidingWindowChunker(BaseChunker):
                 return
             content = self._render_elements(text_buffer)
             if last_tail:
-                content = last_tail + content
+                content = f"{last_tail}\n\n{content}"
             if content.strip():
-                page = first_page_of(text_buffer)
-                extra: dict = {"page": page} if page is not None else {}
+                extra = page_range_extra(text_buffer)
                 parents.append(
                     {
                         "content": content,
                         "header_path": f"(段落 {idx + 1})",
                         "source_type": "text",
+                        "elements": list(text_buffer),
                         "metadata": ChunkMetadata(
                             strategy=ChunkStrategy.SLIDING_WINDOW,
                             element_count=len(text_buffer),
@@ -204,25 +204,10 @@ class SlidingWindowChunker(BaseChunker):
                 # 先 flush 当前文本 buffer
                 flush_text_buffer()
 
-                # 表格独立成块
-                content = self._render_elements(unit["elements"])
-                has_context = bool(unit["context_elements"])
-                page = first_page_of(unit["elements"])
-                extra: dict = {"page": page} if page is not None else {}
-                parents.append(
-                    {
-                        "content": content,
-                        "header_path": f"(段落 {idx + 1})",
-                        "source_type": "table",
-                        "metadata": ChunkMetadata(
-                            strategy=ChunkStrategy.SLIDING_WINDOW,
-                            has_context=has_context,
-                            context_chars=sum(len(e.content) for e in unit["context_elements"]),
-                            extra=extra,
-                        ),
-                    }
-                )
-                idx += 1
+                # 表格独立成块; 大表按完整行组拆成多个 parent, 避免回灌整表.
+                table_parents = self._build_table_parents(unit, idx)
+                parents.extend(table_parents)
+                idx += len(table_parents)
                 # 表格后不接重叠 (表格作为独立单元, 重叠会破坏 markdown)
                 last_tail = ""
                 continue
@@ -239,6 +224,70 @@ class SlidingWindowChunker(BaseChunker):
             text_buffer_chars += unit_chars
 
         flush_text_buffer()
+        return parents
+
+    def _build_table_parents(self, unit: dict, idx: int) -> list[dict]:
+        """构造表格 parent; 超长表格按完整行组拆分."""
+        content = self._render_elements(unit["elements"])
+        has_context = bool(unit["context_elements"])
+        context_chars = sum(len(e.content) for e in unit["context_elements"])
+        base_extra = page_range_extra(unit["elements"])
+
+        def make_parent(
+            *,
+            content: str,
+            elements: list[Element],
+            offset: int,
+            extra: dict,
+        ) -> dict:
+            return {
+                "content": content,
+                "header_path": f"(段落 {idx + offset + 1})",
+                "source_type": "table",
+                "elements": elements,
+                "metadata": ChunkMetadata(
+                    strategy=ChunkStrategy.SLIDING_WINDOW,
+                    has_context=has_context,
+                    context_chars=context_chars,
+                    extra=extra,
+                ),
+            }
+
+        if len(content) <= self.config.parent_target_max:
+            return [
+                make_parent(
+                    content=content,
+                    elements=list(unit["elements"]),
+                    offset=0,
+                    extra=base_extra,
+                )
+            ]
+
+        table_element = unit["table_element"]
+        slices = self._split_table_content(
+            content,
+            base_extra={"parent_splitter": "table_rows"},
+            target_chars=self.config.parent_target_max,
+        )
+        parents: list[dict] = []
+        for offset, table_slice in enumerate(slices):
+            extra = dict(base_extra)
+            if table_slice.extra:
+                extra.update(table_slice.extra)
+            split_element = Element(
+                type=ElementType.TABLE,
+                content=table_slice.content,
+                level=table_element.level,
+                metadata=table_element.metadata,
+            )
+            parents.append(
+                make_parent(
+                    content=table_slice.content,
+                    elements=[split_element],
+                    offset=offset,
+                    extra=extra,
+                )
+            )
         return parents
 
     # ==================================================================

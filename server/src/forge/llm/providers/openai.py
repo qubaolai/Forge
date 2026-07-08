@@ -367,6 +367,7 @@ class OpenAICompatibleLLM(LLM):
             raise RuntimeError(f"{type(self).__name__} tool stream 调用失败: {e}") from e
 
         tc_buffer: dict[int, dict[str, str]] = {}
+        announced: set[int] = set()  # 已吐过 started 信号的 tool_call index
         last_model: str | None = None
 
         for chunk in stream:
@@ -387,7 +388,9 @@ class OpenAICompatibleLLM(LLM):
             delta = choice.delta
             content_delta = (delta.content or "") if delta and delta.content else ""
 
+            started: list[dict[str, Any]] | None = None
             if delta and delta.tool_calls:
+                started = []
                 for tc_delta in delta.tool_calls:
                     idx = tc_delta.index
                     buf = tc_buffer.setdefault(idx, {"id": "", "name": "", "arguments_str": ""})
@@ -397,6 +400,12 @@ class OpenAICompatibleLLM(LLM):
                         buf["name"] = tc_delta.function.name
                     if tc_delta.function and tc_delta.function.arguments:
                         buf["arguments_str"] += tc_delta.function.arguments
+                    # 首次集齐 id+name 即吐 started 信号: 让前端尽早渲染「调用中」,
+                    # 不必干等 arguments 流式生成完 (大文件参数尤其耗时)。
+                    if idx not in announced and buf["id"] and buf["name"]:
+                        announced.add(idx)
+                        started.append({"id": buf["id"], "index": idx, "name": buf["name"]})
+                started = started or None
 
             finish_reason = choice.finish_reason
             emitted_tcs: list[ToolCall] | None = None
@@ -414,6 +423,7 @@ class OpenAICompatibleLLM(LLM):
             yield {
                 "content_delta": content_delta,
                 "tool_calls": emitted_tcs,
+                "tool_call_started": started,
                 "finish_reason": finish_reason,
                 "usage": chunk.usage.model_dump() if chunk.usage else None,
                 "model": last_model,
@@ -549,6 +559,7 @@ class DeepSeekLLM(OpenAICompatibleLLM):
             raise RuntimeError(f"DeepSeekLLM tool stream 调用失败: {e}") from e
 
         tc_buffer: dict[int, dict[str, str]] = {}
+        announced: set[int] = set()  # 已吐过 started 信号的 tool_call index
         last_model: str | None = None
 
         for chunk in stream:
@@ -571,7 +582,9 @@ class DeepSeekLLM(OpenAICompatibleLLM):
             content_delta = (delta.content or "") if delta and delta.content else ""
             reasoning_delta = getattr(delta, "reasoning_content", None) or "" if delta else ""
 
+            started: list[dict[str, Any]] | None = None
             if delta and delta.tool_calls:
+                started = []
                 for tc_delta in delta.tool_calls:
                     idx = tc_delta.index
                     buf = tc_buffer.setdefault(idx, {"id": "", "name": "", "arguments_str": ""})
@@ -581,6 +594,12 @@ class DeepSeekLLM(OpenAICompatibleLLM):
                         buf["name"] = tc_delta.function.name
                     if tc_delta.function and tc_delta.function.arguments:
                         buf["arguments_str"] += tc_delta.function.arguments
+                    # 首次集齐 id+name 即吐 started 信号: 让前端尽早渲染「调用中」,
+                    # 不必干等 arguments 流式生成完 (大文件参数尤其耗时)。
+                    if idx not in announced and buf["id"] and buf["name"]:
+                        announced.add(idx)
+                        started.append({"id": buf["id"], "index": idx, "name": buf["name"]})
+                started = started or None
 
             finish_reason = choice.finish_reason
             emitted_tcs: list[ToolCall] | None = None
@@ -599,6 +618,7 @@ class DeepSeekLLM(OpenAICompatibleLLM):
                 "content_delta": content_delta,
                 "reasoning_delta": reasoning_delta,
                 "tool_calls": emitted_tcs,
+                "tool_call_started": started,
                 "finish_reason": finish_reason,
                 "usage": chunk.usage.model_dump() if chunk.usage else None,
                 "model": last_model,
@@ -693,6 +713,7 @@ class XiaoMiMIMOLLM(OpenAICompatibleLLM):
             raise RuntimeError(f"XiaoMiMIMOLLM tool stream 调用失败: {e}") from e
 
         tc_buffer: dict[int, dict[str, str]] = {}
+        announced: set[int] = set()  # 已吐过 started 信号的 tool_call index
         last_model: str | None = None
 
         for chunk in stream:
@@ -715,7 +736,9 @@ class XiaoMiMIMOLLM(OpenAICompatibleLLM):
             content_delta = (delta.content or "") if delta and delta.content else ""
             reasoning_delta = getattr(delta, "reasoning_content", None) or "" if delta else ""
 
+            started: list[dict[str, Any]] | None = None
             if delta and delta.tool_calls:
+                started = []
                 for tc_delta in delta.tool_calls:
                     idx = tc_delta.index
                     buf = tc_buffer.setdefault(idx, {"id": "", "name": "", "arguments_str": ""})
@@ -725,6 +748,12 @@ class XiaoMiMIMOLLM(OpenAICompatibleLLM):
                         buf["name"] = tc_delta.function.name
                     if tc_delta.function and tc_delta.function.arguments:
                         buf["arguments_str"] += tc_delta.function.arguments
+                    # 首次集齐 id+name 即吐 started 信号: 让前端尽早渲染「调用中」,
+                    # 不必干等 arguments 流式生成完 (大文件参数尤其耗时)。
+                    if idx not in announced and buf["id"] and buf["name"]:
+                        announced.add(idx)
+                        started.append({"id": buf["id"], "index": idx, "name": buf["name"]})
+                started = started or None
 
             finish_reason = choice.finish_reason
             emitted_tcs: list[ToolCall] | None = None
@@ -743,6 +772,7 @@ class XiaoMiMIMOLLM(OpenAICompatibleLLM):
                 "content_delta": content_delta,
                 "reasoning_delta": reasoning_delta,
                 "tool_calls": emitted_tcs,
+                "tool_call_started": started,
                 "finish_reason": finish_reason,
                 "usage": chunk.usage.model_dump() if chunk.usage else None,
                 "model": last_model,

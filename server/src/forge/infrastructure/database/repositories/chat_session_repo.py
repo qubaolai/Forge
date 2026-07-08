@@ -61,6 +61,23 @@ class ChatSessionRepository(SessionStore):
         row = res.scalar_one_or_none()
         return self._to_view(row) if row else None
 
+    async def get_active_by_id(self, session_id: str) -> SessionView | None:
+        """按 id 取未删除的会话; 已软删 (status='deleted') 一律视为不存在.
+
+        对外 /sessions/{id} 详情/消息/改名/删除 走本方法, 避免返回被删除的会话。
+        """
+        sid = _to_int(session_id)
+        if sid is None:
+            return None
+        res = await self.db.execute(
+            select(ChatSessionOrm).where(
+                ChatSessionOrm.id == sid,
+                ChatSessionOrm.status != "deleted",
+            )
+        )
+        row = res.scalar_one_or_none()
+        return self._to_view(row) if row else None
+
     async def create(self, *, user_id: str, title: str | None = None) -> SessionView:
         row = ChatSessionOrm(user_id=_to_int(user_id), title=title or "")
         self.db.add(row)

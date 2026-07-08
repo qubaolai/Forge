@@ -30,7 +30,10 @@ from forge.agents.base import AgentEvent
 from forge.agents.profiles import get_agent_profile
 from forge.api.schemas.chat import ChatCompletionIn
 from forge.chat.finalizer import TurnFinalizer
-from forge.chat.kb_resolver import fetch_kb_list
+from forge.chat.kb_resolver import fetch_selected_kb_list
+from forge.chat.knowledge_gate import (
+    filter_knowledge_search_for_prompt,
+)
 from forge.chat.preparer import TurnPreparer
 from forge.chat.resumer import ResumeError, TurnResumer
 from forge.chat.runner import ReActRunner
@@ -57,10 +60,13 @@ from forge.context_mgmt.types import (
 )
 from forge.core.content_merge import ResumeStreamDedup
 from forge.core.request_context import (
+    collected_citations,
+    set_allowed_knowledge_kb_ids,
     set_assistant_message_id,
     set_session_id,
     set_trace_id,
     set_user_id,
+    start_citation_collection,
 )
 from forge.core.types.message import Message, ToolCall
 from forge.infrastructure.database.database import session_scope
@@ -108,6 +114,22 @@ def _context_usage_event(snapshot) -> dict:
     }
 
 
+def _context_meta_event(snapshot) -> dict:
+    """上下文决策明细事件: 哪些历史被过滤 / 折叠 / 预算裁掉。"""
+    return {
+        "type": "context_meta",
+        "history": snapshot.details.get("history", {}),
+        "degraded": list(snapshot.degraded),
+        "info": list(snapshot.info),
+        "summary_included": snapshot.summary_included,
+        "facts_included": snapshot.facts_included,
+        "history_messages_candidate": snapshot.history_messages_candidate,
+        "history_messages_used": snapshot.history_messages_used,
+        "history_messages_filtered": snapshot.history_messages_filtered,
+        "history_messages_dropped": snapshot.history_messages_dropped,
+    }
+
+
 class TurnOrchestrator:
     """无状态. start_turn / start_resume 创建并启动 ChatTurnRun.
 
@@ -149,6 +171,7 @@ class TurnOrchestrator:
             trace_id=trace_id,
             model_options=body.model_options,
             attachments=body.attachments,
+            kb_ids=body.kb_ids,
         )
 
         # 2. 建 run + 注册
@@ -248,6 +271,9 @@ class TurnOrchestrator:
         set_user_id(ctx.user_id)
         set_session_id(ctx.session_id)
         set_assistant_message_id(ctx.assistant_msg_id)
+        set_allowed_knowledge_kb_ids(ctx.selected_kb_ids)
+        # 本回合检索来源收集 (knowledge_search append, 回合末统一发 SSE + 落库)
+        start_citation_collection()
 
         # 1. lifecycle 事件 (session_created / session_renamed / message_start)
         for ev in _lifecycle_events(ctx):
@@ -258,7 +284,10 @@ class TurnOrchestrator:
             user_id=ctx.user_id,
             session_id=ctx.session_id,
             current_user_message=ctx.current_user_message,
-            system_prompt_vars={"user_name": ctx.user_name},
+            system_prompt_vars={
+                "user_name": ctx.user_name,
+                "selected_kb_ids": list(ctx.selected_kb_ids),
+            },
             context_window=ctx.context_window,
             exclude_message_ids=tuple(ctx.exclude_message_ids),
         )
@@ -301,6 +330,7 @@ class TurnOrchestrator:
 
         # 2.5 上下文占用快照 (分层) -- 复用组装产物, 不触发额外计算
         await run.emit(_context_usage_event(snapshot))
+        await run.emit(_context_meta_event(snapshot))
 
         # 3. 跑 agent
         runner = await self._setup_runner(
@@ -308,6 +338,7 @@ class TurnOrchestrator:
             snapshot.rendered_system_prompt,
             body.model_options.model_dump(),
             user_id=ctx.user_id,
+            knowledge_search_enabled=bool(ctx.selected_kb_ids),
         )
         tool_names: dict[str, str] = {}
         async for event in runner.run(ctx, snapshot.messages, run.abort_event):
@@ -318,9 +349,14 @@ class TurnOrchestrator:
             if file_ev is not None:
                 await run.emit(file_ev)
 
-        # 4. finalize (写 DB)
+        # 4. citations: 本回合 knowledge_search 命中的来源, 发 SSE + 落库
+        citations = collected_citations()
+        if citations:
+            await run.emit({"type": "citations", "citations": citations})
+
+        # 5. finalize (写 DB)
         final_event = await self._finalizer.finalize(
-            ctx, runner.result, snapshot,
+            ctx, runner.result, snapshot, citations=citations or None,
         )
         if final_event is not None:
             await run.emit(final_event.to_dict())
@@ -347,6 +383,8 @@ class TurnOrchestrator:
         set_user_id(ctx.user_id)
         set_session_id(ctx.session_id)
         set_assistant_message_id(ctx.assistant_msg_id)
+        set_allowed_knowledge_kb_ids(ctx.selected_kb_ids)
+        start_citation_collection()
 
         await run.emit({
             "type": "message_resumed",
@@ -376,7 +414,10 @@ class TurnOrchestrator:
             user_id=ctx.user_id,
             session_id=ctx.session_id,
             current_user_message=ctx.current_user_message,
-            system_prompt_vars={"user_name": ctx.user_name},
+            system_prompt_vars={
+                "user_name": ctx.user_name,
+                "selected_kb_ids": list(ctx.selected_kb_ids),
+            },
             context_window=ctx.context_window,
             exclude_message_ids=tuple(ctx.exclude_message_ids),
         )
@@ -385,6 +426,7 @@ class TurnOrchestrator:
             allow_compaction=False,
         )
         await run.emit(_context_usage_event(snapshot))
+        await run.emit(_context_meta_event(snapshot))
         messages = _inject_partial_into_messages(snapshot.messages, prev_state)
 
         runner = await self._setup_runner(
@@ -392,6 +434,7 @@ class TurnOrchestrator:
             snapshot.rendered_system_prompt,
             None,
             user_id=ctx.user_id,
+            knowledge_search_enabled=bool(ctx.selected_kb_ids),
         )
 
         # 续写流实时去重: LLM 经常重复 prev_content 末尾几个字符 / 标点,
@@ -418,8 +461,13 @@ class TurnOrchestrator:
         if tail:
             await run.emit({"type": "delta", "content": tail})
 
+        citations = collected_citations()
+        if citations:
+            await run.emit({"type": "citations", "citations": citations})
+
         final_event = await self._finalizer.finalize(
             ctx, runner.result, snapshot, prev_state=prev_state,
+            citations=citations or None,
         )
         if final_event is not None:
             await run.emit(final_event.to_dict())
@@ -444,6 +492,7 @@ class TurnOrchestrator:
         model_options: dict | None,
         *,
         user_id: str | None = None,
+        knowledge_search_enabled: bool | None = None,
     ) -> ReActRunner:
         settings = get_settings()
         provider = model_options.get("provider") if model_options else None
@@ -459,7 +508,10 @@ class TurnOrchestrator:
         )
         llm = GatewayLLMAdapter(binding)
         return ReActRunner.from_profile(
-            llm, profile, system_prompt=system_prompt,
+            llm,
+            profile,
+            system_prompt=system_prompt,
+            knowledge_search_enabled=knowledge_search_enabled,
         )
 
 
@@ -481,7 +533,7 @@ def _file_created_event(ed: dict, tool_names: dict[str, str]) -> dict | None:
         return None
     if etype != "tool_result" or ed.get("status") != "success":
         return None
-    if tool_names.get(ed.get("tool_call_id")) != "write_file":
+    if tool_names.get(ed.get("tool_call_id", "")) != "write_file":
         return None
     try:
         data = json.loads(ed.get("result") or "")
@@ -565,6 +617,17 @@ def _dicts_to_tool_calls(records: list[dict]) -> list[ToolCall]:
     return out
 
 
+async def _resolve_kb_context_for_prompt(
+    user_id: str,
+    selected_kb_ids: list[str] | tuple[str, ...],
+) -> tuple[list[dict], bool]:
+    """返回 prompt 用 KB 列表和本轮是否应开放 knowledge_search。"""
+    if not selected_kb_ids:
+        return [], False
+    kb_list = await fetch_selected_kb_list(user_id, selected_kb_ids)
+    return kb_list, bool(kb_list)
+
+
 # ---------------------------------------------------------------------------
 # 工厂 + 兼容导出
 # ---------------------------------------------------------------------------
@@ -572,11 +635,23 @@ def build_turn_orchestrator() -> TurnOrchestrator:
     async def build_once(request: ContextRequest) -> ContextSnapshot:
         from forge.chat.tools import resolve_chat_tools
 
+        selected_kb_ids = request.system_prompt_vars.get("selected_kb_ids", [])
+        if not isinstance(selected_kb_ids, list | tuple):
+            selected_kb_ids = []
+        kb_list, allow_knowledge_search = await _resolve_kb_context_for_prompt(
+            request.user_id,
+            tuple(str(kb_id) for kb_id in selected_kb_ids),
+        )
+        prompt_tools = filter_knowledge_search_for_prompt(
+            resolve_chat_tools(),
+            user_message=request.current_user_message,
+            has_accessible_kbs=allow_knowledge_search,
+            force_allow=allow_knowledge_search,
+        )
         tools_meta = [
             {"name": tool.name, "description": tool.description}
-            for tool in resolve_chat_tools()
+            for tool in prompt_tools
         ]
-        kb_list = await fetch_kb_list(request.user_id)
         system_prompt = get_registry().render(
             _CHAT_SYSTEM_TEMPLATE,
             user_system_prompt="",

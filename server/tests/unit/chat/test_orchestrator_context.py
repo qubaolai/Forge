@@ -98,6 +98,7 @@ async def test_new_turn_preserves_compaction_event_order_and_prompt() -> None:
         "compaction_started",
         "compaction_done",
         "context_usage",
+        "context_meta",
     ]
     assert orchestrator_any._setup_runner.await_args.args[1] == "rendered prompt"
 

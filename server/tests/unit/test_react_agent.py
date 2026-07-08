@@ -31,12 +31,12 @@ class _ScriptedLLM(LLM):
     def chat_stream(self, messages, **kwargs):
         raise NotImplementedError
 
-    def chat_with_tools(self, messages, tools, **kwargs):
+    async def chat_with_tools(self, messages, tools, **kwargs):
         step = self._script[self._idx]
         self._idx += 1
         return step
 
-    def chat_with_tools_stream(self, messages, tools, *, model: str = "scripted", **kwargs):
+    async def chat_with_tools_stream(self, messages, tools, *, model: str = "scripted", **kwargs):
         """把脚本中的非流式 dict 拆成多个流式 chunk 模拟真流式."""
         step = self._script[self._idx]
         self._idx += 1
@@ -48,6 +48,20 @@ class _ScriptedLLM(LLM):
             yield {
                 "content_delta": ch,
                 "tool_calls": None,
+                "finish_reason": None,
+                "usage": None,
+                "model": model,
+            }
+        # 真实 provider 行为: tool call 的 name 先到 (此处提前吐 started 信号),
+        # arguments 流式生成完后才在 finish chunk 给出完整 tool_calls。
+        if tool_calls:
+            yield {
+                "content_delta": "",
+                "tool_calls": None,
+                "tool_call_started": [
+                    {"id": tc.id, "index": i, "name": tc.name}
+                    for i, tc in enumerate(tool_calls)
+                ],
                 "finish_reason": None,
                 "usage": None,
                 "model": model,
@@ -276,6 +290,50 @@ async def test_react_agent_stream_tool_call_round_trip():
 
     done = [p for t, p in events if t == "done"][-1]
     assert done["finish_reason"] == "stop"
+
+
+@pytest.mark.asyncio
+async def test_stream_announces_running_before_tool_result():
+    """L1: 收到 started 信号即下发 tool_call(running), 早于工具执行结果;
+
+    同一 tool_call id 仅产生一条累计记录 (提前占位 + 补全 arguments 合并)。
+    """
+    llm = _ScriptedLLM(
+        [
+            {
+                "content": "",
+                "tool_calls": [
+                    ToolCall(id="c1", name="calculator", arguments={"expression": "1+1"})
+                ],
+                "usage": {},
+            },
+            {"content": "好的", "tool_calls": [], "usage": {}},
+        ]
+    )
+    agent = ReActAgent(llm, max_steps=3)
+
+    seq: list = []
+    async for ev in agent.stream("1+1?"):
+        # tool_call payload 是 accumulated 里的同一引用, 执行后会被原地改写;
+        # 真实链路靠 SSE 序列化固化快照, 测试这里手动浅拷贝模拟同样效果。
+        if ev.type == "tool_call":
+            seq.append((ev.type, {"tool_call": dict(ev.payload["tool_call"])}))
+        else:
+            seq.append((ev.type, ev.payload))
+
+    types = [t for t, _ in seq]
+    first_tc = types.index("tool_call")
+    first_res = types.index("tool_result")
+    # running 占位必须早于 tool_result (这正是 L1 要填补的空白窗口)
+    assert first_tc < first_res
+    tc_payload = seq[first_tc][1]["tool_call"]
+    assert tc_payload["status"] == "running"
+    assert tc_payload["tool_name"] == "calculator"
+
+    # 去重: done 里 c1 只出现一次 (upsert 而非新增第二张卡片)
+    done = [p for t, p in seq if t == "done"][-1]
+    tool_ids = [r["id"] for r in (done["tool_calls"] or [])]
+    assert tool_ids.count("c1") == 1
 
 
 # ── reasoning_end 统一信号 ──────────────────────────────────

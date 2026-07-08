@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { openSSE } from '@/api/sse';
 import { chatApi } from '@/api';
 import {
+  ChatFileMeta,
   ChatMessage,
   Citation,
   ContextUsage,
@@ -56,6 +57,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
       message: string,
       attachments?: { file_id: string; type: string }[],
       modelOptions?: ModelOptions,
+      kbIds?: string[],
     ) => {
       // 占位的 assistant 消息(stream 期间逐步填充)
       const draft: ChatMessage = {
@@ -73,6 +75,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
 
       const body: Record<string, unknown> = { message, attachments };
       if (sessionId) body.session_id = sessionId;
+      if (kbIds && kbIds.length > 0) body.kb_ids = kbIds;
       if (modelOptions && Object.keys(modelOptions).length > 0) {
         body.model_options = modelOptions;
       }
@@ -150,9 +153,18 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
                     next.reasoning_duration_ms = e.reasoning_duration_ms;
                   }
                   break;
-                case 'tool_call':
-                  next.tool_calls = [...(prev.tool_calls || []), e.tool_call];
+                case 'tool_call': {
+                  // 按 id upsert: 工具「起手」时先来一条 running 占位 (arguments 空),
+                  // 参数生成完后再来一条补全 arguments, 合并到同一张卡片而非新增。
+                  const incoming = e.tool_call;
+                  const list = prev.tool_calls || [];
+                  const idx = list.findIndex((tc) => tc.id === incoming.id);
+                  next.tool_calls =
+                    idx >= 0
+                      ? list.map((tc, i) => (i === idx ? { ...tc, ...incoming } : tc))
+                      : [...list, incoming];
                   break;
+                }
                 case 'tool_result': {
                   next.tool_calls = (prev.tool_calls || []).map((tc): ToolCall =>
                     tc.id === e.tool_call_id
@@ -165,10 +177,9 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
                   next.citations = mergeCitations(prev.citations || [], e.citations);
                   break;
                 case 'file_created':
-                  next.files = [
-                    ...(prev.files || []),
-                    { id: e.id, name: e.name, source: e.source, size_bytes: e.size_bytes, mime_type: e.mime_type },
-                  ];
+                  next.files = upsertFile(prev.files || [], {
+                    id: e.id, name: e.name, source: e.source, size_bytes: e.size_bytes, mime_type: e.mime_type,
+                  });
                   break;
                 case 'done':
                   next.status = 'done';
@@ -302,9 +313,17 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
                 next.reasoning_content = (prev.reasoning_content || '') + e.content;
                 next.status = 'streaming';
                 break;
-              case 'tool_call':
-                next.tool_calls = [...(prev.tool_calls || []), e.tool_call];
+              case 'tool_call': {
+                // 同上: 按 id upsert, 兼容提前 running 占位 + 后续补全, 回放亦幂等。
+                const incoming = e.tool_call;
+                const list = prev.tool_calls || [];
+                const idx = list.findIndex((tc) => tc.id === incoming.id);
+                next.tool_calls =
+                  idx >= 0
+                    ? list.map((tc, i) => (i === idx ? { ...tc, ...incoming } : tc))
+                    : [...list, incoming];
                 break;
+              }
               case 'tool_result': {
                 next.tool_calls = (prev.tool_calls || []).map((tc): ToolCall =>
                   tc.id === e.tool_call_id
@@ -317,10 +336,9 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
                 next.citations = mergeCitations(prev.citations || [], e.citations);
                 break;
               case 'file_created':
-                next.files = [
-                  ...(prev.files || []),
-                  { id: e.id, name: e.name, source: e.source, size_bytes: e.size_bytes, mime_type: e.mime_type },
-                ];
+                next.files = upsertFile(prev.files || [], {
+                  id: e.id, name: e.name, source: e.source, size_bytes: e.size_bytes, mime_type: e.mime_type,
+                });
                 break;
               case 'done':
                 next.status = 'done';
@@ -402,4 +420,13 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
 function mergeCitations(existing: Citation[], incoming: Citation[]): Citation[] {
   const seen = new Set(existing.map((c) => c.chunk_id));
   return [...existing, ...incoming.filter((c) => !seen.has(c.chunk_id))];
+}
+
+/** 文件列表按 id 去重 upsert: 同 id(同名复用) 替换, 否则追加 */
+function upsertFile(list: ChatFileMeta[], file: ChatFileMeta): ChatFileMeta[] {
+  const idx = list.findIndex((f) => f.id === file.id);
+  if (idx < 0) return [...list, file];
+  const next = [...list];
+  next[idx] = file;
+  return next;
 }

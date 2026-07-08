@@ -73,7 +73,10 @@ class RetrieverFactory:
             fusion_cfg.strategy,
             {
                 "rrf_k": getattr(fusion_cfg, "rrf_k", 60),
-                "weights": dict(getattr(fusion_cfg, "weights", {}) or {}),
+                "weights": {
+                    "vector": float(getattr(fusion_cfg, "weighted_vector", 0.7)),
+                    "bm25": float(getattr(fusion_cfg, "weighted_bm25", 0.3)),
+                },
             },
         )
 
@@ -93,7 +96,28 @@ class RetrieverFactory:
             vector_top_k=recall_cfg.vector.top_k,
             bm25_top_k=recall_cfg.bm25.top_k,
             rerank_enabled=rerank_enabled,
+            vector_enabled=vector_recall is not None,
+            bm25_enabled=bm25_recall is not None,
         )
+
+        # ----- 6. HyDE (可选, 仅向量召回存在时有意义) -----
+        hyde = None
+        hyde_cfg = getattr(rcfg, "hyde", None)
+        if hyde_cfg is not None and hyde_cfg.enabled and vector_recall is not None:
+            try:
+                from forge.llm import get_llm_gateway
+
+                from .query_expansion import HydeGenerator
+
+                hyde = HydeGenerator(
+                    get_llm_gateway(settings),
+                    max_tokens=hyde_cfg.max_tokens,
+                    concat_original=hyde_cfg.concat_original,
+                )
+                logger.info("HyDE 查询扩展已启用 (max_tokens=%d)", hyde_cfg.max_tokens)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("HyDE 初始化失败, 已禁用: %s", e)
+                hyde = None
 
         return ParentChildRetriever(
             vector_recall=vector_recall,
@@ -102,4 +126,5 @@ class RetrieverFactory:
             aggregator=aggregator,
             reranker=reranker,
             config=config,
+            hyde=hyde,
         )

@@ -151,6 +151,8 @@ class LLMDispatcher:
         self._auditor = auditor or get_dispatch_auditor()
         self._timeout = timeout_config or TimeoutConfig()
         self._last_fallback_position: int = 0
+        self._last_success_client: LLM | None = None
+        self._last_success_spec: LLMCallSpec | None = None
 
     @property
     def primary(self) -> LLM:
@@ -168,6 +170,18 @@ class LLMDispatcher:
     def last_fallback_position(self) -> int:
         """最后一次成功调用所用的 fallback 位次 (0=主模型, ≥1=备用)."""
         return self._last_fallback_position
+
+    @property
+    def last_success_provider_name(self) -> str:
+        """最后一次成功调用的 provider 名称；未调用时回退到 primary。"""
+        client = self._last_success_client or self.primary
+        return client.provider_name
+
+    @property
+    def last_success_model(self) -> str:
+        """最后一次成功调用的模型名；未调用时回退到 primary spec。"""
+        spec = self._last_success_spec or self.primary_spec
+        return spec.model
 
     # ------------------------------------------------------------------
     # 共享辅助方法 (消除 4x 重复)
@@ -231,6 +245,8 @@ class LLMDispatcher:
     ) -> None:
         """记录成功: 成本 + 熔断 + 审计."""
         self._last_fallback_position = idx
+        self._last_success_client = client
+        self._last_success_spec = spec
         self._record_cost_for(client, spec, usage)
         self._breakers.record_success((spec.impl, spec.api_key))
         self._emit_audit(

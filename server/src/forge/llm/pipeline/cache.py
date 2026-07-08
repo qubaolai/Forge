@@ -91,6 +91,9 @@ class CacheWriteMiddleware(PostMiddleware):
             return resp
         if not _should_cache(req):
             return resp
+        if resp.fallback_position > 0:
+            # 不能把 fallback 模型的输出写进 preferred_provider/model 的 key。
+            return resp
         if not resp.content:
             # 空 content 不写缓存 (避免污染流式中转 / 错误结果)
             return resp

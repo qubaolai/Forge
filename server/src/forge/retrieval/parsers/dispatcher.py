@@ -66,7 +66,7 @@ def _safe_register(disp: ParserDispatcher, builder, extensions: list[str]) -> No
 
 
 def default_dispatcher() -> ParserDispatcher:
-    """构造默认 dispatcher: 注册项目内置的 4 个 parser.
+    """构造默认 dispatcher: 注册项目内置 parser.
 
     每个 parser 独立 try, 缺依赖时只跳过该 parser. 失败的扩展名后续上层
     可以提示用户安装对应 extras (poetry install -E rag).
@@ -93,9 +93,21 @@ def default_dispatcher() -> ParserDispatcher:
 
         return WordParser()
 
+    def _xlsx():
+        from .excel.xlsx_parser import XlsxParser
+
+        return XlsxParser()
+
+    def _csv():
+        from .excel.csv_parser import CsvParser
+
+        return CsvParser()
+
     _safe_register(disp, _txt, [".txt"])
     _safe_register(disp, _md, [".md", ".markdown"])
     _safe_register(disp, _pdf, [".pdf"])
     _safe_register(disp, _word, [".docx"])
+    _safe_register(disp, _xlsx, [".xlsx"])
+    _safe_register(disp, _csv, [".csv", ".tsv"])
 
     return disp

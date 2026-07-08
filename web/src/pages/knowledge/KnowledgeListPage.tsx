@@ -1,47 +1,71 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { BookOpen, FileText, Globe, Lock, Plus, Search, Trash2, Users } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { KnowledgeBase, Visibility } from '@/types';
+import { ApiError } from '@/types';
+import { kbApi } from '@/api';
 import { cn } from '@/lib/utils';
 import { confirm } from '@/components/common/ConfirmDialog';
-import {
-  createKnowledgeBase,
-  loadKnowledgeStore,
-  saveKnowledgeStore,
-} from './mockKnowledgeStore';
+import { toast } from '@/components/common/Toast';
 
 export default function KnowledgeListPage() {
   const navigate = useNavigate();
-  const [store, setStore] = useState(loadKnowledgeStore);
+  const queryClient = useQueryClient();
   const [creating, setCreating] = useState(false);
   const [query, setQuery] = useState('');
 
+  const { data, isLoading } = useQuery({
+    queryKey: ['kb-list'],
+    queryFn: () => kbApi.list(),
+  });
+  const kbs = data?.items ?? [];
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return store.kbs;
-    return store.kbs.filter((kb) =>
+    if (!q) return kbs;
+    return kbs.filter((kb) =>
       `${kb.name} ${kb.description || ''}`.toLowerCase().includes(q),
     );
-  }, [store.kbs, query]);
+  }, [kbs, query]);
 
-  function persist(next: typeof store) {
-    setStore(next);
-    saveKnowledgeStore(next);
-  }
+  const createMutation = useMutation({
+    mutationFn: (input: {
+      name: string;
+      description?: string;
+      visibility: Visibility;
+      chunk_size?: number;
+      chunk_overlap?: number;
+    }) =>
+      kbApi.create(input),
+    onSuccess: (kb) => {
+      queryClient.invalidateQueries({ queryKey: ['kb-list'] });
+      toast.success('知识库已创建');
+      setCreating(false);
+      navigate(`/knowledge/${kb.id}`);
+    },
+    onError: (e) => toast.error((e as ApiError).message || '创建失败'),
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: (id: string) => kbApi.remove(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['kb-list'] });
+      toast.success('已删除');
+    },
+    onError: (e) => toast.error((e as ApiError).message || '删除失败'),
+  });
 
   async function removeKb(kb: KnowledgeBase) {
     const ok = await confirm({
       title: '删除知识库',
-      message: `确认删除「${kb.name}」? 关联文档也会从静态页面中移除。`,
+      message: `确认删除「${kb.name}」? 知识库下所有文档与索引都会被清除。`,
       confirmLabel: '删除',
       danger: true,
     });
     if (!ok) return;
-    persist({
-      kbs: store.kbs.filter((item) => item.id !== kb.id),
-      docs: store.docs.filter((doc) => doc.kb_id !== kb.id),
-    });
+    removeMutation.mutate(kb.id);
   }
 
   return (
@@ -51,7 +75,7 @@ export default function KnowledgeListPage() {
           <div>
             <h1 className="text-xl font-semibold">知识库</h1>
             <p className="mt-1 text-sm text-gray-500">
-              静态占位页面，可先完成知识库与文档管理流程设计。
+              管理知识库与文档，上传后自动解析、分块并建立向量索引。
             </p>
           </div>
           <button
@@ -73,10 +97,14 @@ export default function KnowledgeListPage() {
           />
         </div>
 
-        {filtered.length === 0 ? (
+        {isLoading ? (
+          <div className="py-16 text-center text-sm text-gray-400">加载中…</div>
+        ) : filtered.length === 0 ? (
           <div className="rounded-lg border-2 border-dashed border-gray-200 py-16 text-center">
             <BookOpen className="mx-auto text-gray-300" size={40} />
-            <p className="mt-3 text-sm text-gray-500">没有匹配的知识库</p>
+            <p className="mt-3 text-sm text-gray-500">
+              {query ? '没有匹配的知识库' : '还没有知识库，点击右上角新建'}
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -94,14 +122,9 @@ export default function KnowledgeListPage() {
 
       {creating && (
         <CreateDialog
+          submitting={createMutation.isPending}
           onClose={() => setCreating(false)}
-          onCreate={(input) => {
-            const kb = createKnowledgeBase(input);
-            const next = { ...store, kbs: [kb, ...store.kbs] };
-            persist(next);
-            setCreating(false);
-            navigate(`/knowledge/${kb.id}`);
-          }}
+          onCreate={(input) => createMutation.mutate(input)}
         />
       )}
     </div>
@@ -169,13 +192,24 @@ export function VisibilityBadge({ visibility }: { visibility: Visibility }) {
 function CreateDialog({
   onClose,
   onCreate,
+  submitting,
 }: {
   onClose: () => void;
-  onCreate: (input: { name: string; description?: string; visibility: Visibility }) => void;
+  onCreate: (input: {
+    name: string;
+    description?: string;
+    visibility: Visibility;
+    chunk_size?: number;
+    chunk_overlap?: number;
+  }) => void;
+  submitting?: boolean;
 }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [visibility, setVisibility] = useState<Visibility>('private');
+  const [chunkSize, setChunkSize] = useState(512);
+  const [chunkOverlap, setChunkOverlap] = useState(64);
+  const invalidChunkConfig = chunkOverlap >= chunkSize;
 
   return (
     <div onClick={onClose} className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
@@ -218,17 +252,54 @@ function CreateDialog({
               ))}
             </div>
           </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="分块大小">
+              <input
+                type="number"
+                min={64}
+                max={4096}
+                value={chunkSize}
+                onChange={(event) =>
+                  setChunkSize(Math.max(64, Math.min(4096, Number(event.target.value) || 64)))
+                }
+                className="w-full rounded-md border px-3 py-1.5 text-sm outline-none focus:border-gray-400"
+              />
+            </Field>
+            <Field label="重叠长度">
+              <input
+                type="number"
+                min={0}
+                max={512}
+                value={chunkOverlap}
+                onChange={(event) =>
+                  setChunkOverlap(Math.max(0, Math.min(512, Number(event.target.value) || 0)))
+                }
+                className="w-full rounded-md border px-3 py-1.5 text-sm outline-none focus:border-gray-400"
+              />
+            </Field>
+          </div>
+          <p className={cn('text-xs leading-5', invalidChunkConfig ? 'text-red-600' : 'text-gray-400')}>
+            重叠长度必须小于分块大小；该配置会用于后续上传文档的切分。
+          </p>
         </div>
         <div className="mt-5 flex justify-end gap-2">
           <button onClick={onClose} className="rounded-md border px-3 py-1.5 text-sm hover:bg-gray-50">
             取消
           </button>
           <button
-            onClick={() => onCreate({ name: name.trim(), description: description.trim() || undefined, visibility })}
-            disabled={!name.trim()}
+            onClick={() =>
+              onCreate({
+                name: name.trim(),
+                description: description.trim() || undefined,
+                visibility,
+                chunk_size: chunkSize,
+                chunk_overlap: chunkOverlap,
+              })
+            }
+            disabled={!name.trim() || invalidChunkConfig || submitting}
             className="rounded-md bg-black px-3 py-1.5 text-sm text-white hover:bg-gray-800 disabled:opacity-50"
           >
-            创建
+            {submitting ? '创建中…' : '创建'}
           </button>
         </div>
       </div>

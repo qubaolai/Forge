@@ -104,6 +104,7 @@ ingest:
     strategy: hierarchical
     chunk_size: 500
     chunk_overlap: 50
+    table_child_max_chars: 2500  # 表格子块整表优先, 超此预算才按行组切
 
 vector_store:
   provider: chroma
@@ -125,6 +126,9 @@ bm25_store:
 retrieval:
   top_n_parent: 5
   top_m_for_rerank: 20
+  # 回灌给 LLM 的 token 预算 (父块回灌框架)
+  recall_context_max_tokens: 6000
+  snippet_min_tokens: 400
   recall:
     vector:
       enabled: true
@@ -141,6 +145,10 @@ retrieval:
     score_agg: max
   rerank:
     enabled: true
+  hyde:
+    enabled: false
+    max_tokens: 200
+    concat_original: true
 
 observability:
   tracing:
@@ -168,6 +176,7 @@ agent_profiles:
         - time_tool
         - read_message
         - read_file
+        - read_document
         - write_file
       max_steps: 999
       model_profile: smart

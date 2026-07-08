@@ -1,4 +1,5 @@
 import { apiClient } from './client';
+import { assertFileWithinLimit, CHAT_ATTACHMENT_MAX_BYTES } from '@/lib/uploadLimits';
 import { useAuthStore } from '@/store/auth';
 import {
   AuthTokens, ChatFilePreview, ChatMessage, ChatSession, LoginPayload, LoginResponse,
@@ -7,6 +8,15 @@ import {
   RagIndexJob, RagIndexStatus,
   SystemModelBinding, User,
 } from '@/types';
+
+export { kbApi } from './kb';
+export type {
+  KbListData,
+  KbDocumentListData,
+  KbSearchData,
+  KbCreatePayload,
+  KbUpdatePayload,
+} from './kb';
 
 export const authApi = {
   login: (payload: LoginPayload) => apiClient.post<LoginResponse>('/auth/login', payload),
@@ -115,10 +125,10 @@ export const systemApi = {
 
 // ---- 会话文件：附件上传 / 预览 / 下载 ----
 export const filesApi = {
-  /** 上传会话附件 (超阈值大段输入 / 文件), 返回文件元数据 */
-  uploadAttachment: (sessionId: string, file: File) => {
+  /** 上传用户文件 (与会话解耦, 发消息时再回填会话关系), 返回文件元数据 */
+  uploadAttachment: (file: File) => {
+    assertFileWithinLimit(file, CHAT_ATTACHMENT_MAX_BYTES, '附件');
     const form = new FormData();
-    form.append('session_id', sessionId);
     form.append('file', file);
     return apiClient.post<{ id: string; name: string; size_bytes: number; mime_type?: string | null }>(
       '/chat/attachments',
@@ -130,26 +140,33 @@ export const filesApi = {
     apiClient.get<ChatFilePreview>(`/files/${fileId}/content`, {
       params: range ? { start: range.start, end: range.end } : undefined,
     }),
-  /** 带鉴权下载: fetch blob + 触发浏览器保存 */
-  download: async (fileId: string, filename: string) => {
-    const token = useAuthStore.getState().accessToken;
-    const base = import.meta.env.VITE_API_BASE_URL || '/api/v1';
-    const resp = await fetch(`${base}/files/${fileId}/download`, {
-      headers: {
-        'X-Client-Type': 'web',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      credentials: 'include',
-    });
-    if (!resp.ok) throw new Error('下载失败');
-    const blob = await resp.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  },
+  /** 带鉴权下载单文件 */
+  download: (fileId: string, filename: string) =>
+    authedDownload(`/files/${fileId}/download`, filename),
+  /** 打包下载某条消息生成的全部文件 (zip) */
+  downloadArchive: (messageId: string) =>
+    authedDownload(`/files/message/${messageId}/archive`, `files-${messageId}.zip`),
 };
+
+/** 带鉴权 fetch blob 并触发浏览器保存 (单文件 / zip 通用) */
+async function authedDownload(path: string, filename: string) {
+  const token = useAuthStore.getState().accessToken;
+  const base = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+  const resp = await fetch(`${base}${path}`, {
+    headers: {
+      'X-Client-Type': 'web',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    credentials: 'include',
+  });
+  if (!resp.ok) throw new Error('下载失败');
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

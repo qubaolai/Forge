@@ -24,7 +24,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from forge.chat.turn_run import ChatTurnRun
-from forge.config import paths
+from forge.config.domains import paths
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_EVICT_AFTER_SECONDS = 600       # 终态 turn 在内存里留 10 分钟应付重连
 DEFAULT_RETENTION_DAYS = 7              # events.jsonl 目录保留 7 天
 DEFAULT_CLEANUP_INTERVAL_SECONDS = 3600  # 每小时跑一次清理扫描
+DEFAULT_UPLOAD_ORPHAN_HOURS = 24       # 未关联会话的上传文件保留 24 小时
 
 
 class ChatTurnSupervisor:
@@ -43,12 +44,14 @@ class ChatTurnSupervisor:
         evict_after_seconds: int = DEFAULT_EVICT_AFTER_SECONDS,
         retention_days: int = DEFAULT_RETENTION_DAYS,
         cleanup_interval_seconds: int = DEFAULT_CLEANUP_INTERVAL_SECONDS,
+        upload_orphan_hours: int = DEFAULT_UPLOAD_ORPHAN_HOURS,
     ) -> None:
         self._runs: dict[str, ChatTurnRun] = {}
         self._lock = asyncio.Lock()
         self._evict_after = evict_after_seconds
         self._retention_days = retention_days
         self._cleanup_interval = cleanup_interval_seconds
+        self._upload_orphan_hours = upload_orphan_hours
         self._cleanup_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------
@@ -109,6 +112,7 @@ class ChatTurnSupervisor:
             try:
                 self.evict_terminated()
                 await self.cleanup_disk()
+                await self.cleanup_orphan_uploads()
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
@@ -153,6 +157,32 @@ class ChatTurnSupervisor:
             logger.info("磁盘清理 chat_runs 目录 %d 个 (retention=%d 天)",
                         removed, self._retention_days)
         return removed
+
+    async def cleanup_orphan_uploads(self) -> int:
+        """孤儿上传清理: 上传后超过 upload_orphan_hours 仍未关联会话的文件, 删元数据 + 物理文件。
+
+        这类文件是「用户选了文件但从未发送消息」的残留 (session_id 始终为空)。
+        """
+        from forge.infrastructure.database.database import session_scope
+        from forge.infrastructure.database.repositories.user_file_repo import (
+            UserFileRepository,
+        )
+        from forge.infrastructure.storage.user_upload_storage import UserUploadStorage
+
+        cutoff = datetime.now(UTC) - timedelta(hours=self._upload_orphan_hours)
+        async with session_scope() as db:
+            repo = UserFileRepository(db)
+            orphans = await repo.list_orphans(cutoff)
+            if not orphans:
+                return 0
+            await repo.delete_by_ids([f.id for f in orphans])
+        ups = UserUploadStorage()
+        for f in orphans:
+            ups.delete(f.storage_path)
+        logger.info(
+            "孤儿上传清理 %d 个 (retention=%d 小时)", len(orphans), self._upload_orphan_hours
+        )
+        return len(orphans)
 
     @staticmethod
     def _should_remove(entry: Path, cutoff: datetime) -> bool:

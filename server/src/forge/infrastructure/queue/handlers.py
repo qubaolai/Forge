@@ -49,6 +49,20 @@ async def handle_rag_index_rebuild(*, job_id: str) -> None:
     await run_rag_rebuild_task(job_id)
 
 
+async def handle_kb_document_ingest(*, document_id: str) -> None:
+    """本地执行 KB 文档入库任务."""
+    from forge.retrieval.ingest_tasks import run_kb_ingest_task
+
+    await run_kb_ingest_task(document_id)
+
+
+async def handle_kb_document_rebuild(*, document_id: str) -> None:
+    """本地执行 KB 单文档向量重建任务."""
+    from forge.retrieval.ingest_tasks import run_kb_rebuild_task
+
+    await run_kb_rebuild_task(document_id)
+
+
 _DEFAULT_HANDLERS: dict[str, TaskHandler] = {
     "memory.summarize": handle_memory_summarize,
     "memory.extract_facts": handle_memory_extract_facts,
@@ -56,6 +70,8 @@ _DEFAULT_HANDLERS: dict[str, TaskHandler] = {
     "context.digest": handle_context_digest,
     "context.embedding": handle_context_embedding,
     "rag.index.rebuild": handle_rag_index_rebuild,
+    "kb.document.ingest": handle_kb_document_ingest,
+    "kb.document.rebuild": handle_kb_document_rebuild,
 }
 
 

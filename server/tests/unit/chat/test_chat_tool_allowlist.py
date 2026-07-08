@@ -93,14 +93,21 @@ async def test_chat_system_prompt_only_lists_chat_tools() -> None:
     request = ContextRequest(
         user_id="u1",
         session_id="s1",
-        current_user_message="hi",
-        system_prompt_vars={"user_name": "用户"},
+        current_user_message="请在知识库里检索付款条款",
+        system_prompt_vars={"user_name": "用户", "selected_kb_ids": ["kb-001"]},
     )
 
     with (
         patch("forge.chat.tools.ToolRegistry.get_all", return_value=tools),
         patch("forge.chat.orchestrator.get_settings", return_value=settings),
-        patch("forge.chat.orchestrator.fetch_kb_list", AsyncMock(return_value=[])),
+        patch("forge.chat.orchestrator.fetch_selected_kb_list", AsyncMock(return_value=[
+            {
+                "id": "kb-001",
+                "name": "合同库",
+                "description": "",
+                "document_count": 1,
+            }
+        ])),
         patch("forge.chat.orchestrator.session_scope", side_effect=lambda: _DbContext()),
         patch("forge.chat.orchestrator.build_context_builder", return_value=builder),
     ):
@@ -113,6 +120,161 @@ async def test_chat_system_prompt_only_lists_chat_tools() -> None:
     assert "knowledge_search" in prompt
     assert "secret_probe_tool" not in prompt
     assert "shell" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_chat_system_prompt_tells_model_to_use_kb_ids() -> None:
+    _install_chat_profile(["knowledge_search"])
+    tools = [_FakeTool("knowledge_search")]
+
+    async def fake_build(request):
+        return ContextSnapshot(
+            messages=[],
+            budget=WindowBudget(4096, 0, 0, 0),
+            usage=ContextUsage(4096, 0, 4096, 0.0),
+            rendered_system_prompt=request.system_prompt_override,
+        )
+
+    class _DbContext:
+        async def __aenter__(self):
+            return MagicMock()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    builder = MagicMock(build=AsyncMock(side_effect=fake_build))
+    orchestrator = build_turn_orchestrator()
+    request = ContextRequest(
+        user_id="u1",
+        session_id="s1",
+        current_user_message="请查知识库里的付款条款",
+        system_prompt_vars={"user_name": "用户", "selected_kb_ids": ["kb-001"]},
+    )
+
+    with (
+        patch("forge.chat.tools.ToolRegistry.get_all", return_value=tools),
+        patch("forge.chat.orchestrator.fetch_selected_kb_list", AsyncMock(return_value=[
+            {
+                "id": "kb-001",
+                "name": "合同库",
+                "description": "合同相关资料",
+                "document_count": 3,
+            }
+        ])),
+        patch("forge.chat.orchestrator.session_scope", side_effect=lambda: _DbContext()),
+        patch("forge.chat.orchestrator.build_context_builder", return_value=builder),
+    ):
+        snapshot = await orchestrator._context_manager.build(  # noqa: SLF001
+            request,
+            allow_compaction=False,
+        )
+
+    prompt = snapshot.rendered_system_prompt
+    assert "合同库 (kb_id=kb-001)" in prompt
+    assert "kb_ids" in prompt
+    assert "不要只传 kb_names" in prompt
+    assert "不要臆造 kb_id" in prompt
+
+
+@pytest.mark.asyncio
+async def test_chat_system_prompt_hides_kb_tool_and_list_without_selected_kb() -> None:
+    _install_chat_profile(["knowledge_search"])
+    tools = [_FakeTool("knowledge_search")]
+
+    async def fake_build(request):
+        return ContextSnapshot(
+            messages=[],
+            budget=WindowBudget(4096, 0, 0, 0),
+            usage=ContextUsage(4096, 0, 4096, 0.0),
+            rendered_system_prompt=request.system_prompt_override,
+        )
+
+    class _DbContext:
+        async def __aenter__(self):
+            return MagicMock()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    builder = MagicMock(build=AsyncMock(side_effect=fake_build))
+    fetch_kb = AsyncMock(return_value=[
+        {
+            "id": "kb-001",
+            "name": "合同库",
+            "description": "合同相关资料",
+            "document_count": 3,
+        }
+    ])
+    orchestrator = build_turn_orchestrator()
+    request = ContextRequest(
+        user_id="u1",
+        session_id="s1",
+        current_user_message="请查知识库里的付款条款",
+        system_prompt_vars={"user_name": "用户"},
+    )
+
+    with (
+        patch("forge.chat.tools.ToolRegistry.get_all", return_value=tools),
+        patch("forge.chat.orchestrator.fetch_selected_kb_list", fetch_kb),
+        patch("forge.chat.orchestrator.session_scope", side_effect=lambda: _DbContext()),
+        patch("forge.chat.orchestrator.build_context_builder", return_value=builder),
+    ):
+        snapshot = await orchestrator._context_manager.build(  # noqa: SLF001
+            request,
+            allow_compaction=False,
+        )
+
+    prompt = snapshot.rendered_system_prompt
+    assert "knowledge_search" not in prompt
+    assert "合同库" not in prompt
+    fetch_kb.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_chat_system_prompt_hides_kb_tool_when_no_accessible_kb() -> None:
+    _install_chat_profile(["knowledge_search"])
+    tools = [_FakeTool("knowledge_search")]
+
+    async def fake_build(request):
+        return ContextSnapshot(
+            messages=[],
+            budget=WindowBudget(4096, 0, 0, 0),
+            usage=ContextUsage(4096, 0, 4096, 0.0),
+            rendered_system_prompt=request.system_prompt_override,
+        )
+
+    class _DbContext:
+        async def __aenter__(self):
+            return MagicMock()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    builder = MagicMock(build=AsyncMock(side_effect=fake_build))
+    fetch_kb = AsyncMock(return_value=[])
+    orchestrator = build_turn_orchestrator()
+    request = ContextRequest(
+        user_id="u1",
+        session_id="s1",
+        current_user_message="请查知识库里的付款条款",
+        system_prompt_vars={"user_name": "用户", "selected_kb_ids": ["kb-001"]},
+    )
+
+    with (
+        patch("forge.chat.tools.ToolRegistry.get_all", return_value=tools),
+        patch("forge.chat.orchestrator.fetch_selected_kb_list", fetch_kb),
+        patch("forge.chat.orchestrator.session_scope", side_effect=lambda: _DbContext()),
+        patch("forge.chat.orchestrator.build_context_builder", return_value=builder),
+    ):
+        snapshot = await orchestrator._context_manager.build(  # noqa: SLF001
+            request,
+            allow_compaction=False,
+        )
+
+    prompt = snapshot.rendered_system_prompt
+    assert "knowledge_search" not in prompt
+    assert "本轮用户选择的知识库" not in prompt
+    fetch_kb.assert_awaited_once_with("u1", ("kb-001",))
 
 
 @pytest.mark.asyncio
@@ -147,7 +309,7 @@ async def test_chat_build_once_uses_fresh_db_session_each_time() -> None:
     )
 
     with (
-        patch("forge.chat.orchestrator.fetch_kb_list", AsyncMock(return_value=[])),
+        patch("forge.chat.orchestrator.fetch_selected_kb_list", AsyncMock(return_value=[])),
         patch("forge.chat.orchestrator.session_scope", side_effect=lambda: _DbContext()),
         patch("forge.chat.orchestrator.build_context_builder", return_value=builder),
     ):

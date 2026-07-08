@@ -12,6 +12,8 @@ from typing import Any
 from forge.tools.base import Tool
 from forge.tools.registry import register_tool
 
+_DEFAULT_PREVIEW_LINES = 300
+
 
 def _parse_line_range(value: Any) -> tuple[int, int] | None:
     """把 [start, end] 解析成 (start, end); 非法返回 None (= 取全文)。"""
@@ -32,7 +34,8 @@ class ReadMessage(Tool):
     description = (
         "按 message_id 回读历史消息原文。当历史中某条消息被折叠为 [ref:msg:<id>] 引用占位时, "
         "用本工具读取其完整内容; 可选 line_range=[起始行,结束行] (1-based 闭区间) 只取片段, "
-        "避免整段拉回。返回字段: text / total_lines / returned_range / truncated。"
+        "避免整段拉回。不传 line_range 时只返回开头预览页, 如 truncated=true 请继续分段读取。"
+        "返回字段: text / total_lines / returned_range / truncated。"
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -46,7 +49,7 @@ class ReadMessage(Tool):
                 "items": {"type": "integer"},
                 "minItems": 2,
                 "maxItems": 2,
-                "description": "(可选) 1-based 闭区间 [起始行, 结束行]; 不传则返回全文",
+                "description": "(可选) 1-based 闭区间 [起始行, 结束行]; 不传则返回开头预览页",
             },
         },
         "required": ["message_id"],
@@ -67,7 +70,8 @@ class ReadMessage(Tool):
         if not user_id:
             return {"ok": False, "error": "缺少用户上下文, 拒绝执行"}
 
-        line_range = _parse_line_range(args.get("line_range"))
+        requested_range = _parse_line_range(args.get("line_range"))
+        line_range = requested_range or (1, _DEFAULT_PREVIEW_LINES)
         store = DbMessageContentStore()
         sl = await store.get(f"msg:{message_id}", line_range, owner_user_id=user_id)
         if sl is None:
@@ -79,4 +83,10 @@ class ReadMessage(Tool):
             "total_lines": sl.total_lines,
             "returned_range": list(sl.returned_range),
             "truncated": sl.truncated,
+            "range_required": requested_range is None and sl.truncated,
+            "hint": (
+                "输出为预览页; 如需后续内容, 继续调用 read_message 并传入 line_range"
+                if requested_range is None and sl.truncated
+                else ""
+            ),
         }

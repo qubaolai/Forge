@@ -153,6 +153,95 @@ class KbDocumentChunkRepository(BaseRepository):
         res = await self.session.execute(stmt)
         return int(res.scalar_one())
 
+    async def list_by_document(
+        self,
+        document_id: str | int,
+        *,
+        page: int,
+        page_size: int,
+    ) -> tuple[list[dict], int]:
+        """按文档分页读取父块, 用于知识库分块调试视图."""
+        doc_id = _to_int(document_id)
+        count_stmt = (
+            select(func.count())
+            .select_from(KbDocumentChunkOrm)
+            .where(KbDocumentChunkOrm.document_id == doc_id)
+        )
+        total_res = await self.session.execute(count_stmt)
+        total = int(total_res.scalar_one())
+
+        stmt = (
+            select(
+                KbDocumentChunkOrm.id,
+                KbDocumentChunkOrm.document_id,
+                KbDocumentChunkOrm.kb_id,
+                KbDocumentChunkOrm.seq,
+                KbDocumentChunkOrm.content,
+                KbDocumentChunkOrm.header_path,
+                KbDocumentChunkOrm.source_type,
+                KbDocumentChunkOrm.extra,
+                KbDocumentChunkOrm.token_count,
+            )
+            .where(KbDocumentChunkOrm.document_id == doc_id)
+            .order_by(KbDocumentChunkOrm.seq.asc(), KbDocumentChunkOrm.id.asc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        result = await self.session.execute(stmt)
+        rows: list[dict] = []
+        for row in result.all():
+            rows.append(
+                {
+                    "chunk_id": row.id,
+                    "document_id": row.document_id,
+                    "kb_id": row.kb_id,
+                    "seq": row.seq,
+                    "content": row.content or "",
+                    "header_path": row.header_path or "",
+                    "source_type": row.source_type or "text",
+                    "extra": _normalize_extra(row.extra),
+                    "token_count": row.token_count or 0,
+                }
+            )
+        return rows, total
+
+    async def list_manifest_by_document(self, document_id: str | int) -> list[dict]:
+        """返回文档已落库父块 manifest，用于 vector-only rebuild 一致性校验。"""
+        stmt = (
+            select(
+                KbDocumentChunkOrm.id,
+                KbDocumentChunkOrm.chunk_hash,
+                KbDocumentChunkOrm.extra,
+            )
+            .where(KbDocumentChunkOrm.document_id == _to_int(document_id))
+            .order_by(KbDocumentChunkOrm.id.asc())
+        )
+        result = await self.session.execute(stmt)
+        out: list[dict] = []
+        for row in result.all():
+            extra = _normalize_extra(row.extra)
+            child_manifest = extra.get("child_manifest")
+            if not isinstance(child_manifest, list):
+                child_manifest = []
+            out.append(
+                {
+                    "id": row.id,
+                    "chunk_hash": row.chunk_hash or "",
+                    "child_manifest": sorted(
+                        (
+                            {
+                                "id": str(item.get("id", "")),
+                                "chunk_hash": str(item.get("chunk_hash", "")),
+                            }
+                            for item in child_manifest
+                            if isinstance(item, dict)
+                        ),
+                        key=lambda item: item["id"],
+                    ),
+                }
+            )
+        return out
+
     async def get_many_enriched(self, chunk_ids: list[str]) -> dict[str, dict]:
         """按 chunk_id 批量查父块, 一次性 JOIN kb_documents + knowledge_bases
         把引用元信息 (document_name / kb_name / source_url) 也带回来.

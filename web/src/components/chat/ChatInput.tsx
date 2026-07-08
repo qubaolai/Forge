@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, KeyboardEvent, ClipboardEvent, ChangeEvent } from 'react';
-import { Send, Square, Brain, Paperclip, X, Loader2 } from 'lucide-react';
-import type { ModelGroup } from '@/types';
+import { Send, Square, Brain, Paperclip, X, Loader2, BookOpen, Check } from 'lucide-react';
+import type { KnowledgeBase, ModelGroup } from '@/types';
 import { cn } from '@/lib/utils';
 
 export type ThinkingLevel = 'low' | 'medium' | 'high' | 'xhigh';
@@ -24,6 +24,9 @@ interface Props {
   onModelChange: (provider: string, model: string) => void;
   thinkingEnabled: boolean;
   onThinkingChange: (enabled: boolean) => void;
+  knowledgeBases?: KnowledgeBase[];
+  selectedKbIds?: string[];
+  onSelectedKbIdsChange?: (ids: string[]) => void;
 }
 
 const THINKING_LEVEL_LABELS: Record<ThinkingLevel, string> = {
@@ -32,6 +35,30 @@ const THINKING_LEVEL_LABELS: Record<ThinkingLevel, string> = {
   high: '高',
   xhigh: '超高',
 };
+
+// 允许上传的扩展名 (与后端 file_validation 白名单对齐): 文档 / office / pdf / 源码。
+// 不含可执行程序与脚本 (.exe/.sh/.bat/.ps1 等), 防木马由后端 magic-byte 二次把关。
+const ALLOWED_UPLOAD_EXTS = [
+  '.txt', '.md', '.markdown', '.rtf', '.csv', '.log',
+  '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.pdf',
+  '.py', '.pyi', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue',
+  '.java', '.kt', '.scala', '.go', '.rs', '.c', '.h', '.cpp', '.hpp',
+  '.cc', '.cxx', '.cs', '.rb', '.php', '.swift', '.m', '.mm', '.lua',
+  '.pl', '.r', '.dart', '.sql', '.json', '.yaml', '.yml', '.toml',
+  '.ini', '.cfg', '.xml', '.html', '.htm', '.css', '.scss', '.less',
+  '.tex', '.gradle', '.proto', '.graphql', '.tsv', '.env',
+];
+// input accept 属性: 扩展名列表 (浏览器只做提示, 真正限制在 JS 校验 + 后端)。
+const UPLOAD_ACCEPT = ALLOWED_UPLOAD_EXTS.join(',');
+
+function fileExt(name: string): string {
+  const i = name.lastIndexOf('.');
+  return i >= 0 ? name.slice(i).toLowerCase() : '';
+}
+
+function isAllowedUpload(file: File): boolean {
+  return ALLOWED_UPLOAD_EXTS.includes(fileExt(file.name));
+}
 
 export function ChatInput({
   onSend,
@@ -49,23 +76,47 @@ export function ChatInput({
   thinkingEnabled,
   onThinkingChange,
   onUploadAttachment,
+  knowledgeBases = [],
+  selectedKbIds = [],
+  onSelectedKbIdsChange,
 }: Props) {
   const [value, setValue] = useState('');
   const [attachments, setAttachments] = useState<{ id: string; name: string }[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const [kbPickerOpen, setKbPickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const kbPickerRef = useRef<HTMLDivElement>(null);
+
+  // 知识库选择框: 点击选择框以外的任意区域即关闭
+  useEffect(() => {
+    if (!kbPickerOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (kbPickerRef.current && !kbPickerRef.current.contains(event.target as Node)) {
+        setKbPickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [kbPickerOpen]);
   // 粘贴文本超过该字符数时自动转为会话附件 (降上下文占用, 后端 read_file 按需读取)
   const PASTE_THRESHOLD = 4000;
 
   async function uploadFile(file: File) {
     if (!onUploadAttachment) return;
+    // 前置类型校验: 不允许可执行程序/脚本等非白名单类型 (后端还会二次把关)
+    if (!isAllowedUpload(file)) {
+      setUploadError(`不支持的文件类型: ${file.name}; 仅支持文档/表格/PDF 及源代码文件`);
+      return;
+    }
+    setUploadError('');
     setUploading(true);
     try {
       const res = await onUploadAttachment(file);
       setAttachments((prev) => [...prev, { id: res.id, name: res.name }]);
-    } catch {
-      // 上传失败: 静默 (保留输入, 用户可重试)
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : `上传失败: ${file.name}`);
     } finally {
       setUploading(false);
     }
@@ -111,7 +162,8 @@ export function ChatInput({
 
   function handleSubmit() {
     const text = value.trim();
-    if ((!text && attachments.length === 0) || disabled) return;
+    // uploading 时不发送: 附件未就绪会导致会话 id 竞态 / 附件丢失
+    if ((!text && attachments.length === 0) || disabled || uploading) return;
     onSend(
       text,
       attachments.length > 0 ? attachments.map((a) => ({ file_id: a.id, type: 'file' })) : undefined,
@@ -140,6 +192,16 @@ export function ChatInput({
     thinkingOptions.includes(thinkingLevel) ? thinkingLevel : thinkingOptions[0]
   ) as ThinkingLevel;
   const selectedValue = `${selectedProvider}::${selectedModel}`;
+  const selectedKbSet = new Set(selectedKbIds);
+  const selectedKbCount = selectedKbIds.length;
+
+  function toggleKb(id: string) {
+    if (!onSelectedKbIdsChange) return;
+    const next = selectedKbSet.has(id)
+      ? selectedKbIds.filter((item) => item !== id)
+      : [...selectedKbIds, id];
+    onSelectedKbIdsChange(next);
+  }
 
   return (
     <div className="border-t bg-white px-6 py-4">
@@ -169,6 +231,15 @@ export function ChatInput({
             )}
           </div>
         )}
+        {uploadError && (
+          <div className="mb-2 flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-[12px] text-red-600">
+            <X size={12} className="shrink-0 text-red-400" />
+            <span className="flex-1">{uploadError}</span>
+            <button onClick={() => setUploadError('')} className="text-red-400 hover:text-red-700" title="关闭">
+              <X size={12} />
+            </button>
+          </div>
+        )}
         <div
           className="flex items-end gap-2 rounded-2xl border px-3 py-2.5 transition-colors
             focus-within:border-gray-400 focus-within:shadow-sm"
@@ -179,6 +250,7 @@ export function ChatInput({
                 ref={fileInputRef}
                 type="file"
                 multiple
+                accept={UPLOAD_ACCEPT}
                 className="hidden"
                 onChange={handleFilePick}
               />
@@ -217,7 +289,7 @@ export function ChatInput({
           ) : (
             <button
               onClick={handleSubmit}
-              disabled={!value.trim() || disabled}
+              disabled={(!value.trim() && attachments.length === 0) || disabled || uploading}
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-black text-white transition-colors disabled:bg-gray-300 disabled:text-gray-500"
               title="发送 (Enter)"
             >
@@ -227,6 +299,78 @@ export function ChatInput({
         </div>
         <div className="mt-2 flex items-center justify-between px-1 text-[12px] text-gray-400">
           <div className="flex items-center gap-2">
+            {onSelectedKbIdsChange && (
+              <div className="relative" ref={kbPickerRef}>
+                <button
+                  type="button"
+                  onClick={() => setKbPickerOpen((open) => !open)}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded border px-2 py-0.5 transition-colors',
+                    selectedKbCount > 0
+                      ? 'border-blue-200 bg-blue-50 text-blue-700'
+                      : 'border-gray-200 text-gray-500 hover:text-gray-700',
+                  )}
+                  title={selectedKbCount > 0 ? '已选择知识库' : '未选择知识库, 本轮不会查询'}
+                >
+                  <BookOpen size={13} />
+                  <span>{selectedKbCount > 0 ? `知识库 ${selectedKbCount}` : '知识库'}</span>
+                </button>
+                {kbPickerOpen && (
+                  <div className="absolute bottom-full left-0 z-20 mb-2 w-72 rounded-lg border border-gray-200 bg-white p-2 shadow-lg">
+                    <div className="mb-1 flex items-center justify-between px-1 text-[11px] text-gray-400">
+                      <span>选择本轮要查询的知识库</span>
+                      {selectedKbCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => onSelectedKbIdsChange([])}
+                          className="text-gray-400 hover:text-gray-700"
+                        >
+                          清空
+                        </button>
+                      )}
+                    </div>
+                    {knowledgeBases.length === 0 ? (
+                      <div className="px-2 py-3 text-center text-xs text-gray-400">
+                        暂无可用知识库
+                      </div>
+                    ) : (
+                      <div className="max-h-56 overflow-y-auto">
+                        {knowledgeBases.map((kb) => {
+                          const selected = selectedKbSet.has(kb.id);
+                          return (
+                            <button
+                              key={kb.id}
+                              type="button"
+                              onClick={() => toggleKb(kb.id)}
+                              className="flex w-full items-start gap-2 rounded-md px-2 py-2 text-left hover:bg-gray-50"
+                            >
+                              <span
+                                className={cn(
+                                  'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border',
+                                  selected
+                                    ? 'border-blue-500 bg-blue-500 text-white'
+                                    : 'border-gray-300 text-transparent',
+                                )}
+                              >
+                                <Check size={11} />
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-xs font-medium text-gray-700">
+                                  {kb.name}
+                                </span>
+                                <span className="block truncate text-[11px] text-gray-400">
+                                  {kb.document_count} 文档 · {kb.chunk_count} 分块
+                                </span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             <select
               value={selectedValue}
               onChange={(e) => {

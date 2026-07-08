@@ -39,6 +39,7 @@ class DigestApplyResult:
     messages:    处理后的历史消息 (超 cap 的已被替换为占位)。
     substituted: 命中缓存、用无损 digest 替换的条数 (阶段 2 才 > 0)。
     pending:     未命中缓存、走结构化骨架兜底的条数。
+    substituted_ids / pending_ids: 供观测层展示具体消息 id。
     message_tokens: 与 messages 等长的「每条折叠后 token 数」, 供 MessageAssembler
                     裁剪/聚合时免重复 tiktoken (未折叠的用落库携带值, 折叠的算占位符体积)。
     """
@@ -46,9 +47,15 @@ class DigestApplyResult:
     messages: list[HistoryMessage]
     substituted: int = 0
     pending: int = 0
+    substituted_ids: list[str] = None  # type: ignore[assignment]
+    pending_ids: list[str] = None  # type: ignore[assignment]
     message_tokens: list[int] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
+        if self.substituted_ids is None:
+            self.substituted_ids = []
+        if self.pending_ids is None:
+            self.pending_ids = []
         if self.message_tokens is None:
             self.message_tokens = []
 
@@ -108,6 +115,8 @@ class DigestPolicy:
 
         out: list[HistoryMessage] = []
         costs: list[int] = []
+        substituted_ids: list[str] = []
+        pending_ids: list[str] = []
         substituted = 0
         pending = 0
         for hm in messages:
@@ -132,9 +141,11 @@ class DigestPolicy:
             if record is not None:
                 placeholder = self._render_with_digest(ref, record)
                 substituted += 1
+                substituted_ids.append(hm.id)
             else:
                 placeholder = self._fallback_fold(ref, content, approx_tokens)
                 pending += 1
+                pending_ids.append(hm.id)
 
             # 不可变更原始 Message (可能是共享的 DB 视图), 构造新对象。
             new_message = replace(hm.message, content=placeholder)
@@ -144,6 +155,7 @@ class DigestPolicy:
 
         return DigestApplyResult(
             messages=out, substituted=substituted, pending=pending,
+            substituted_ids=substituted_ids, pending_ids=pending_ids,
             message_tokens=costs,
         )
 

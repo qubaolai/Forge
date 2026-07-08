@@ -39,7 +39,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 import time
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,6 +51,7 @@ from forge.infrastructure.database.repositories.kb_document_chunk_repo import (
 )
 
 from .base import RetrievalConfig, RetrievedParent
+from .common.query import normalize_query
 from .fusion.base import (
     AggregatedParent,
     Aggregator,
@@ -56,9 +59,19 @@ from .fusion.base import (
     Fusion,
 )
 from .recall.base import ChildHit, Recall
-from .rerankers.base import Reranker, RerankError
+from .rerankers.base import Reranker, RerankError, RerankResult
 
 logger = logging.getLogger(__name__)
+
+
+def empty_trace() -> dict:
+    """检索调试 trace 的空骨架. pipeline 与 search 共用, 避免两处漂移."""
+    return {
+        "recall": {"vector": [], "bm25": []},
+        "fusion": [],
+        "aggregation": [],
+        "rerank": [],
+    }
 
 
 class ParentChildRetriever:
@@ -72,6 +85,7 @@ class ParentChildRetriever:
         aggregator: Aggregator,
         reranker: Reranker | None,
         config: RetrievalConfig,
+        hyde=None,
     ):
         if vector_recall is None and bm25_recall is None:
             raise ValueError(
@@ -84,16 +98,18 @@ class ParentChildRetriever:
         self._aggregator = aggregator
         self._reranker = reranker
         self._config = config
+        self._hyde = hyde
 
         logger.info(
             "ParentChildRetriever 就绪: vector=%s bm25=%s fusion=%s aggregator=%s "
-            "reranker=%s rerank_enabled=%s",
+            "reranker=%s rerank_enabled=%s hyde=%s",
             "on" if vector_recall else "off",
             "on" if bm25_recall else "off",
             fusion.name,
             aggregator.name,
             reranker.model_name if reranker else "none",
             config.rerank_enabled,
+            "on" if hyde is not None else "off",
         )
 
     # ==================================================================
@@ -119,40 +135,92 @@ class ParentChildRetriever:
         Returns:
             按 final_score 降序排列的 RetrievedParent 列表, len <= top_n.
         """
+        final, _ = await self._retrieve(
+            query=query,
+            session=session,
+            doc_id_filter=doc_id_filter,
+            vector_doc_id_filter=vector_doc_id_filter,
+            top_n=top_n,
+            collect_trace=False,
+        )
+        return final
+
+    async def retrieve_with_trace(
+        self,
+        query: str,
+        session: AsyncSession,
+        doc_id_filter: list[str] | None = None,
+        vector_doc_id_filter: list[str] | None = None,
+        top_n: int | None = None,
+    ) -> tuple[list[RetrievedParent], dict]:
+        """检索并返回调试 trace. 仅供 KB 检索测试等调试场景使用."""
+        return await self._retrieve(
+            query=query,
+            session=session,
+            doc_id_filter=doc_id_filter,
+            vector_doc_id_filter=vector_doc_id_filter,
+            top_n=top_n,
+            collect_trace=True,
+        )
+
+    async def _retrieve(
+        self,
+        *,
+        query: str,
+        session: AsyncSession,
+        doc_id_filter: list[str] | None = None,
+        vector_doc_id_filter: list[str] | None = None,
+        top_n: int | None = None,
+        collect_trace: bool = False,
+    ) -> tuple[list[RetrievedParent], dict | None]:
+        trace = empty_trace() if collect_trace else None
+        # 查询归一化 (全角→半角 / 繁→简 / 折叠空白), 两路 recall + rerank 共用
+        query = normalize_query(query)
         if not query:
             logger.debug("retrieve: 空 query, 直接返回 []")
-            return []
+            return [], trace
 
         # 安全语义: 空白名单
         if doc_id_filter is not None and len(doc_id_filter) == 0:
             logger.debug("retrieve: 空白名单, 直接返回 []")
-            return []
+            return [], trace
 
         effective_top_n = top_n if top_n is not None else self._config.top_n_parent
         if effective_top_n <= 0:
-            return []
+            return [], trace
+
+        # HyDE (可选): 仅扩展向量召回用的 query; bm25 与 rerank 仍用原始 query
+        vector_query = await self._hyde.expand(query) if self._hyde is not None else query
 
         t0 = time.perf_counter()
 
         # 1. 多路召回
-        hits_per_source = self._run_recalls(query, doc_id_filter, vector_doc_id_filter)
+        hits_per_source = await self._run_recalls(
+            query, doc_id_filter, vector_doc_id_filter, vector_query=vector_query
+        )
+        if trace is not None:
+            trace["recall"] = self._trace_recall(hits_per_source)
         if not any(hits_per_source.values()):
             logger.info("retrieve: 全部 recall 路无命中, 返回 []")
-            return []
+            return [], trace
         t1 = time.perf_counter()
 
         # 2. 融合
         fused: list[FusedHit] = self._fusion.fuse(hits_per_source)
+        if trace is not None:
+            trace["fusion"] = self._trace_fusion(fused)
         if not fused:
             logger.info("retrieve: fusion 后为空")
-            return []
+            return [], trace
         t2 = time.perf_counter()
 
         # 3. 父块聚合
         aggregated: list[AggregatedParent] = self._aggregator.aggregate(fused)
+        if trace is not None:
+            trace["aggregation"] = self._trace_aggregation(aggregated)
         if not aggregated:
             logger.info("retrieve: aggregate 后为空")
-            return []
+            return [], trace
         t3 = time.perf_counter()
 
         # 4. 截 top_m (仅 rerank 启用时), 回查父块原文
@@ -177,7 +245,7 @@ class ParentChildRetriever:
                 )
         if not valid_candidates:
             logger.warning("retrieve: 全部候选父块在 parent_store 都找不到, 返回 []")
-            return []
+            return [], trace
         t4 = time.perf_counter()
 
         # 5. Rerank (可选, 失败降级)
@@ -193,6 +261,8 @@ class ParentChildRetriever:
                 valid_candidates[:effective_top_n],
                 parent_dict,
             )
+        if trace is not None:
+            trace["rerank"] = self._trace_rerank(valid_candidates, final)
         t5 = time.perf_counter()
 
         logger.info(
@@ -211,39 +281,116 @@ class ParentChildRetriever:
             (t4 - t3) * 1000,
             (t5 - t4) * 1000,
         )
-        return final
+        return final, trace
+
+    @staticmethod
+    def _trace_recall(hits_per_source: dict[str, list[ChildHit]]) -> dict[str, list[dict]]:
+        trace = {"vector": [], "bm25": []}
+        for source, hits in hits_per_source.items():
+            trace[source] = [
+                {
+                    "rank": h.rank,
+                    "chunk_id": h.chunk_id,
+                    "parent_id": h.parent_id,
+                    "document_id": h.doc_id,
+                    "score": h.score,
+                }
+                for h in hits
+            ]
+        return trace
+
+    @staticmethod
+    def _trace_fusion(fused: list[FusedHit]) -> list[dict]:
+        return [
+            {
+                "chunk_id": h.chunk_id,
+                "parent_id": h.parent_id,
+                "document_id": h.doc_id,
+                "fusion_score": h.fusion_score,
+                "sources": list(h.sources),
+                "rank_per_source": dict(h.rank_per_source),
+            }
+            for h in fused
+        ]
+
+    @staticmethod
+    def _trace_aggregation(aggregated: list[AggregatedParent]) -> list[dict]:
+        return [
+            {
+                "parent_id": h.parent_id,
+                "document_id": h.doc_id,
+                "fusion_score": h.fusion_score,
+                "hit_child_count": h.hit_child_count,
+                "hit_chunk_ids": list(h.hit_chunk_ids),
+            }
+            for h in aggregated
+        ]
+
+    @staticmethod
+    def _trace_rerank(
+        candidates: list[AggregatedParent],
+        final: list[RetrievedParent],
+    ) -> list[dict]:
+        before_rank = {p.parent_id: idx for idx, p in enumerate(candidates, start=1)}
+        return [
+            {
+                "parent_id": item.chunk_id,
+                "before_rank": before_rank.get(item.chunk_id, 0),
+                "after_rank": idx,
+                "fusion_score": item.fusion_score,
+                "rerank_score": item.rerank_score,
+                "final_score": item.final_score,
+            }
+            for idx, item in enumerate(final, start=1)
+        ]
 
     # ==================================================================
     # 内部: 多路召回
     # ==================================================================
-    def _run_recalls(
+    async def _run_recalls(
         self,
         query: str,
         doc_id_filter: list[str] | None,
         vector_doc_id_filter: list[str] | None = None,
+        vector_query: str | None = None,
     ) -> dict[str, list[ChildHit]]:
-        """串行调两路 recall, 单路失败 ERROR 日志 + 该路返回空.
+        """两路 recall 并发执行, 单路失败降级为空 (由 _safe_recall 兜底).
 
-        TODO: 后续可改为 ThreadPoolExecutor 并行, 接口不变.
-              并行需要确认 Chroma client 与 SQLite connection 的线程安全.
+        向量库 (Chroma) 与 BM25 (SQLite, 内部自带连接锁) 各持独立连接,
+        用 asyncio.to_thread 并发把两路阻塞 IO 卸载出事件循环, 削尾延迟;
+        _safe_recall 已吞掉单路异常, 因此 gather 不会因单路失败中断.
+
+        vector_query: 向量召回专用 query (HyDE 扩展后的文本); None 时用原 query.
+        BM25 一律用原始 query.
         """
-        result: dict[str, list[ChildHit]] = {}
+        names: list[str] = []
+        coros = []
 
         if self._vector_recall is not None:
-            result[self._vector_recall.name] = self._safe_recall(
-                self._vector_recall,
-                query,
-                self._config.vector_top_k,
-                vector_doc_id_filter if vector_doc_id_filter is not None else doc_id_filter,
+            names.append(self._vector_recall.name)
+            coros.append(
+                asyncio.to_thread(
+                    self._safe_recall,
+                    self._vector_recall,
+                    vector_query if vector_query is not None else query,
+                    self._config.vector_top_k,
+                    vector_doc_id_filter if vector_doc_id_filter is not None else doc_id_filter,
+                )
             )
         if self._bm25_recall is not None:
-            result[self._bm25_recall.name] = self._safe_recall(
-                self._bm25_recall,
-                query,
-                self._config.bm25_top_k,
-                doc_id_filter,
+            names.append(self._bm25_recall.name)
+            coros.append(
+                asyncio.to_thread(
+                    self._safe_recall,
+                    self._bm25_recall,
+                    query,
+                    self._config.bm25_top_k,
+                    doc_id_filter,
+                )
             )
-        return result
+
+        results = await asyncio.gather(*coros)
+        return dict(zip(names, results, strict=True))
 
     @staticmethod
     def _safe_recall(
@@ -299,6 +446,11 @@ class ParentChildRetriever:
 
         try:
             results = self._reranker.rerank(query, documents, top_n=top_n)
+            results = self._normalize_rerank_results(
+                results,
+                candidate_count=len(candidates),
+                top_n=top_n,
+            )
         except RerankError as e:
             logger.warning(
                 "rerank 失败, 降级使用 fusion_score: %s",
@@ -320,6 +472,44 @@ class ParentChildRetriever:
                 )
             )
         return final
+
+    @staticmethod
+    def _normalize_rerank_results(
+        results: list[RerankResult],
+        *,
+        candidate_count: int,
+        top_n: int,
+    ) -> list[RerankResult]:
+        """校验 reranker 返回值, 防止坏 index/score 打断检索主链路."""
+        if not results:
+            raise RerankError("rerank 返回空结果")
+
+        normalized: list[RerankResult] = []
+        seen: set[int] = set()
+        limit = min(top_n, candidate_count)
+        for item in results:
+            try:
+                index = int(item.index)
+                score = float(item.score)
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise RerankError(f"rerank 结果项结构异常: {item!r}") from exc
+            if index < 0 or index >= candidate_count:
+                raise RerankError(
+                    f"rerank 返回 index 越界: {index} (候选数 {candidate_count})"
+                )
+            if index in seen:
+                raise RerankError(f"rerank 返回重复 index: {index}")
+            if not math.isfinite(score):
+                raise RerankError(f"rerank 返回非法 score: {score}")
+
+            seen.add(index)
+            normalized.append(RerankResult(index=index, score=score))
+            if len(normalized) >= limit:
+                break
+
+        if not normalized:
+            raise RerankError("rerank 结果校验后为空")
+        return normalized
 
     def _build_results_no_rerank(
         self,
@@ -352,12 +542,20 @@ class ParentChildRetriever:
     ) -> RetrievedParent:
         final_score = rerank_score if rerank_score is not None else parent.fusion_score
         extra = parent_row.get("extra") or {}
-        page = extra.get("page") if isinstance(extra, dict) else None
-        if isinstance(page, str):
-            try:
-                page = int(page)
-            except ValueError:
-                page = None
+        page = ParentChildRetriever._coerce_int(extra.get("page")) if isinstance(extra, dict) else None
+        page_start = (
+            ParentChildRetriever._coerce_int(extra.get("page_start"))
+            if isinstance(extra, dict)
+            else None
+        )
+        page_end = (
+            ParentChildRetriever._coerce_int(extra.get("page_end"))
+            if isinstance(extra, dict)
+            else None
+        )
+        page_start = page_start if page_start is not None else page
+        page_end = page_end if page_end is not None else page_start
+        page = page if page is not None else page_start
         return RetrievedParent(
             chunk_id=parent_row["chunk_id"],
             document_id=parent_row.get("document_id", ""),
@@ -365,7 +563,9 @@ class ParentChildRetriever:
             document_name=parent_row.get("document_name", "") or "",
             kb_name=parent_row.get("kb_name", "") or "",
             source_url=parent_row.get("source_url"),
-            page=page if isinstance(page, int) else None,
+            page=page,
+            page_start=page_start,
+            page_end=page_end,
             content=parent_row["content"],
             header_path=parent_row.get("header_path", "") or "",
             source_type=parent_row.get("source_type", "") or "",
@@ -376,3 +576,14 @@ class ParentChildRetriever:
             hit_chunk_ids=list(parent.hit_chunk_ids),
             metadata=dict(extra) if isinstance(extra, dict) else {},
         )
+
+    @staticmethod
+    def _coerce_int(value) -> int | None:
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return None
+        return None

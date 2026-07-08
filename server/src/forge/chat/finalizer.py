@@ -33,8 +33,12 @@ class TurnFinalizer:
         snapshot: ContextSnapshot,
         *,
         prev_state: ResumeState | None = None,
+        citations: list[dict] | None = None,
     ) -> AgentEvent | None:
-        """落库 + 发终态事件 + 发布 turn.completed。返回终态事件，调用方负责 yield。"""
+        """落库 + 发终态事件 + 发布 turn.completed。返回终态事件，调用方负责 yield。
+
+        citations: 本回合 knowledge_search 命中的结构化引用来源 (None=不更新原值)。
+        """
         with span(
             "chat.finalize",
             session_id=ctx.session_id,
@@ -45,7 +49,7 @@ class TurnFinalizer:
                 result = self._merge_with_prev(result, prev_state)
 
             status = self._status_for(result.finish_reason)
-            await self._update_message(ctx, result, snapshot, status)
+            await self._update_message(ctx, result, snapshot, status, citations=citations)
 
             s.set("finish_reason", result.finish_reason)
             s.set("status", status)
@@ -148,6 +152,7 @@ class TurnFinalizer:
         result: RunResult,
         snapshot: ContextSnapshot,
         status: str,
+        citations: list[dict] | None = None,
     ) -> None:
         # assistant 消息 token 数落库算一次 (供上下文组装热路径读, 免重复 tiktoken)
         from forge.context_mgmt.meter.token_meter import get_token_meter
@@ -164,6 +169,7 @@ class TurnFinalizer:
                     msg,
                     content=result.content,
                     status=status,
+                    citations=citations,
                     tool_calls=result.tool_calls or None,
                     usage=result.usage or None,
                     context_meta=self._build_context_meta(ctx, result, snapshot),
@@ -203,6 +209,8 @@ class TurnFinalizer:
             "degraded": list(snapshot.degraded),
             # 非降级信息标记 (如 digest_substituted 无损折叠为引用), 供前端展示
             "info": list(snapshot.info),
+            # 结构化明细: 哪些历史被语义过滤 / 预算裁掉 / digest 折叠
+            "details": dict(snapshot.details or {}),
             # ---- resume 恢复用 ----
             "finish_reason": result.finish_reason,
         }

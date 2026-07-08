@@ -30,7 +30,7 @@ from typing import Any
 
 import aiofiles
 
-from forge.config import paths
+from forge.config.domains import paths
 from forge.infrastructure.jsonl import JsonlLog, atomic_write_text
 
 logger = logging.getLogger(__name__)

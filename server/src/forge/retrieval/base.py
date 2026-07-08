@@ -23,6 +23,8 @@ class RetrievalConfig:
         bm25_top_k:          BM25 召回子块 top_k
         rerank_enabled:      rerank 流程开关. 与 reranker 实例存在性正交:
                              reranker 实例可以存在但 enabled=False 时跳过流程.
+        vector_enabled:      向量召回路实际是否启用.
+        bm25_enabled:        BM25 召回路实际是否启用.
     """
 
     top_n_parent: int = 5
@@ -30,17 +32,21 @@ class RetrievalConfig:
     vector_top_k: int = 30
     bm25_top_k: int = 30
     rerank_enabled: bool = True
+    vector_enabled: bool = True
+    bm25_enabled: bool = True
 
     def __post_init__(self):
         if self.top_n_parent <= 0:
             raise ValueError(f"top_n_parent 必须 > 0, 收到 {self.top_n_parent}")
-        if self.top_m_for_rerank < self.top_n_parent:
+        if self.rerank_enabled and self.top_m_for_rerank < self.top_n_parent:
             raise ValueError(
                 f"top_m_for_rerank ({self.top_m_for_rerank}) 必须 >= "
                 f"top_n_parent ({self.top_n_parent})"
             )
-        if self.vector_top_k <= 0 or self.bm25_top_k <= 0:
-            raise ValueError("vector_top_k 与 bm25_top_k 必须 > 0")
+        if self.vector_enabled and self.vector_top_k <= 0:
+            raise ValueError(f"vector_top_k 必须 > 0, 收到 {self.vector_top_k}")
+        if self.bm25_enabled and self.bm25_top_k <= 0:
+            raise ValueError(f"bm25_top_k 必须 > 0, 收到 {self.bm25_top_k}")
 
 
 @dataclass
@@ -69,6 +75,8 @@ class RetrievedParent:
     kb_name: str = ""  # knowledge_bases.name
     source_url: str | None = None  # kb_documents.source_url (web/对象存储等)
     page: int | None = None  # 从 extra.page / metadata 提取
+    page_start: int | None = None  # 从 extra.page_start 提取
+    page_end: int | None = None  # 从 extra.page_end 提取
 
     # ---- 内容 / 上下文 ----
     content: str = ""

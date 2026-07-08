@@ -55,6 +55,7 @@ class TurnPreparer:
         trace_id: str,
         model_options: ModelOptionsIn | None = None,
         attachments: list | None = None,
+        kb_ids: list[str] | None = None,
     ) -> TurnContext:
         """跑完所有 DB 准备工作, 返回 TurnContext.
 
@@ -70,6 +71,7 @@ class TurnPreparer:
             session_hint=session_id or "<new>",
             input_len=len(message or ""),
         ) as s:
+            selected_kb_ids: tuple[str, ...] = ()
             # ---- 段1: 会话解析 / 重命名判定 ----
             async with session_scope() as db:
                 sess_repo = ChatSessionRepository(db)
@@ -93,6 +95,7 @@ class TurnPreparer:
                     existing_count = await msg_repo.count_by_session(session_id_actual)
                     should_rename = existing_count == 0 and session.title == "新会话"
 
+                selected_kb_ids = await _resolve_accessible_kb_ids(db, kb_ids, user_id)
                 await db.commit()
 
             # ---- 段中 (无事务): LLM 生成标题, 不占 DB 连接 ----
@@ -163,6 +166,7 @@ class TurnPreparer:
             new_title=new_title,
             trace_id=trace_id,
             model_options=model_options_dict,
+            selected_kb_ids=selected_kb_ids,
             exclude_message_ids=(user_msg_id,),
             context_window=context_window,
         )
@@ -199,7 +203,10 @@ def _append_file_placeholders(message: str, attachments) -> str:
 async def _bind_attachments(
     db, attachments, user_id: str, session_id: str, message_id: str
 ) -> None:
-    """把上传附件绑定到产生它的 user 消息 (校验归属: owner + session 一致)。"""
+    """把上传文件回填到会话与产生它的 user 消息 (校验 owner 归属)。
+
+    上传文件在上传时与会话解耦 (session_id 为空), 这里发消息时才回填关系。
+    """
     fids = [
         str(getattr(a, "id", None) or getattr(a, "file_id", None))
         for a in (attachments or [])
@@ -207,15 +214,29 @@ async def _bind_attachments(
     ]
     if not fids:
         return
-    from forge.infrastructure.database.repositories.chat_file_repo import (
-        ChatFileRepository,
+    from forge.infrastructure.database.repositories.user_file_repo import (
+        UserFileRepository,
     )
 
-    repo = ChatFileRepository(db)
+    repo = UserFileRepository(db)
     for fid in fids:
-        meta = await repo.get_by_id(fid)
-        if meta and meta.owner_user_id == user_id and meta.session_id == session_id:
-            await repo.bind_message(fid, message_id)
+        await repo.bind_session_and_message(
+            fid, session_id, message_id, owner_user_id=user_id
+        )
+
+
+async def _resolve_accessible_kb_ids(db, kb_ids: list[str] | None, user_id: str) -> tuple[str, ...]:
+    cleaned = [str(kb_id).strip() for kb_id in (kb_ids or []) if str(kb_id).strip()]
+    if not cleaned:
+        return ()
+    from forge.infrastructure.database.repositories.knowledge_base_repo import (
+        KnowledgeBaseRepository,
+    )
+
+    repo = KnowledgeBaseRepository(db)
+    kbs = await repo.find_accessible_by_ids(cleaned, user_id)
+    accessible = {str(kb.id) for kb in kbs}
+    return tuple(kb_id for kb_id in cleaned if kb_id in accessible)
 
 
 def _make_title(text: str, max_len: int = 25) -> str:
@@ -261,7 +282,7 @@ async def _make_title_with_utility_llm(text: str, model_options, max_len: int = 
                     ),
                     ChatMessage(role="user", content=text),
                 ],
-                temperature=0.2,
+                temperature=0,
                 max_tokens=32,
                 task_type="utility",
                 model_profile="fast",

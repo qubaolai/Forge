@@ -14,13 +14,14 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import threading
 import time
 from collections.abc import Generator
 from unittest.mock import MagicMock
 
 import pytest
 
-from forge.config.paths import tasks_db_path
+from forge.config.domains.paths import tasks_db_path
 from forge.infrastructure.queue import (
     LocalTaskQueue,
     NullTaskQueue,
@@ -36,6 +37,13 @@ def _reset() -> Generator[None, None, None]:
     reset_task_queue()
     yield
     reset_task_queue()
+
+
+async def _wait_for_queue_idle(q: LocalTaskQueue, timeout: float = 1.0) -> None:
+    deadline = time.perf_counter() + timeout
+    while q._background_tasks and time.perf_counter() < deadline:
+        await asyncio.gather(*list(q._background_tasks), return_exceptions=True)
+    assert not q._background_tasks
 
 
 def test_null_queue_submit_is_silent(caplog: pytest.LogCaptureFixture) -> None:
@@ -88,7 +96,7 @@ async def test_local_task_queue_runs_registered_handler(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    monkeypatch.setenv("ASSISTANT_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("FORGE_HOME", str(tmp_path / "home"))
     called = {"ok": False}
 
     async def _handler(*, session_id: str) -> None:
@@ -100,7 +108,43 @@ async def test_local_task_queue_runs_registered_handler(
     )
     q.submit("memory.summarize", session_id="s1")
     await asyncio.sleep(0.1)
+    await _wait_for_queue_idle(q)
     assert called["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_local_task_queue_runs_handler_off_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("FORGE_HOME", str(tmp_path / "home"))
+    started = threading.Event()
+    finished = threading.Event()
+
+    def _handler(*, session_id: str) -> None:
+        assert session_id == "s1"
+        started.set()
+        time.sleep(0.25)
+        finished.set()
+
+    q = LocalTaskQueue(
+        handler_resolver=lambda name: _handler if name == "memory.summarize" else None
+    )
+
+    q.submit("memory.summarize", session_id="s1")
+    start = time.perf_counter()
+    await asyncio.sleep(0.05)
+    elapsed = time.perf_counter() - start
+
+    assert started.is_set()
+    assert elapsed < 0.15
+    assert not finished.is_set()
+
+    deadline = time.perf_counter() + 1.0
+    while not finished.is_set() and time.perf_counter() < deadline:
+        await asyncio.sleep(0.01)
+    assert finished.is_set()
+    await _wait_for_queue_idle(q)
 
 
 @pytest.mark.asyncio
@@ -108,7 +152,7 @@ async def test_local_task_queue_retries_then_succeeds(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    monkeypatch.setenv("ASSISTANT_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("FORGE_HOME", str(tmp_path / "home"))
     state = {"calls": 0}
 
     async def _handler(*, session_id: str) -> None:  # noqa: ARG001
@@ -122,7 +166,7 @@ async def test_local_task_queue_retries_then_succeeds(
         retry_delay_seconds=0.01,
     )
     q.submit("memory.summarize", session_id="s1")
-    await asyncio.sleep(0.2)
+    await _wait_for_queue_idle(q)
 
     assert state["calls"] == 2
     conn = sqlite3.connect(tasks_db_path())
@@ -139,7 +183,7 @@ async def test_local_task_queue_marks_dead_after_max_attempts(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    monkeypatch.setenv("ASSISTANT_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("FORGE_HOME", str(tmp_path / "home"))
 
     async def _handler(*, session_id: str) -> None:  # noqa: ARG001
         raise RuntimeError("always fail")
@@ -150,7 +194,7 @@ async def test_local_task_queue_marks_dead_after_max_attempts(
         retry_delay_seconds=0.01,
     )
     q.submit("memory.summarize", session_id="s1")
-    await asyncio.sleep(0.2)
+    await _wait_for_queue_idle(q)
 
     conn = sqlite3.connect(tasks_db_path())
     status, attempts = conn.execute(
@@ -166,7 +210,7 @@ async def test_local_task_queue_recovers_running_task_on_restart(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    monkeypatch.setenv("ASSISTANT_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("FORGE_HOME", str(tmp_path / "home"))
     db_path = tasks_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
@@ -203,6 +247,8 @@ async def test_local_task_queue_recovers_running_task_on_restart(
         if session_id == "s1":
             called["ok"] = True
 
-    LocalTaskQueue(handler_resolver=lambda name: _handler if name == "memory.summarize" else None)
-    await asyncio.sleep(0.2)
+    q = LocalTaskQueue(
+        handler_resolver=lambda name: _handler if name == "memory.summarize" else None
+    )
+    await _wait_for_queue_idle(q)
     assert called["ok"] is True

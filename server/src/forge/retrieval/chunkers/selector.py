@@ -24,7 +24,7 @@ import logging
 from forge.core.types import Element, ElementType
 
 from .base import BaseChunker, ChunkConfig
-from .strategies import HierarchicalChunker, SlidingWindowChunker
+from .strategies import HierarchicalChunker, RowBasedChunker, SlidingWindowChunker
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +48,11 @@ def select_chunker(
     config = config or ChunkConfig()
 
     # 单次扫描收集特征, 避免多次遍历
-    # TODO: 接入 RowBasedChunker 后, 再检测 _EXCEL_TYPES 并走 Excel 路径
     has_title = False
     for el in elements:
         if el.type in _EXCEL_TYPES:
-            # 当前未实现 RowBasedChunker, Excel 也走层级或滑窗
-            break
+            logger.debug("select_chunker → RowBasedChunker (检测到 SHEET_META/ROW)")
+            return RowBasedChunker(config)
         if el.type == ElementType.TITLE:
             has_title = True
             # 不 break, 因为后续可能出现 SHEET_META, 需要让 Excel 优先

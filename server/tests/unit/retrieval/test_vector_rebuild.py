@@ -5,11 +5,138 @@ from pathlib import Path
 import pytest
 
 
+def test_parent_dict_persists_child_manifest():
+    from forge.api.services.kb_ingest_service import KbIngestService
+    from forge.core.types import Chunk, ChunkType
+
+    parent = Chunk(
+        chunk_id="p1",
+        chunk_type=ChunkType.PARENT,
+        content="parent",
+        source_type="text",
+        header_path="title",
+        doc_id="1001",
+        chunk_hash="parent-hash",
+    )
+
+    row = KbIngestService._chunk_to_parent_dict(
+        parent,
+        "2001",
+        seq=0,
+        child_manifest=[
+            {"id": "p1__c_0001", "chunk_hash": "child-2"},
+            {"id": "p1__c_0000", "chunk_hash": "child-1"},
+        ],
+    )
+
+    assert row["extra"]["child_manifest"] == [
+        {"id": "p1__c_0001", "chunk_hash": "child-2"},
+        {"id": "p1__c_0000", "chunk_hash": "child-1"},
+    ]
+    assert row["extra"]["child_debug_manifest"] == []
+
+
+def test_child_debug_manifest_keeps_preview_without_changing_manifest():
+    from forge.api.services.kb_ingest_service import KbIngestService
+    from forge.core.types import Chunk, ChunkMetadata, ChunkType
+
+    child = Chunk(
+        chunk_id="p1__c_0000",
+        chunk_type=ChunkType.CHILD,
+        content="| 字段 | 含义 |\n| --- | --- |\n| amount | 金额 |",
+        source_type="table",
+        header_path="字段说明",
+        parent_id="p1",
+        doc_id="1001",
+        chunk_hash="child-hash",
+        metadata=ChunkMetadata(
+            parent_source="table",
+            extra={
+                "splitter": "table_rows",
+                "row_start": 1,
+                "row_end": 1,
+                "table_index": 0,
+            },
+        ),
+    )
+
+    debug = KbIngestService._child_debug_manifest_by_parent([child])
+    manifest = KbIngestService._child_manifest_by_parent([child])
+
+    assert manifest == {"p1": [{"id": "p1__c_0000", "chunk_hash": "child-hash"}]}
+    assert debug["p1"][0]["id"] == "p1__c_0000"
+    assert debug["p1"][0]["source_type"] == "table"
+    assert debug["p1"][0]["splitter"] == "table_rows"
+    assert debug["p1"][0]["row_start"] == 1
+    assert debug["p1"][0]["row_end"] == 1
+    assert debug["p1"][0]["table_index"] == 0
+    assert "| amount | 金额 |" in debug["p1"][0]["content_preview"]
+
+
+@pytest.mark.asyncio
+async def test_vector_rebuild_rejects_child_manifest_drift(monkeypatch):
+    from forge.api.services.kb_ingest_service import KbIngestError, KbIngestService
+    from forge.core.types import Chunk, ChunkType
+    from forge.infrastructure.database.orm.kb_document_orm import KbDocumentOrm
+
+    class FakeChunkRepo:
+        def __init__(self, session) -> None:
+            _ = session
+
+        async def list_manifest_by_document(self, document_id):
+            _ = document_id
+            return [
+                {
+                    "id": "p1",
+                    "chunk_hash": "parent-hash",
+                    "child_manifest": [
+                        {"id": "p1__c_0000", "chunk_hash": "old-child-hash"}
+                    ],
+                }
+            ]
+
+    monkeypatch.setattr(
+        "forge.api.services.kb_ingest_service.KbDocumentChunkRepository",
+        FakeChunkRepo,
+    )
+
+    service = object.__new__(KbIngestService)
+    parent = Chunk(
+        chunk_id="p1",
+        chunk_type=ChunkType.PARENT,
+        content="parent",
+        source_type="text",
+        header_path="title",
+        doc_id="1001",
+        chunk_hash="parent-hash",
+    )
+    child = Chunk(
+        chunk_id="p1__c_0000",
+        chunk_type=ChunkType.CHILD,
+        content="child",
+        source_type="text",
+        header_path="title",
+        parent_id="p1",
+        doc_id="1001",
+        chunk_hash="new-child-hash",
+    )
+    document = KbDocumentOrm(id=1001, kb_id=2001, name="doc.txt")
+
+    with pytest.raises(KbIngestError, match="父子块 manifest"):
+        await service._assert_parent_manifest_unchanged(
+            session=object(),
+            document=document,
+            parents=[parent],
+            children=[child],
+        )
+
+
 @pytest.mark.asyncio
 async def test_vector_rebuild_does_not_touch_bm25_or_document_status(monkeypatch):
     from forge.api.services.kb_ingest_service import KbIngestService
     from forge.core.types import Chunk, ChunkType
     from forge.infrastructure.database.orm.kb_document_orm import KbDocumentOrm
+    from forge.infrastructure.database.orm.knowledge_base_orm import KnowledgeBaseOrm
 
     class Embedder:
         _forge_model_id = "9001"
@@ -55,6 +182,15 @@ async def test_vector_rebuild_does_not_touch_bm25_or_document_status(monkeypatch
             _ = elements, doc_version
             return [
                 Chunk(
+                    chunk_id="p1",
+                    chunk_type=ChunkType.PARENT,
+                    content="content",
+                    source_type="text",
+                    header_path="title",
+                    doc_id=str(doc_id),
+                    chunk_hash="hash",
+                ),
+                Chunk(
                     chunk_id="c1",
                     chunk_type=ChunkType.CHILD,
                     content="content",
@@ -79,6 +215,20 @@ async def test_vector_rebuild_does_not_touch_bm25_or_document_status(monkeypatch
         rag_runtime=runtime,
         parser_dispatcher=Dispatcher(),
     )
+    manifest_checked = False
+
+    async def assert_manifest_unchanged(**kwargs) -> None:
+        nonlocal manifest_checked
+        assert kwargs["session"] is fake_session
+        assert kwargs["document"].id == 1001
+        assert [p.chunk_id for p in kwargs["parents"]] == ["p1"]
+        manifest_checked = True
+
+    monkeypatch.setattr(
+        service,
+        "_assert_parent_manifest_unchanged",
+        assert_manifest_unchanged,
+    )
     document = KbDocumentOrm(
         id=1001,
         kb_id=2001,
@@ -88,6 +238,15 @@ async def test_vector_rebuild_does_not_touch_bm25_or_document_status(monkeypatch
         status="indexed",
         vector_index_status="stale",
     )
+    kb = KnowledgeBaseOrm(
+        id=2001,
+        name="kb",
+        visibility="private",
+        owner_id=1,
+        chunk_size=512,
+        chunk_overlap=64,
+    )
+    fake_session = object()
     guard_called = False
 
     async def guard() -> None:
@@ -95,11 +254,14 @@ async def test_vector_rebuild_does_not_touch_bm25_or_document_status(monkeypatch
         guard_called = True
 
     result = await service.rebuild_vector_index(
+        session=fake_session,
+        kb=kb,
         document=document,
         file_path=Path("doc.txt"),
         before_vector_write=guard,
     )
 
+    assert manifest_checked is True
     assert guard_called is True
     assert result["status"] == "ready"
     assert document.status == "indexed"

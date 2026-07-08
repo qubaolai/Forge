@@ -93,6 +93,9 @@ class ContentChunk:
     # digest 折叠时一并算出, 让 MessageAssembler 裁剪/聚合时免重复 tiktoken。
     # 为空表示未提供, 下游回退实时 count。
     message_tokens: list[int] = field(default_factory=list)
+    # 面向观测/验收的结构化明细, 例如 history 的 candidate/filtered/digest ids。
+    # 不参与 prompt 组装, 由 MessageAssembler 合并进 ContextSnapshot.details。
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +259,10 @@ class ContextSnapshot:
 
     # 非降级的信息性标记 (不影响 is_healthy), 如 digest_substituted (无损折叠为引用)。
     info: list[str] = field(default_factory=list)
+
+    # 结构化观测明细, 不参与业务决策。典型内容:
+    # {"history": {"filtered_ids": [...], "digest_pending_ids": [...]}}
+    details: dict[str, Any] = field(default_factory=dict)
 
     @property
     def usage_ratio(self) -> float:

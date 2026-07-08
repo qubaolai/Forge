@@ -80,16 +80,21 @@ class HistoryProvider(ContentProvider):
         exclude = set(request.exclude_message_ids)
         history_messages = self._rows_to_history_messages(rows, exclude)
         candidate_count = len(history_messages)
+        candidate_ids = [hm.id for hm in history_messages]
 
         # 应用 HistoryFilter
         filtered = await self._filter.filter(
             history_messages, request.current_user_message
         )
+        filtered_ids = {hm.id for hm in filtered}
+        filtered_out_ids = [mid for mid in candidate_ids if mid not in filtered_ids]
 
         # 单条 cap 闸: 把超长消息引用化折叠 (filter 之后、构造 Message 之前)。
         # 与 MessageAssembler 的累计预算闸形成「单条 cap + 累计 budget」双闸。
         digest_flags: list[str] = []
         digest_info: list[str] = []
+        digest_pending_ids: list[str] = []
+        digest_substituted_ids: list[str] = []
         costs: list[int] | None = None
         if self._digest_policy is not None and self._digest_cap > 0:
             lookup: DigestLookup | None = await self._build_digest_lookup(
@@ -101,6 +106,8 @@ class HistoryProvider(ContentProvider):
             filtered = result.messages
             digest_flags = result.degraded_flags
             digest_info = result.info_flags
+            digest_pending_ids = list(result.pending_ids)
+            digest_substituted_ids = list(result.substituted_ids)
             costs = result.message_tokens  # 折叠后每条 token 数 (供 assembler 免重复算)
             if result.substituted or result.pending:
                 # 命中率可观测: 无损命中 vs 降级 (缓存未命中) 计数
@@ -127,6 +134,22 @@ class HistoryProvider(ContentProvider):
             degraded=digest_flags,
             info=digest_info,
             message_tokens=costs,
+            details={
+                "candidate_ids": candidate_ids,
+                "after_filter_ids": [hm.id for hm in filtered],
+                "filtered_ids": filtered_out_ids,
+                "digest_pending_ids": digest_pending_ids,
+                "digest_substituted_ids": digest_substituted_ids,
+                "relevance": [
+                    {
+                        "id": hm.id,
+                        "turn_index": hm.turn_index,
+                        "role": hm.message.role,
+                        "score": round(float(hm.relevance_score), 4),
+                    }
+                    for hm in filtered
+                ],
+            },
         )
         return [chunk]
 

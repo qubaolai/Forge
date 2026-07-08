@@ -45,6 +45,8 @@ class ChunkingConfig(BaseModel):
     strategy: str = "hierarchical"
     chunk_size: int = 500
     chunk_overlap: int = 50
+    # 表格子块 (Excel/MD/Word): 整表优先, 超此字符预算才按完整行组切
+    table_child_max_chars: int = 2500
 
     @field_validator("strategy")
     @classmethod
@@ -106,6 +108,12 @@ class RecallChannelConfig(BaseModel):
     enabled: bool = True
     top_k: int = 30
 
+    @model_validator(mode="after")
+    def _check_top_k_when_enabled(self) -> RecallChannelConfig:
+        if self.enabled and self.top_k <= 0:
+            raise ValueError("启用的 recall 通道 top_k 必须 > 0")
+        return self
+
 
 class RecallConfig(BaseModel):
     model_config = {"extra": "forbid"}
@@ -157,13 +165,46 @@ class RerankStageConfig(BaseModel):
     enabled: bool = True
 
 
+class HydeConfig(BaseModel):
+    """HyDE (假想文档) 查询扩展. 仅作用于向量召回, 默认关闭.
+
+    开启后每次向量检索前多一次 LLM 调用 (fast 档 + 网关缓存), 用生成的
+    假想答案代替/拼接原始 query 去 embed, 提升稠密召回命中率; 失败自动
+    降级为原始 query.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    enabled: bool = False
+    max_tokens: int = 200
+    # 把原始 query 拼到假想文档后一起 embed, 保留查询锚定, 更稳健
+    concat_original: bool = True
+
+
 class RetrievalConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
     top_n_parent: int = 5
     top_m_for_rerank: int = 20
 
+    # 回灌给 LLM 的 token 预算 (父块回灌框架用):
+    #   recall_context_max_tokens: 单次检索所有片段合计上限
+    #   snippet_min_tokens:        每条片段保底预算, 不足以给所有片段保底时按分数丢尾部
+    recall_context_max_tokens: int = 6000
+    snippet_min_tokens: int = 400
+
     recall: RecallConfig = RecallConfig()
     fusion: FusionConfig = FusionConfig()
     aggregation: AggregationConfig = AggregationConfig()
     rerank: RerankStageConfig = RerankStageConfig()
+    hyde: HydeConfig = HydeConfig()
+
+    @model_validator(mode="after")
+    def _check_budget(self) -> RetrievalConfig:
+        if self.snippet_min_tokens <= 0:
+            raise ValueError("snippet_min_tokens 必须 > 0")
+        if self.recall_context_max_tokens < self.snippet_min_tokens:
+            raise ValueError(
+                "recall_context_max_tokens 必须 >= snippet_min_tokens"
+            )
+        return self

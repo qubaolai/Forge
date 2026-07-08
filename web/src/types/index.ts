@@ -125,6 +125,112 @@ export interface KnowledgeDocument {
   indexed_at?: ISODateString;
 }
 
+/** KB 检索测试单条命中片段 (对齐后端 KbSearchHit) */
+export interface KbSearchHit {
+  chunk_id: string;
+  document_id: string;
+  document_name: string;
+  kb_name: string;
+  content: string;
+  score: number;
+  page?: number | null;
+  page_start?: number | null;
+  page_end?: number | null;
+  header_path?: string;
+  source_url?: string | null;
+}
+
+export interface KnowledgeChunkFullText {
+  chunk_id: string;
+  document_id: string;
+  document_name: string;
+  kb_id: string;
+  kb_name: string;
+  content: string;
+  header_path: string;
+  source_type: string;
+  metadata: Record<string, unknown>;
+  page?: number | null;
+  page_start?: number | null;
+  page_end?: number | null;
+  source_url?: string | null;
+}
+
+export interface KbChildChunkDebugInfo {
+  id: string;
+  source_type: string;
+  chars: number;
+  content_preview: string;
+  splitter?: string | null;
+  row_start?: number | null;
+  row_end?: number | null;
+  table_index?: number | null;
+}
+
+export interface KbDocumentChunkInfo {
+  chunk_id: string;
+  seq: number;
+  header_path: string;
+  source_type: string;
+  page?: number | null;
+  page_start?: number | null;
+  page_end?: number | null;
+  token_count: number;
+  content_chars: number;
+  content_preview: string;
+  metadata: Record<string, unknown>;
+  child_count: number;
+  child_debug_manifest: KbChildChunkDebugInfo[];
+}
+
+export interface KbDocumentChunkListData {
+  items: KbDocumentChunkInfo[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface KbRetrievalRecallHit {
+  rank: number;
+  chunk_id: string;
+  parent_id: string;
+  document_id: string;
+  score: number;
+}
+
+export interface KbRetrievalFusionHit {
+  chunk_id: string;
+  parent_id: string;
+  document_id: string;
+  fusion_score: number;
+  sources: string[];
+  rank_per_source: Record<string, number>;
+}
+
+export interface KbRetrievalAggregationHit {
+  parent_id: string;
+  document_id: string;
+  fusion_score: number;
+  hit_child_count: number;
+  hit_chunk_ids: string[];
+}
+
+export interface KbRetrievalRerankHit {
+  parent_id: string;
+  before_rank: number;
+  after_rank: number;
+  fusion_score: number;
+  rerank_score?: number | null;
+  final_score: number;
+}
+
+export interface KbRetrievalTrace {
+  recall: Record<string, KbRetrievalRecallHit[]>;
+  fusion: KbRetrievalFusionHit[];
+  aggregation: KbRetrievalAggregationHit[];
+  rerank: KbRetrievalRerankHit[];
+}
+
 export interface DocumentChunk {
   id: string;
   document_id: string;
@@ -451,6 +557,7 @@ export interface ChatCompletionRequest {
   session_id?: string;
   message: string;
   attachments?: { file_id: string; type: string }[];
+  kb_ids?: string[];
   model_options: {
     provider: string;
     model: string;

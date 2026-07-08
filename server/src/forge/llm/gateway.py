@@ -25,6 +25,7 @@ import jsonschema
 
 from forge.core.types.message import Message
 
+from .caching.exact_cache import get_exact_cache, make_cache_key
 from .dispatch.chain_builder import build_dispatch_chain
 from .dispatch.chain_resolver import resolve_chain
 from .pipeline import (
@@ -153,6 +154,66 @@ class LLMGateway:
             logger.debug("dedup finish_failure 失败 (已忽略)", exc_info=True)
 
     # ------------------------------------------------------------------
+    # 解析后 exact cache: 覆盖 model_profile/默认链路的确定性 utility 调用
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _resolved_cache_allowed(req: LLMRequest) -> bool:
+        if not req.cache_enabled:
+            return False
+        if req.temperature is None or req.temperature > 0:
+            return False
+        return not req.tools
+
+    @staticmethod
+    def _resolved_cache_ttl(req: LLMRequest) -> int:
+        ttl_override = (req.extra_options or {}).get("cache_ttl") if req.extra_options else None
+        if isinstance(ttl_override, int) and ttl_override > 0:
+            return ttl_override
+        return 3600
+
+    async def _lookup_resolved_cache(
+        self,
+        req: LLMRequest,
+        *,
+        provider: str,
+        model: str,
+    ) -> LLMResponse | None:
+        if not self._resolved_cache_allowed(req):
+            return None
+        key = make_cache_key(provider, model, req.messages, max_tokens=req.max_tokens)
+        try:
+            cached = await get_exact_cache().get(key)
+        except Exception:  # noqa: BLE001
+            logger.exception("resolved exact cache 查询失败 (已忽略)")
+            return None
+        if cached is None:
+            return None
+        logger.debug("LLM resolved exact cache 命中: provider=%s model=%s", provider, model)
+        return replace(cached, cache_hit=True, cache_type="exact")
+
+    async def _write_resolved_cache(
+        self,
+        req: LLMRequest,
+        resp: LLMResponse,
+        *,
+        provider: str,
+        model: str,
+    ) -> None:
+        if resp.cache_hit or not resp.content:
+            return
+        if not self._resolved_cache_allowed(req):
+            return
+        key = make_cache_key(provider, model, req.messages, max_tokens=req.max_tokens)
+        try:
+            await get_exact_cache().set(
+                key,
+                resp,
+                ttl_seconds=self._resolved_cache_ttl(req),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("resolved exact cache 写入失败 (已忽略)")
+
+    # ------------------------------------------------------------------
     # 非流式 chat
     # ------------------------------------------------------------------
     async def complete(self, req: LLMRequest) -> LLMResponse:
@@ -166,6 +227,13 @@ class LLMGateway:
 
         try:
             dispatcher = await self._build_dispatcher_for(req)
+            cached = await self._lookup_resolved_cache(
+                req,
+                provider=dispatcher.primary.provider_name,
+                model=dispatcher.primary_spec.model,
+            )
+            if cached is not None:
+                return await self._pipeline.run_post(req, cached)
             started_at = time.perf_counter()
             result = await dispatcher.chat(
                 req.messages,
@@ -179,13 +247,19 @@ class LLMGateway:
         latency_ms = (time.perf_counter() - started_at) * 1000.0
         resp = LLMResponse(
             content=result.content,
-            model=result.model,
-            provider=dispatcher.primary.provider_name,
+            model=result.model or dispatcher.last_success_model,
+            provider=dispatcher.last_success_provider_name,
             usage=result.usage or {},
             finish_reason="stop",
             raw=result.raw,
             latency_ms=latency_ms,
             fallback_position=dispatcher.last_fallback_position,
+        )
+        await self._write_resolved_cache(
+            req,
+            resp,
+            provider=dispatcher.last_success_provider_name,
+            model=dispatcher.last_success_model,
         )
         return await self._pipeline.run_post(req, resp)
 
@@ -286,8 +360,8 @@ class LLMGateway:
         latency_ms = (time.perf_counter() - started_at) * 1000.0
         resp = LLMResponse(
             content=result.get("content", ""),
-            model=result.get("model", "") or dispatcher.primary_spec.model,
-            provider=dispatcher.primary.provider_name,
+            model=result.get("model", "") or dispatcher.last_success_model,
+            provider=dispatcher.last_success_provider_name,
             usage=result.get("usage") or {},
             finish_reason=result.get("finish_reason")
             or ("tool_calls" if result.get("tool_calls") else "stop"),
@@ -392,22 +466,35 @@ class LLMGateway:
             had_error = True
             await self._dedup_failure_cleanup(req)
             raise
-        finally:
-            if not had_error:
-                latency_ms = (time.perf_counter() - started_at) * 1000.0
-                resp = LLMResponse(
-                    content="",
-                    model=dispatcher.primary_spec.model,
-                    provider=dispatcher.primary.provider_name,
-                    usage=final_usage or {},
-                    finish_reason=final_reason or "stop",
-                    latency_ms=latency_ms,
-                    fallback_position=dispatcher.last_fallback_position,
-                )
-                try:
-                    await self._pipeline.run_post(req, resp)
-                except Exception:  # noqa: BLE001
-                    logger.exception("流式 Post pipeline 异常 (已忽略)")
+        if not had_error:
+            latency_ms = (time.perf_counter() - started_at) * 1000.0
+            resp = LLMResponse(
+                content="",
+                model=dispatcher.last_success_model,
+                provider=dispatcher.last_success_provider_name,
+                usage=final_usage or {},
+                finish_reason=final_reason or "stop",
+                latency_ms=latency_ms,
+                fallback_position=dispatcher.last_fallback_position,
+            )
+            try:
+                await self._pipeline.run_post(req, resp)
+            except Exception:  # noqa: BLE001
+                logger.exception("流式 Post pipeline 异常 (已忽略)")
+            yield {
+                "content_delta": "",
+                "tool_calls": None,
+                "finish_reason": None,
+                "usage": None,
+                "model": dispatcher.last_success_model,
+                "gateway_meta": {
+                    "provider": dispatcher.last_success_provider_name,
+                    "model": dispatcher.last_success_model,
+                    "fallback_position": dispatcher.last_fallback_position,
+                    "latency_ms": latency_ms,
+                    "finish_reason": final_reason or "stop",
+                },
+            }
 
     # ------------------------------------------------------------------
     # 成本估算 (不调用 LLM)

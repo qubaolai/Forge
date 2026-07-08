@@ -39,6 +39,8 @@ class Message:
     # provider 特有字段, 中性数据载体. 是否塞到请求 payload 由具体 provider 决定
     # (例: DeepSeek thinking 模式要求 assistant 消息回灌 reasoning_content).
     extra_content: str | None = None
+    # 服务端内部元数据, 不进入 provider payload。用于记录工具耗时、截断等观测信息。
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_openai_dict(self) -> dict:
         """转成 OpenAI chat.completions 接收的 dict 格式.

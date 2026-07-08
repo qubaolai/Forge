@@ -61,7 +61,8 @@ class SessionService:
         return await self.session_repo.create(user_id=user_id, title=title)
 
     async def get_owned(self, session_id: str, user_id: str) -> SessionView:
-        session = await self.session_repo.get_by_id(session_id)
+        # 用 active 版本: 已软删的会话一律当作不存在 (不返回被删除的会话)
+        session = await self.session_repo.get_active_by_id(session_id)
         if not session:
             raise NotFound("会话不存在", code=40410)
         if session.user_id != user_id:
@@ -72,9 +73,19 @@ class SessionService:
         return await self.session_repo.update_title(session, title)
 
     async def delete(self, session: SessionView) -> None:
-        await self.session_repo.delete(session)
+        # 顺序很重要: 先清级联子数据 (摘要 / 文件), 最后再软删会话本身。
+        # 若先软删, 主事务会持有 chat_sessions 行的排他锁直到请求结束提交;
+        # 而 _delete_summary / _delete_files 用独立会话删子表 (外键指向 chat_sessions),
+        # 需等待该行锁 -> 与主事务形成死锁, MySQL 可能回滚主事务 -> 软删丢失,
+        # 表现为"删除后分页接口仍返回被删会话"。子表先删则不持有该行锁, 规避死锁。
         await self._delete_summary(session.id)
         await self._delete_files(session)
+        await self.session_repo.delete(session)
+        # 显式提交: 保证 DELETE 返回 200 时软删已落库可读。
+        # 否则请求级事务的提交在 get_db 依赖 teardown 里 (可能晚于响应发出),
+        # 前端收到 200 后立刻刷新分页, 那次查询会读到"提交前"的旧数据 ->
+        # 已删会话仍出现在列表 (删除与分页读的竞态)。
+        await self.db.commit()
 
     @staticmethod
     async def _delete_summary(session_id: str) -> None:
@@ -93,27 +104,70 @@ class SessionService:
 
     @staticmethod
     async def _delete_files(session: SessionView) -> None:
-        """级联清理会话文件 (元数据 + 物理沙盒目录), best-effort: 失败不阻断删除主流程。"""
+        """级联清理会话文件, best-effort: 失败不阻断删除主流程。
+
+        两类文件分别清理:
+            - 生成沙盒 (chat_files + WorkspaceStorage): 删元数据 + 整会话目录。
+            - 用户上传 (user_files + UserUploadStorage): 删元数据 + 逐文件物理删。
+        """
         try:
             from forge.infrastructure.database.database import session_scope
             from forge.infrastructure.database.repositories.chat_file_repo import (
                 ChatFileRepository,
             )
+            from forge.infrastructure.database.repositories.user_file_repo import (
+                UserFileRepository,
+            )
+            from forge.infrastructure.storage.user_upload_storage import (
+                UserUploadStorage,
+            )
             from forge.infrastructure.storage.workspace_storage import WorkspaceStorage
 
             async with session_scope() as db:
                 await ChatFileRepository(db).delete_by_session(session.id)
+                upload_paths = await UserFileRepository(db).delete_by_session(session.id)
             WorkspaceStorage().delete_session(session.user_id, session.id)
+            ups = UserUploadStorage()
+            for sp in upload_paths:
+                ups.delete(sp)
         except Exception as exc:  # noqa: BLE001
             logger.warning("会话文件级联清理失败 session=%s: %s", session.id, exc)
 
     async def files_by_message(self, session_id: str) -> dict[str, list[dict]]:
-        """按 message_id 分组会话文件 (供 MessageOut.files 历史回看填充)。"""
+        """按 message_id 分组 LLM 生成文件 (chat_files / source=generated)。
+
+        生成文件挂在 assistant 消息。与用户上传文件分离, 不合并 (见 uploads_by_message)。
+        """
         from forge.infrastructure.database.repositories.chat_file_repo import (
             ChatFileRepository,
         )
 
         files = await ChatFileRepository(self.db).list_by_session(session_id)
+        grouped: dict[str, list[dict]] = {}
+        for f in files:
+            if not f.message_id:
+                continue
+            grouped.setdefault(f.message_id, []).append(
+                {
+                    "id": f.id,
+                    "name": f.filename,
+                    "source": f.source,
+                    "size_bytes": f.size_bytes,
+                    "mime_type": f.mime_type,
+                }
+            )
+        return grouped
+
+    async def uploads_by_message(self, session_id: str) -> dict[str, list[dict]]:
+        """按 message_id 分组用户上传文件 (user_files / source=upload)。
+
+        上传文件挂在 user 消息。与 LLM 生成文件分离, 单独显示, 不合并。
+        """
+        from forge.infrastructure.database.repositories.user_file_repo import (
+            UserFileRepository,
+        )
+
+        files = await UserFileRepository(self.db).list_by_session(session_id)
         grouped: dict[str, list[dict]] = {}
         for f in files:
             if not f.message_id:
