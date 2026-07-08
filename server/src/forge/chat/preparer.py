@@ -282,7 +282,7 @@ async def _make_title_with_utility_llm(text: str, model_options, max_len: int = 
                     ),
                     ChatMessage(role="user", content=text),
                 ],
-                temperature=0.1,
+                temperature=0,
                 max_tokens=32,
                 task_type="utility",
                 model_profile="fast",

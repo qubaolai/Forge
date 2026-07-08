@@ -12,6 +12,8 @@ from typing import Any
 from forge.tools.base import Tool
 from forge.tools.registry import register_tool
 
+_DEFAULT_PREVIEW_LINES = 400
+
 
 def _parse_line_range(value: Any) -> tuple[int, int] | None:
     """把 [start, end] 解析成 (start, end); 非法返回 None (= 取全文)。"""
@@ -31,7 +33,8 @@ class ReadFile(Tool):
     name = "read_file"
     description = (
         "按 file_id 读取会话文件内容 (纯文本/代码)。当用户输入中出现 [file:<id>] 引用占位 (大段输入/附件) 时, "
-        "用本工具读取其完整内容; 可选 line_range=[起始行,结束行] (1-based 闭区间) 只取片段, 避免整段拉回。"
+        "用本工具按需读取内容; 可选 line_range=[起始行,结束行] (1-based 闭区间) 只取片段, 避免整段拉回。"
+        "不传 line_range 时只返回开头预览页, 如 truncated=true 请根据 total_lines/returned_range 继续分段读取。"
         "返回字段: text / total_lines / returned_range / truncated。"
         "注意: Word/Excel/PDF 等二进制文档请改用 read_document (本工具只能读纯文本)。"
     )
@@ -47,7 +50,7 @@ class ReadFile(Tool):
                 "items": {"type": "integer"},
                 "minItems": 2,
                 "maxItems": 2,
-                "description": "(可选) 1-based 闭区间 [起始行, 结束行]; 不传则返回全文",
+                "description": "(可选) 1-based 闭区间 [起始行, 结束行]; 不传则返回开头预览页",
             },
         },
         "required": ["file_id"],
@@ -81,7 +84,8 @@ class ReadFile(Tool):
         except (FileNotFoundError, ValueError, OSError):
             return {"ok": False, "error": f"文件内容读取失败: {file_id}"}
 
-        line_range = _parse_line_range(args.get("line_range"))
+        requested_range = _parse_line_range(args.get("line_range"))
+        line_range = requested_range or (1, _DEFAULT_PREVIEW_LINES)
         sl = slice_text(content, line_range)
         return {
             "ok": True,
@@ -91,4 +95,10 @@ class ReadFile(Tool):
             "total_lines": sl.total_lines,
             "returned_range": list(sl.returned_range),
             "truncated": sl.truncated,
+            "range_required": requested_range is None and sl.truncated,
+            "hint": (
+                "输出为预览页; 如需后续内容, 继续调用 read_file 并传入 line_range"
+                if requested_range is None and sl.truncated
+                else ""
+            ),
         }

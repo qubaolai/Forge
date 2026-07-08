@@ -52,6 +52,7 @@ def _update_record(
     tc_id: str,
     status: str,
     result_str: str,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     """根据 tc_id 找到 accumulated 中的占位记录, 填 status / result."""
     for record in accumulated_tool_calls:
@@ -60,7 +61,41 @@ def _update_record(
             record["result"] = result_str
             if status == "error":
                 record["error_message"] = result_str
+            if metadata:
+                for key in (
+                    "duration_ms",
+                    "truncated",
+                    "result_chars_original",
+                    "result_chars_returned",
+                    "truncate_reason",
+                ):
+                    if key in metadata:
+                        record[key] = metadata[key]
             break
+
+
+def _tool_event_payload(
+    tc: ToolCall,
+    status: str,
+    result_str: str,
+    tool_msg: Message,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "tool_call_id": tc.id,
+        "result": result_str,
+        "status": status,
+    }
+    metadata = tool_msg.metadata or {}
+    for key in (
+        "duration_ms",
+        "truncated",
+        "result_chars_original",
+        "result_chars_returned",
+        "truncate_reason",
+    ):
+        if key in metadata:
+            payload[key] = metadata[key]
+    return payload
 
 
 class ReActAgent(BaseAgent):
@@ -270,6 +305,7 @@ class ReActAgent(BaseAgent):
                     step_finish: str | None = None
                     step_usage: dict[str, int] = {}
                     step_reasoning = ""
+                    step_gateway_meta: dict[str, Any] = {}
                     step_reasoning_start: float | None = None
                     reasoning_phase_open = False
                     # 本步已提前下发过 running 占位的 tool_call id (流式 started 信号),
@@ -312,6 +348,9 @@ class ReActAgent(BaseAgent):
                                 if abort_event and abort_event.is_set():
                                     finish_reason = "aborted"
                                     break
+
+                                if chunk.get("gateway_meta"):
+                                    step_gateway_meta = dict(chunk["gateway_meta"])
 
                                 delta_text = chunk.get("content_delta", "") or ""
                                 if delta_text:
@@ -422,20 +461,41 @@ class ReActAgent(BaseAgent):
                         llm_span.set("output_tokens", step_usage.get("completion_tokens", 0))
                         llm_span.set("tool_calls_count", len(step_tool_calls))
                         llm_span.set("finish_reason", step_finish or "stop")
+                        if step_gateway_meta:
+                            llm_span.set("provider", step_gateway_meta.get("provider"))
+                            llm_span.set("model", step_gateway_meta.get("model"))
+                            llm_span.set(
+                                "fallback_position",
+                                step_gateway_meta.get("fallback_position", 0),
+                            )
                     # ---- llm_call span 到此结束，工具执行是兄弟节点 ----
 
                     logger.info(
                         "ReAct 单步完成 step=%d/%d content_len=%d reasoning_len=%d "
-                        "tool_calls=%s finish_reason=%s client_type=%s usage=%s",
+                        "tool_calls=%s finish_reason=%s provider=%s model=%s "
+                        "fallback_position=%s client_type=%s usage=%s",
                         _step + 1,
                         self._max_steps,
                         len(step_content),
                         len(step_reasoning),
                         [tc.name for tc in step_tool_calls] or "[]",
                         step_finish or "-",
+                        step_gateway_meta.get("provider", "-"),
+                        step_gateway_meta.get("model", "-"),
+                        step_gateway_meta.get("fallback_position", 0),
                         current_client_type(),
                         step_usage or {},
                     )
+
+                    if step_gateway_meta:
+                        yield AgentEvent(
+                            "llm_call_done",
+                            {
+                                "step": _step + 1,
+                                "usage": step_usage or {},
+                                **step_gateway_meta,
+                            },
+                        )
 
                     self._merge_usage(total_usage, step_usage)
 
@@ -555,15 +615,15 @@ class ReActAgent(BaseAgent):
                                     tc, tool_msg, status, result_str = await fut
                                     results_by_id[tc.id] = tool_msg
                                     _update_record(
-                                        accumulated_tool_calls, tc.id, status, result_str
+                                        accumulated_tool_calls,
+                                        tc.id,
+                                        status,
+                                        result_str,
+                                        tool_msg.metadata,
                                     )
                                     yield AgentEvent(
                                         "tool_result",
-                                        {
-                                            "tool_call_id": tc.id,
-                                            "result": result_str,
-                                            "status": status,
-                                        },
+                                        _tool_event_payload(tc, status, result_str, tool_msg),
                                     )
                             i = j
                         else:
@@ -683,14 +743,20 @@ class ReActAgent(BaseAgent):
                 )
                 # 拦截后仍要走 on_tool_result 让持久化层有机会处理
                 msg = await self._maybe_replace_msg(lifecycle, tc, msg)
+                msg.metadata.setdefault("tool_status", "blocked")
+                msg.metadata.setdefault("duration_ms", 0.0)
+                msg.metadata.setdefault("truncated", False)
+                msg.metadata.setdefault("result_chars_returned", len(msg.content or ""))
                 return tc, msg, "blocked", msg.content
 
         # 2. 真实执行
         _tool_start = time.perf_counter()
+        duration_ms = 0.0
         with span("agent.react.tool", tool=tc.name, step=step_idx + 1) as ts:
             try:
                 tool_msg = await self._executor.aexecute(tc, role=self._role)
-                status = "success"
+                tool_status = str(tool_msg.metadata.get("tool_status") or "ok")
+                status = "success" if tool_status == "ok" else tool_status
                 result_str = tool_msg.content
                 ts.set("ok", True)
                 ts.set("result_len", len(result_str or ""))
@@ -705,10 +771,17 @@ class ReActAgent(BaseAgent):
                 )
                 status = "error"
                 result_str = str(e)
-            ts.set("duration_ms", round((time.perf_counter() - _tool_start) * 1000, 1))
+            duration_ms = round((time.perf_counter() - _tool_start) * 1000, 1)
+            ts.set("duration_ms", duration_ms)
 
         # 3. on_tool_result 替换 (持久化层把大产物落 artifact 回灌占位)
         tool_msg = await self._maybe_replace_msg(lifecycle, tc, tool_msg)
+        tool_msg.metadata.setdefault("tool_status", status)
+        tool_msg.metadata.setdefault("duration_ms", duration_ms)
+        tool_msg.metadata.setdefault("truncated", False)
+        tool_msg.metadata.setdefault("result_chars_returned", len(tool_msg.content or ""))
+        if "result_chars_original" not in tool_msg.metadata:
+            tool_msg.metadata["result_chars_original"] = len(tool_msg.content or "")
         return tc, tool_msg, status, tool_msg.content
 
     @staticmethod
@@ -724,7 +797,11 @@ class ReActAgent(BaseAgent):
         except Exception:  # noqa: BLE001
             logger.exception("lifecycle.on_tool_result 失败")
             return msg
-        return replaced if replaced is not None else msg
+        if replaced is not None:
+            if not replaced.metadata and msg.metadata:
+                replaced.metadata = dict(msg.metadata)
+            return replaced
+        return msg
 
     async def _execute_one_yield(
         self,
@@ -740,14 +817,16 @@ class ReActAgent(BaseAgent):
             tc, step_idx, lifecycle, step_ctx
         )
         results_by_id[tc.id] = tool_msg
-        _update_record(accumulated_tool_calls, tc.id, status, result_str)
+        _update_record(
+            accumulated_tool_calls,
+            tc.id,
+            status,
+            result_str,
+            tool_msg.metadata,
+        )
         yield AgentEvent(
             "tool_result",
-            {
-                "tool_call_id": tc.id,
-                "result": result_str,
-                "status": status,
-            },
+            _tool_event_payload(tc, status, result_str, tool_msg),
         )
 
     # ------------------------------------------------------------------

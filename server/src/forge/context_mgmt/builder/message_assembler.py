@@ -65,6 +65,10 @@ class MessageAssembler:
         kept_history, dropped, dlg_tokens = self._trim_history_by_budget(
             history_messages, history_costs, budget.dialogue_budget
         )
+        history_details = self._history_details_after_budget(
+            history_chunk.details if history_chunk else {},
+            kept_count=len(kept_history),
+        )
         history_filtered_count = (
             (candidate - len(history_messages)) if candidate_was_filtered else 0
         )
@@ -129,6 +133,7 @@ class MessageAssembler:
             history_messages_dropped=dropped,
             summary_included=summary_included,
             facts_included=facts_included,
+            details={"history": history_details} if history_details else {},
         )
 
         # 降级原因汇合
@@ -287,3 +292,16 @@ class MessageAssembler:
     ) -> ContentChunk | None:
         items = chunks.get(name, [])
         return items[0] if items else None
+
+    @staticmethod
+    def _history_details_after_budget(
+        raw: dict, *, kept_count: int
+    ) -> dict:
+        if not raw:
+            return {}
+        details = dict(raw)
+        after_filter_ids = list(details.get("after_filter_ids") or [])
+        dropped_count = max(0, len(after_filter_ids) - kept_count)
+        details["kept_ids"] = after_filter_ids[dropped_count:]
+        details["dropped_ids"] = after_filter_ids[:dropped_count]
+        return details

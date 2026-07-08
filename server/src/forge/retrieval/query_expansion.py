@@ -49,7 +49,7 @@ class HydeGenerator:
 
         req = LLMRequest(
             messages=[ChatMessage(role="user", content=_HYDE_PROMPT.format(query=query))],
-            temperature=0.3,
+            temperature=0,
             max_tokens=self._max_tokens,
             task_type="utility",
             model_profile="fast",

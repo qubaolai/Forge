@@ -209,6 +209,8 @@ class TurnFinalizer:
             "degraded": list(snapshot.degraded),
             # 非降级信息标记 (如 digest_substituted 无损折叠为引用), 供前端展示
             "info": list(snapshot.info),
+            # 结构化明细: 哪些历史被语义过滤 / 预算裁掉 / digest 折叠
+            "details": dict(snapshot.details or {}),
             # ---- resume 恢复用 ----
             "finish_reason": result.finish_reason,
         }

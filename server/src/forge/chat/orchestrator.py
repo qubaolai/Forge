@@ -114,6 +114,22 @@ def _context_usage_event(snapshot) -> dict:
     }
 
 
+def _context_meta_event(snapshot) -> dict:
+    """上下文决策明细事件: 哪些历史被过滤 / 折叠 / 预算裁掉。"""
+    return {
+        "type": "context_meta",
+        "history": snapshot.details.get("history", {}),
+        "degraded": list(snapshot.degraded),
+        "info": list(snapshot.info),
+        "summary_included": snapshot.summary_included,
+        "facts_included": snapshot.facts_included,
+        "history_messages_candidate": snapshot.history_messages_candidate,
+        "history_messages_used": snapshot.history_messages_used,
+        "history_messages_filtered": snapshot.history_messages_filtered,
+        "history_messages_dropped": snapshot.history_messages_dropped,
+    }
+
+
 class TurnOrchestrator:
     """无状态. start_turn / start_resume 创建并启动 ChatTurnRun.
 
@@ -314,6 +330,7 @@ class TurnOrchestrator:
 
         # 2.5 上下文占用快照 (分层) -- 复用组装产物, 不触发额外计算
         await run.emit(_context_usage_event(snapshot))
+        await run.emit(_context_meta_event(snapshot))
 
         # 3. 跑 agent
         runner = await self._setup_runner(
@@ -409,6 +426,7 @@ class TurnOrchestrator:
             allow_compaction=False,
         )
         await run.emit(_context_usage_event(snapshot))
+        await run.emit(_context_meta_event(snapshot))
         messages = _inject_partial_into_messages(snapshot.messages, prev_state)
 
         runner = await self._setup_runner(

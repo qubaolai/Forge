@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from typing import Any
@@ -29,6 +30,18 @@ from .base import Tool
 from .registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+_MAX_TOOL_RESULT_CHARS = 20_000
+_MAX_TOOL_FIELD_CHARS = 12_000
+_MAX_TOOL_LIST_ITEMS = 80
+_TRUNCATED_FIELD_SUFFIX = (
+    "\n\n...(tool result field truncated; call the tool again with a narrower "
+    "line_range/sheet/page or more specific arguments)"
+)
+_TRUNCATED_RESULT_HINT = (
+    "Tool output was truncated before being sent back to the model. "
+    "Call the tool again with a narrower line_range/sheet/page or more specific arguments."
+)
 
 
 class ToolExecutor:
@@ -65,22 +78,30 @@ class ToolExecutor:
 
         t0 = time.perf_counter()
         status = "ok"
+        metadata: dict[str, Any] = {}
         try:
             result = tool.run(args)
         except Exception as e:  # noqa: BLE001
             logger.exception("工具 %s 执行失败", call.name)
             content = f"[tool error] {e}"
             status = "error"
+            metadata = {
+                "result_chars_original": len(content),
+                "result_chars_returned": len(content),
+                "truncated": False,
+            }
         else:
-            content = self._serialize(result)
+            content, metadata = self._serialize_with_limits(result)
+        metadata["tool_status"] = status
 
-        self._log_exec(call, status, content, t0)
+        self._log_exec(call, status, content, t0, metadata)
         self._audit_execution(tool, role, args, status, t0)
         return Message(
             role="tool",
             content=content,
             tool_call_id=call.id,
             name=call.name,
+            metadata=metadata,
         )
 
     async def aexecute(self, call: ToolCall, *, role: str = "local") -> Message:
@@ -99,6 +120,7 @@ class ToolExecutor:
 
         t0 = time.perf_counter()
         status = "ok"
+        metadata: dict[str, Any] = {}
         try:
             if type(tool).arun is not Tool.arun:
                 result = await tool.arun(args)
@@ -108,16 +130,23 @@ class ToolExecutor:
             logger.exception("工具 %s 执行失败", call.name)
             content = f"[tool error] {e}"
             status = "error"
+            metadata = {
+                "result_chars_original": len(content),
+                "result_chars_returned": len(content),
+                "truncated": False,
+            }
         else:
-            content = self._serialize(result)
+            content, metadata = self._serialize_with_limits(result)
+        metadata["tool_status"] = status
 
-        self._log_exec(call, status, content, t0)
+        self._log_exec(call, status, content, t0, metadata)
         await self._audit_execution_async(tool, role, args, status, t0)
         return Message(
             role="tool",
             content=content,
             tool_call_id=call.id,
             name=call.name,
+            metadata=metadata,
         )
 
     # ------------------------------------------------------------------
@@ -151,6 +180,7 @@ class ToolExecutor:
             content=f"[tool blocked] {reason}",
             tool_call_id=call.id,
             name=call.name,
+            metadata={"tool_status": "blocked", "truncated": False},
         )
 
     # ------------------------------------------------------------------
@@ -217,7 +247,13 @@ class ToolExecutor:
     # 内部
     # ------------------------------------------------------------------
     @staticmethod
-    def _log_exec(call: ToolCall, status: str, content: str, t0: float) -> None:
+    def _log_exec(
+        call: ToolCall,
+        status: str,
+        content: str,
+        t0: float,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         from forge.core.request_context import current_client_type
 
         duration_ms = (time.perf_counter() - t0) * 1000
@@ -225,11 +261,14 @@ class ToolExecutor:
         if len(args_preview) > 200:
             args_preview = args_preview[:200] + "...(truncated)"
         logger.info(
-            "工具执行 name=%s status=%s duration_ms=%.1f result_len=%d client_type=%s args=%s",
+            "工具执行 name=%s status=%s duration_ms=%.1f result_len=%d "
+            "result_original_len=%s truncated=%s client_type=%s args=%s",
             call.name,
             status,
             duration_ms,
             len(content or ""),
+            (metadata or {}).get("result_chars_original"),
+            (metadata or {}).get("truncated", False),
             current_client_type(),
             args_preview,
         )
@@ -255,14 +294,97 @@ class ToolExecutor:
 
     @staticmethod
     def _serialize(result: Any) -> str:
-        import json
-
         if isinstance(result, str):
             return result
         try:
             return json.dumps(result, ensure_ascii=False, default=str)
         except Exception:  # noqa: BLE001
             return str(result)
+
+    @classmethod
+    def _serialize_with_limits(cls, result: Any) -> tuple[str, dict[str, Any]]:
+        raw = cls._serialize(result)
+        original_chars = len(raw or "")
+        metadata: dict[str, Any] = {
+            "result_chars_original": original_chars,
+            "result_chars_returned": original_chars,
+            "truncated": False,
+        }
+        if original_chars <= _MAX_TOOL_RESULT_CHARS:
+            return raw, metadata
+
+        limited = cls._limit_value(result)
+        content = cls._serialize_limited_value(limited, original_chars)
+        if len(content) > _MAX_TOOL_RESULT_CHARS:
+            content = cls._fallback_preview(raw, original_chars)
+
+        metadata.update({
+            "result_chars_returned": len(content),
+            "truncated": True,
+            "truncate_reason": "tool_result_too_large",
+        })
+        return content, metadata
+
+    @classmethod
+    def _serialize_limited_value(cls, value: Any, original_chars: int) -> str:
+        if isinstance(value, dict):
+            out = dict(value)
+            out["_forge_tool_result_truncated"] = True
+            out["_forge_original_chars"] = original_chars
+            out["_forge_hint"] = _TRUNCATED_RESULT_HINT
+            return cls._serialize(out)
+        if isinstance(value, list):
+            return cls._serialize({
+                "ok": True,
+                "_forge_tool_result_truncated": True,
+                "_forge_original_chars": original_chars,
+                "_forge_hint": _TRUNCATED_RESULT_HINT,
+                "items": value,
+            })
+        if isinstance(value, str):
+            return cls._serialize({
+                "ok": True,
+                "_forge_tool_result_truncated": True,
+                "_forge_original_chars": original_chars,
+                "_forge_hint": _TRUNCATED_RESULT_HINT,
+                "text": value,
+            })
+        return cls._fallback_preview(cls._serialize(value), original_chars)
+
+    @classmethod
+    def _limit_value(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            if len(value) <= _MAX_TOOL_FIELD_CHARS:
+                return value
+            keep = max(0, _MAX_TOOL_FIELD_CHARS - len(_TRUNCATED_FIELD_SUFFIX))
+            return value[:keep].rstrip() + _TRUNCATED_FIELD_SUFFIX
+        if isinstance(value, dict):
+            return {str(k): cls._limit_value(v) for k, v in value.items()}
+        if isinstance(value, list):
+            items = [cls._limit_value(v) for v in value[:_MAX_TOOL_LIST_ITEMS]]
+            omitted = len(value) - len(items)
+            if omitted > 0:
+                items.append({
+                    "_forge_omitted_items": omitted,
+                    "_forge_hint": _TRUNCATED_RESULT_HINT,
+                })
+            return items
+        return value
+
+    @staticmethod
+    def _fallback_preview(raw: str, original_chars: int) -> str:
+        preview_cap = max(1000, _MAX_TOOL_RESULT_CHARS - 1200)
+        return json.dumps(
+            {
+                "ok": True,
+                "_forge_tool_result_truncated": True,
+                "_forge_original_chars": original_chars,
+                "_forge_hint": _TRUNCATED_RESULT_HINT,
+                "preview": (raw or "")[:preview_cap].rstrip(),
+            },
+            ensure_ascii=False,
+            default=str,
+        )
 
 _TYPE_MAP: dict[str, type[Any] | tuple[type[Any], ...]] = {
     "string": str,

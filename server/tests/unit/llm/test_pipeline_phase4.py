@@ -6,14 +6,19 @@ import asyncio
 
 import pytest
 
-from forge.llm import LLMRequest, LLMResponse
-from forge.llm.caching.exact_cache import InProcessLRUCache, make_cache_key
+from forge.llm import LLMGateway, LLMRequest, LLMResponse
+from forge.llm.caching.exact_cache import (
+    InProcessLRUCache,
+    make_cache_key,
+    set_exact_cache,
+)
 from forge.llm.inbound_rate_limiter import (
     InboundRateLimitExceeded,
 )
 from forge.llm.inbound_rate_limiter import (
     InProcessInboundRateLimiter as InboundRateLimiter,
 )
+from forge.llm.pipeline.base import PipelineRunner
 from forge.llm.pipeline.cache import (
     CacheWriteMiddleware,
     ExactCacheMiddleware,
@@ -30,7 +35,7 @@ from forge.llm.pipeline.validator import (
     InputValidationError,
     InputValidatorMiddleware,
 )
-from forge.llm.providers.base import ChatMessage
+from forge.llm.providers.base import ChatMessage, ChatResult
 from forge.llm.resilience.bulkhead import BulkheadRejectError, ProviderBulkhead
 from forge.llm.streaming import (
     FirstTokenTimeoutError,
@@ -173,6 +178,81 @@ async def test_cache_skips_non_zero_temperature():
     await post.process(req, LLMResponse(content="x", model="gpt-4o", provider="openai"))
     assert cache.size() == 0
     assert await pre.process(req) is None
+
+
+async def test_cache_write_skips_fallback_response_for_preferred_key():
+    cache = InProcessLRUCache()
+    post = CacheWriteMiddleware(backend=cache)
+    req = LLMRequest(
+        messages=[_msg()],
+        preferred_provider="openai",
+        preferred_model="gpt-4o",
+        temperature=0,
+    )
+    resp = LLMResponse(
+        content="backup answer",
+        model="backup",
+        provider="backup-provider",
+        fallback_position=1,
+    )
+
+    await post.process(req, resp)
+
+    assert cache.size() == 0
+
+
+async def test_gateway_resolved_exact_cache_for_model_profile(monkeypatch):
+    cache = InProcessLRUCache()
+    set_exact_cache(cache)
+
+    class _Client:
+        provider_name = "mock-provider"
+
+    class _Spec:
+        model = "fast-model"
+
+    class _Dispatcher:
+        primary = _Client()
+        primary_spec = _Spec()
+        last_fallback_position = 0
+        calls = 0
+
+        @property
+        def last_success_provider_name(self):
+            return self.primary.provider_name
+
+        @property
+        def last_success_model(self):
+            return self.primary_spec.model
+
+        async def chat(self, messages, **kwargs):
+            self.calls += 1
+            return ChatResult(content="cached answer", model="fast-model", usage={})
+
+    dispatcher = _Dispatcher()
+    gateway = LLMGateway(
+        settings=object(),
+        pipeline=PipelineRunner(pre_middlewares=[], post_middlewares=[]),
+    )
+
+    async def _fake_dispatcher(req):
+        return dispatcher
+
+    monkeypatch.setattr(gateway, "_build_dispatcher_for", _fake_dispatcher)
+    req = LLMRequest(
+        messages=[_msg("repeat")],
+        model_profile="fast",
+        temperature=0,
+        cache_enabled=True,
+    )
+
+    first = await gateway.complete(req)
+    second = await gateway.complete(req)
+
+    assert first.cache_hit is False
+    assert second.cache_hit is True
+    assert second.content == "cached answer"
+    assert dispatcher.calls == 1
 
 
 # ----------------------------------------------------------------------
